@@ -20,11 +20,21 @@ export interface HttpServerOwner {
 	start(options: HttpServerOptions): Promise<HttpServerAddress>;
 }
 
+export class RuntimeServerCloseTimeoutError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number) {
+		super(`Timed out waiting for runtime server shutdown after ${timeoutMs}ms.`);
+		this.name = "RuntimeServerCloseTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
 export class RuntimeServer {
 	readonly #http: HttpServerOwner;
 	readonly #runtime: InstanceRuntimeOwner;
 	#closeReport: Promise<void> | undefined;
-	#runtimeReport: Promise<void> | undefined;
+	#ownerReport: Promise<void> | undefined;
 	#settled: Promise<void> | undefined;
 	#start: Promise<HttpServerAddress> | undefined;
 
@@ -54,10 +64,12 @@ export class RuntimeServer {
 				new TypeError("Runtime close timeoutMs must be a non-negative integer."),
 			);
 		}
-		const httpReport = invokeOwner(() => this.#http.close(timeoutMs));
+		const shutdownStarted = this.#settled !== undefined;
 		this.#beginShutdown(timeoutMs);
-		if (!this.#runtimeReport) throw new Error("Runtime shutdown did not publish its report.");
-		this.#closeReport = settleOwners([httpReport, this.#runtimeReport]);
+		if (!this.#ownerReport) throw new Error("Runtime shutdown did not publish its owner report.");
+		this.#closeReport = shutdownStarted
+			? reportDeadline(this.#ownerReport, timeoutMs)
+			: this.#ownerReport;
 		return this.#closeReport;
 	}
 
@@ -88,11 +100,26 @@ export class RuntimeServer {
 
 	#beginShutdown(timeoutMs: number): void {
 		if (this.#settled) return;
-		this.#runtimeReport = invokeOwner(() => this.#runtime.stopAll({ timeoutMs }));
+		const httpReport = invokeOwner(() => this.#http.close(timeoutMs));
+		const runtimeReport = invokeOwner(() => this.#runtime.stopAll({ timeoutMs }));
+		this.#ownerReport = settleOwners([httpReport, runtimeReport]);
+		void this.#ownerReport.catch(() => undefined);
 		const httpSettlement = invokeOwner(() => this.#http.settled());
 		const runtimeSettlement = invokeOwner(() => this.#runtime.settled());
 		this.#settled = settleOwners([httpSettlement, runtimeSettlement]);
 		void this.#settled.catch(() => undefined);
+	}
+}
+
+async function reportDeadline(report: Promise<void>, timeoutMs: number): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => reject(new RuntimeServerCloseTimeoutError(timeoutMs)), timeoutMs);
+	});
+	try {
+		await Promise.race([report, deadline]);
+	} finally {
+		if (timer) clearTimeout(timer);
 	}
 }
 

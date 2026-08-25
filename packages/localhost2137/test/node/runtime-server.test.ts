@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HttpServerAddress } from "../../src/node/http-server.js";
 import {
 	type HttpServerOwner,
 	type InstanceRuntimeOwner,
 	RuntimeServer,
+	RuntimeServerCloseTimeoutError,
 } from "../../src/node/runtime-server.js";
 
 const ADDRESS: HttpServerAddress = Object.freeze({
@@ -11,6 +12,8 @@ const ADDRESS: HttpServerAddress = Object.freeze({
 	port: 21_337,
 	url: "http://127.0.0.1:21337",
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe("RuntimeServer", () => {
 	it("starts persisted instances before binding HTTP", async () => {
@@ -122,16 +125,18 @@ describe("RuntimeServer", () => {
 		expect(fixture.runtime.settled).toHaveBeenCalledOnce();
 	});
 
-	it("automatically owns fatal transport shutdown while preserving the first close deadline", async () => {
+	it("bounds the first close report independently after fatal owner shutdown starts", async () => {
+		vi.useFakeTimers();
 		const fixture = owners();
+		const httpReport = deferred<void>();
+		const runtimeReport = deferred<void>();
 		const httpSettlement = deferred<void>();
 		const runtimeSettlement = deferred<void>();
 		const fatal = new Error("accept loop failed");
+		fixture.http.close.mockReturnValue(httpReport.promise);
+		fixture.runtime.stopAll.mockReturnValue(runtimeReport.promise);
 		fixture.http.settled.mockReturnValue(httpSettlement.promise);
 		fixture.runtime.settled.mockReturnValue(runtimeSettlement.promise);
-		fixture.http.close.mockRejectedValue(
-			Object.assign(new Error("http deadline"), { timeoutMs: 5 }),
-		);
 		let notifyFatal: ((cause: unknown) => void) | undefined;
 		fixture.http.onFatal.mockImplementation((listener) => {
 			notifyFatal = listener;
@@ -148,8 +153,20 @@ describe("RuntimeServer", () => {
 		expect(fixture.runtime.stopAll).toHaveBeenCalledOnce();
 		expect(fixture.runtime.stopAll).toHaveBeenCalledWith({ timeoutMs: 30_000 });
 		expect(fixture.http.close).toHaveBeenCalledOnce();
-		expect(fixture.http.close).toHaveBeenCalledWith(5);
-		await expect(report).rejects.toMatchObject({ errors: [{ timeoutMs: 5 }] });
+		expect(fixture.http.close).toHaveBeenCalledWith(30_000);
+		let reportSettled = false;
+		void report
+			.catch(() => undefined)
+			.then(() => {
+				reportSettled = true;
+			});
+		await vi.advanceTimersByTimeAsync(4);
+		expect(reportSettled).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		await expect(report).rejects.toMatchObject({ timeoutMs: 5 });
+		expect(await report.catch((cause: unknown) => cause)).toBeInstanceOf(
+			RuntimeServerCloseTimeoutError,
+		);
 		let settled = false;
 		void settlement
 			.catch(() => undefined)
@@ -163,6 +180,9 @@ describe("RuntimeServer", () => {
 		runtimeSettlement.reject(runtimeFailure);
 		await expect(settlement).rejects.toMatchObject({ errors: [fatal, runtimeFailure] });
 		expect(settled).toBe(true);
+		httpReport.resolve();
+		runtimeReport.resolve();
+		vi.useRealTimers();
 	});
 });
 
