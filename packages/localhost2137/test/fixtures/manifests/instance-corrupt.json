@@ -1,0 +1,11 @@
+{
+	"schemaVersion": 1,
+	"id": "../dev",
+	"persistence": "durable",
+	"createdAt": "not-a-date",
+	"configFingerprint": "missing-prefix",
+	"configuredServices": ["../slack"],
+	"clock": { "mode": "real", "offsetMs": "zero" },
+	"seed": { "status": "seeded", "attempt": 0 },
+	"status": "unknown"
+}
