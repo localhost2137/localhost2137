@@ -1,9 +1,9 @@
-import { Hono } from "hono";
+import { type Env, Hono } from "hono";
 
-export function createRuntimeHttpApplication(
+export function createRuntimeHttpApplication<ControlEnv extends Env, PublicEnv extends Env>(
 	input: Readonly<{
-		control: Hono;
-		publicGateway: Hono;
+		control: Hono<ControlEnv>;
+		publicGateway: Hono<PublicEnv>;
 	}>,
 ): Hono {
 	const app = new Hono();

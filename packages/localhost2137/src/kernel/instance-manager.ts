@@ -231,6 +231,10 @@ export class InstanceManager {
 		return this.#runtime.stopAll(options.timeoutMs);
 	}
 
+	settled(): Promise<void> {
+		return this.#runtime.settled();
+	}
+
 	#runMutation<Value>(start: (runtimeSignal: AbortSignal) => OwnedMutation<Value>): Promise<Value> {
 		const admission = this.#runtime.admit();
 		try {

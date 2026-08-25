@@ -30,6 +30,7 @@ export class PersistedInstanceRuntime {
 	#closePromise: Promise<void> | undefined;
 	#initializePromise: Promise<void> | undefined;
 	#startPromise: Promise<void> | undefined;
+	#settledPromise: Promise<void> | undefined;
 
 	constructor(input: {
 		readonly factory: ActiveInstanceFactory;
@@ -146,9 +147,17 @@ export class PersistedInstanceRuntime {
 			timeoutMs,
 		});
 		const owned = this.#stopAll(scope).finally(() => scope.dispose());
+		this.#settledPromise = owned;
 		this.#closePromise = scope.report(owned);
 		void owned.catch(() => undefined);
 		return this.#closePromise;
+	}
+
+	settled(): Promise<void> {
+		if (!this.#settledPromise) {
+			throw new TypeError("Instance runtime settlement is available only after shutdown starts.");
+		}
+		return this.#settledPromise;
 	}
 
 	async #stopAll(scope: MutationScope): Promise<void> {

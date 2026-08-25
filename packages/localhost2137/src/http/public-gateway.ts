@@ -7,6 +7,7 @@ import type { RuntimeTime } from "../kernel/runtime-time.js";
 import type { StructuredLogInput } from "../kernel/structured-log.js";
 import type { PluginApiRegistry } from "./plugin-api-registry.js";
 import { PluginApiWrappers } from "./plugin-api-wrapper.js";
+import { responseWithFinalizer } from "./response-lifecycle.js";
 
 export interface PublicGatewayRuntime {
 	acquireService(
@@ -139,48 +140,6 @@ function rewritePublicRequest(request: Request): Request {
 	if (segments.length < 3) throw new TypeError("Public route prefix is incomplete.");
 	url.pathname = `/${segments.slice(3).join("/")}`;
 	return new Request(url, request);
-}
-
-function responseWithFinalizer(response: Response, finalize: () => void): Response {
-	if (!response.body) {
-		finalize();
-		return response;
-	}
-	const reader = response.body.getReader();
-	let finalized = false;
-	const finish = () => {
-		if (finalized) return;
-		finalized = true;
-		finalize();
-	};
-	const body = new ReadableStream<Uint8Array>({
-		cancel: async (reason) => {
-			try {
-				await reader.cancel(reason);
-			} finally {
-				finish();
-			}
-		},
-		pull: async (controller) => {
-			try {
-				const chunk = await reader.read();
-				if (chunk.done) {
-					finish();
-					controller.close();
-					return;
-				}
-				controller.enqueue(chunk.value);
-			} catch (cause) {
-				finish();
-				controller.error(cause);
-			}
-		},
-	});
-	return new Response(body, {
-		headers: response.headers,
-		status: response.status,
-		statusText: response.statusText,
-	});
 }
 
 function publicResolutionError(cause: unknown): Response {
