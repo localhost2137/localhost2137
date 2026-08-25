@@ -12,6 +12,50 @@ export class CliUsageError extends Error {
 	}
 }
 
+export class CliConfigMismatchError extends Error {
+	constructor() {
+		super(
+			"The active runtime configuration differs from the current resolved config; restart `localhost dev`.",
+		);
+		this.name = "CliConfigMismatchError";
+	}
+}
+
+export class CliRuntimeUnavailableError extends Error {
+	declare readonly cause: unknown;
+
+	constructor(message: string, cause: unknown) {
+		super(`${message}\nRun \`localhost dev\` to start the project runtime.`);
+		this.name = "CliRuntimeUnavailableError";
+		Object.defineProperty(this, "cause", {
+			configurable: false,
+			enumerable: false,
+			value: cause,
+			writable: false,
+		});
+	}
+}
+
+export class CliTargetNotFoundError extends Error {
+	declare readonly cause: unknown;
+	readonly instanceId: string;
+
+	constructor(instanceId: string, existing: readonly string[], cause: unknown) {
+		const available = existing.length === 0 ? "none" : existing.join(", ");
+		super(
+			`no instance ${JSON.stringify(instanceId)} (existing: ${available})\nhint: localhost instance create ${instanceId}`,
+		);
+		this.name = "CliTargetNotFoundError";
+		this.instanceId = instanceId;
+		Object.defineProperty(this, "cause", {
+			configurable: false,
+			enumerable: false,
+			value: cause,
+			writable: false,
+		});
+	}
+}
+
 export interface CliFailure {
 	readonly exitCode: 2 | 3 | 4 | 5 | 10 | 130;
 	readonly message: string;
@@ -19,6 +63,10 @@ export interface CliFailure {
 
 export function classifyCliFailure(cause: unknown): CliFailure {
 	if (cause instanceof CliUsageError) return failure(2, cause.message);
+	if (cause instanceof CliTargetNotFoundError) return failure(4, cause.message);
+	if (cause instanceof CliConfigMismatchError || cause instanceof CliRuntimeUnavailableError) {
+		return failure(3, cause.message);
+	}
 	if (cause instanceof ControlApiError) return classifyApiFailure(cause);
 	if (
 		cause instanceof ControlProtocolError ||
@@ -65,6 +113,8 @@ function isRuntimeDiscoveryFailure(value: unknown): value is Error {
 		[
 			"ActiveRuntimeDiscoveryError",
 			"ActiveRuntimeFileError",
+			"DevDaemonFatalError",
+			"RuntimeDiscoveryError",
 			"RuntimeDescriptorValidationError",
 		].includes(value.name)
 	);
