@@ -1,10 +1,11 @@
 import type { z } from "zod";
 import type { RunningPluginContext } from "./context.js";
 
-export type ObjectSchema = z.ZodObject;
+type ObjectSchema = z.ZodObject;
 export type Schema = z.ZodType;
 
-const operationBindingType: unique symbol = Symbol("localhost2137.operationBinding");
+declare const operationBindingType: unique symbol;
+const operationRuntimeType: unique symbol = Symbol.for("localhost2137.operationRuntime.v1");
 
 interface OperationBinding {
 	readonly token: object;
@@ -68,7 +69,7 @@ export function defineOperation<
 		definition: OperationDefinitionInput<State, Config, InputSchema, OutputSchema>,
 	): OperationDefinition<PluginId, State, Config, InputSchema, OutputSchema> => {
 		const descriptor = { ...definition };
-		Object.defineProperty(descriptor, operationBindingType, {
+		Object.defineProperty(descriptor, operationRuntimeType, {
 			configurable: false,
 			enumerable: false,
 			value: Object.freeze({ token }),
@@ -88,10 +89,19 @@ export function defineOperation<
 	};
 }
 
-export function readOperationBinding(operation: OperationShape): OperationBinding | undefined {
-	if (!(operationBindingType in operation)) {
+export function readOperationBinding(operation: unknown): OperationBinding | undefined {
+	if (!isObject(operation) || !(operationRuntimeType in operation)) {
 		return undefined;
 	}
 
-	return operation[operationBindingType] as unknown as OperationBinding;
+	const binding = operation[operationRuntimeType];
+	return isOperationBinding(binding) ? binding : undefined;
+}
+
+function isObject(value: unknown): value is Readonly<Record<PropertyKey, unknown>> {
+	return typeof value === "object" && value !== null;
+}
+
+function isOperationBinding(value: unknown): value is OperationBinding {
+	return isObject(value) && typeof value.token === "object" && value.token !== null;
 }

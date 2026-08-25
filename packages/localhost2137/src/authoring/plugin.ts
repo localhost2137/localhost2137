@@ -38,7 +38,7 @@ export interface Lifecycle<State, Config> {
 	) => Promise<void> | void;
 }
 
-export interface PluginDefinitionBase<
+interface PluginDefinitionBase<
 	PluginId extends string,
 	ConfigSchema extends Schema,
 	State,
@@ -82,7 +82,12 @@ export type UnseededPluginDefinition<
 	readonly seedSchema?: never;
 };
 
-const configuredServiceType: unique symbol = Symbol("localhost2137.configuredService");
+declare const configuredServiceType: unique symbol;
+// Symbol.for keeps runtime descriptors recognizable when tsx imports a config
+// in its isolated loader namespace or a compatible plugin resolves another copy.
+const configuredServiceRuntimeType: unique symbol = Symbol.for(
+	"localhost2137.configuredServiceRuntime.v1",
+);
 
 export interface ConfiguredService<
 	ConfigSchema extends Schema,
@@ -93,14 +98,12 @@ export interface ConfiguredService<
 	readonly [configuredServiceType]: {
 		readonly config: ConfigSchema;
 		readonly connection: Connection;
-		readonly definition: RuntimePluginDefinition;
-		readonly envelope: Readonly<{ config: unknown; exportEnv?: unknown; seed?: unknown }>;
 		readonly operations: Operations;
 		readonly seed: SeedSchema;
 	};
 }
 
-export type ServiceEnvelope<ConfigSchema extends Schema, SeedSchema extends Schema | undefined> = {
+type ServiceEnvelope<ConfigSchema extends Schema, SeedSchema extends Schema | undefined> = {
 	readonly config: z.input<ConfigSchema>;
 	readonly exportEnv?: boolean;
 } & (SeedSchema extends Schema
@@ -123,10 +126,12 @@ export interface RuntimePluginDefinition {
 	readonly description: unknown;
 	readonly id: string;
 	readonly lifecycle: object;
-	readonly operations: Readonly<Record<string, OperationShape>>;
+	readonly operations: Readonly<Record<string, RuntimeOperationDefinition>>;
 	readonly seedSchema?: Schema;
 	readonly stateVersion: unknown;
 }
+
+export type RuntimeOperationDefinition = OperationShape & { readonly run: unknown };
 
 export interface ConfiguredServiceRuntime {
 	readonly definition: RuntimePluginDefinition;
@@ -164,7 +169,7 @@ export function definePlugin(
 ): PluginFactory<
 	Schema,
 	Schema | undefined,
-	Readonly<Record<string, OperationShape>>,
+	Readonly<Record<string, RuntimeOperationDefinition>>,
 	ConnectionMetadata
 > {
 	assertOperationBindings(definition);
@@ -178,23 +183,19 @@ export function definePlugin(
 	return Object.freeze(
 		(envelope: Readonly<{ config: unknown; exportEnv?: unknown; seed?: unknown }>) => {
 			const descriptor = {};
-			Object.defineProperty(descriptor, configuredServiceType, {
+			Object.defineProperty(descriptor, configuredServiceRuntimeType, {
 				configurable: false,
 				enumerable: false,
 				value: Object.freeze({
-					config: definition.configSchema,
-					connection: undefined,
 					definition: ownedDefinition,
 					envelope: Object.freeze({ ...envelope }),
-					operations: definition.operations,
-					seed: definition.seedSchema,
 				}),
 				writable: false,
 			});
 			return Object.freeze(descriptor) as ConfiguredService<
 				Schema,
 				Schema | undefined,
-				Readonly<Record<string, OperationShape>>,
+				Readonly<Record<string, RuntimeOperationDefinition>>,
 				ConnectionMetadata
 			>;
 		},
@@ -220,10 +221,23 @@ export function readConfiguredService(value: unknown): ConfiguredServiceRuntime 
 	if ((typeof value !== "object" && typeof value !== "function") || value === null) {
 		return undefined;
 	}
-	if (!(configuredServiceType in value)) {
+	if (!(configuredServiceRuntimeType in value)) {
 		return undefined;
 	}
 
-	const descriptor = value[configuredServiceType] as ConfiguredServiceRuntime;
-	return descriptor;
+	const descriptor = value[configuredServiceRuntimeType];
+	return isConfiguredServiceRuntime(descriptor) ? descriptor : undefined;
+}
+
+function isConfiguredServiceRuntime(value: unknown): value is ConfiguredServiceRuntime {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"definition" in value &&
+		typeof value.definition === "object" &&
+		value.definition !== null &&
+		"envelope" in value &&
+		typeof value.envelope === "object" &&
+		value.envelope !== null
+	);
 }

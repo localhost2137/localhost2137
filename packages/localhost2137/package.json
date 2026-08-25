@@ -27,5 +27,8 @@
 	"devDependencies": {
 		"hono": "4.13.4",
 		"zod": "4.4.3"
+	},
+	"dependencies": {
+		"tsx": "4.20.5"
 	}
 }

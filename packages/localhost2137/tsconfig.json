@@ -3,7 +3,8 @@
 	"compilerOptions": {
 		"outDir": "dist",
 		"rootDir": "src",
-		"tsBuildInfoFile": "../../node_modules/.cache/typescript/localhost2137.tsbuildinfo"
+		"tsBuildInfoFile": "../../node_modules/.cache/typescript/localhost2137.tsbuildinfo",
+		"types": ["node"]
 	},
 	"include": ["src/**/*.ts"]
 }

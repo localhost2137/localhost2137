@@ -1,13 +1,13 @@
 import { z } from "zod";
 import type { OperationShape, Schema } from "../authoring/operation.js";
 
-export type JsonPrimitive = boolean | number | string | null;
-export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
+type JsonPrimitive = boolean | number | string | null;
+type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
 export type JsonObject = { readonly [key: string]: JsonValue };
 
-export type CliScalarType = "boolean" | "integer" | "number" | "string";
+type CliScalarType = "boolean" | "integer" | "number" | "string";
 
-export interface CliOption {
+interface CliOption {
 	readonly default?: JsonPrimitive | readonly JsonPrimitive[];
 	readonly description?: string;
 	readonly enum?: readonly JsonPrimitive[];
@@ -19,7 +19,7 @@ export interface CliOption {
 	readonly type: CliScalarType;
 }
 
-export type CliInputSchema =
+type CliInputSchema =
 	| Readonly<{ kind: "flags"; options: readonly CliOption[] }>
 	| Readonly<{ kind: "json"; reason: string }>;
 
@@ -79,7 +79,7 @@ export function createSchemaMetadata(
 	}
 }
 
-export function compileCliInputSchema(schema: JsonObject): CliInputSchema {
+function compileCliInputSchema(schema: JsonObject): CliInputSchema {
 	if (schema.type !== "object") {
 		return jsonFallback("Operation input JSON Schema is not an object.");
 	}
@@ -180,7 +180,7 @@ function option(
 		...(description === undefined ? {} : { description }),
 		...(scalar.enum === undefined ? {} : { enum: scalar.enum }),
 		...(examples === undefined ? {} : { examples: Object.freeze(examples) }),
-		flag: `--${toKebabCase(name)}`,
+		flag: `--${toCliName(name)}`,
 		name,
 		repeated,
 		required,
@@ -250,7 +250,7 @@ function jsonFallback(reason: string): CliInputSchema {
 	return Object.freeze({ kind: "json", reason });
 }
 
-function toKebabCase(value: string): string {
+export function toCliName(value: string): string {
 	return value
 		.replace(/([a-z\d])([A-Z])/g, "$1-$2")
 		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
