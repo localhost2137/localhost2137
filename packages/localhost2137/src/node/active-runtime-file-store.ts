@@ -98,7 +98,7 @@ export function generateControlToken(): string {
 }
 
 export function generateRuntimeOwnerId(): string {
-	return randomBytes(24).toString("base64url");
+	return `runtime_${randomBytes(24).toString("base64url")}`;
 }
 
 function ownDescriptorCreationInput(value: unknown): Readonly<{

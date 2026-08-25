@@ -11,6 +11,7 @@ import {
 	ActiveRuntimeFileStore,
 	createRuntimeDescriptor,
 	generateControlToken,
+	generateRuntimeOwnerId,
 } from "../../src/node/active-runtime-file-store.js";
 import { storagePaths } from "../../src/node/storage-paths.js";
 
@@ -60,6 +61,9 @@ describe("active runtime files", () => {
 		const second = generateControlToken();
 		expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect(second).not.toBe(first);
+		const owners = Array.from({ length: 256 }, () => generateRuntimeOwnerId());
+		for (const owner of owners) expect(owner).toMatch(/^runtime_[A-Za-z0-9_-]{32}$/);
+		expect(new Set(owners)).toHaveProperty("size", owners.length);
 	});
 
 	it("distinguishes absent, malformed, unsupported, and inconsistent files", async () => {
