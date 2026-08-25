@@ -34,6 +34,6 @@
 	"dependencies": {
 		"@hono/node-server": "2.1.1",
 		"commander": "15.0.0",
-		"tsx": "4.20.5"
+		"tsx": "4.23.12"
 	}
 }
