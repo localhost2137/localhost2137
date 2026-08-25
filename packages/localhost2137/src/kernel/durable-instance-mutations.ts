@@ -21,6 +21,7 @@ import { MutationScope } from "./mutation-scope.js";
 import type { TaskScheduler } from "./task-tracker.js";
 
 const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
+const MAX_ROLLBACK_GRACE_MS = 5_000;
 
 export interface LifecycleMutationOptions {
 	readonly signal?: AbortSignal;
@@ -179,7 +180,7 @@ export class DurableInstanceMutations {
 		} catch (cause) {
 			if (cause instanceof InstanceMutationCommittedError) throw cause;
 			if (staged) throw new InstanceMutationCommittedError("destroy", [cause]);
-			const recoveryFailures = await this.#restorePrevious(previous, scope);
+			const recoveryFailures = await this.#restorePrevious(previous, options);
 			throw new AggregateError(
 				[cause, ...recoveryFailures],
 				"Instance destroy failed and a new generation was restored when possible.",
@@ -276,6 +277,7 @@ export class DurableInstanceMutations {
 				transition.transitionId,
 				staged,
 				scope,
+				options,
 			);
 			throw new InstanceResetError([cause, ...rollbackFailures]);
 		} finally {
@@ -336,6 +338,7 @@ export class DurableInstanceMutations {
 		transitionId: string,
 		staged: boolean,
 		scope: MutationScope,
+		options: AdmittedMutationOptions,
 	): Promise<unknown[]> {
 		const failures = replacement ? await this.#retire(replacement, scope, "reset rolled back") : [];
 		if (staged) {
@@ -347,21 +350,32 @@ export class DurableInstanceMutations {
 				.catch((failure: unknown) => failures.push(failure));
 			this.#trash.schedule(transitionId);
 		}
-		failures.push(...(await this.#restorePrevious(previous, scope)));
+		failures.push(...(await this.#restorePrevious(previous, options)));
 		return failures;
 	}
 
-	async #restorePrevious(previous: ActiveInstance, scope: MutationScope): Promise<unknown[]> {
+	async #restorePrevious(
+		previous: ActiveInstance,
+		options: AdmittedMutationOptions,
+	): Promise<unknown[]> {
 		const failures: unknown[] = [];
+		const recovery = new MutationScope(this.#monotonicClock, this.#scheduler, {
+			label: `restoring instance ${previous.id.value} after a failed mutation`,
+			signals: [options.runtimeSignal],
+			timeoutMs: Math.max(1, Math.min(options.timeoutMs, MAX_ROLLBACK_GRACE_MS)),
+		});
 		try {
 			const restored = await this.#factory.start(
 				previous.id,
 				previous.manifest,
-				this.#factoryOptions(scope),
+				this.#factoryOptions(recovery),
 			);
 			this.#registry.replace(previous, restored);
 		} catch (failure) {
 			failures.push(failure);
+			this.#registry.remove(previous);
+		} finally {
+			recovery.dispose();
 		}
 		return failures;
 	}

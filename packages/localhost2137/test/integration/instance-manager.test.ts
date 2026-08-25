@@ -384,6 +384,47 @@ describe("InstanceManager with durable Node storage", () => {
 		});
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 	});
+
+	it.each(["reset", "destroy"] as const)(
+		"restores a fresh generation when caller cancellation interrupts %s stop",
+		async (operation) => {
+			const stopEntered = deferred<RunningPluginContext<unknown, unknown>>();
+			let interruptFirstStop = true;
+			const fixture = await managerFixture(
+				instanceTemplate({
+					stopBarrier: async (context) => {
+						if (!interruptFirstStop) return;
+						interruptFirstStop = false;
+						stopEntered.resolve(context);
+						throw await abortReason(context.signal);
+					},
+				}),
+			);
+			await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+			const previous = fixture.manager.service("dev", "fixture").runningContext();
+			const cancellation = new AbortController();
+			const mutation = fixture.manager[operation](
+				"dev",
+				operation === "reset"
+					? { seed: false, signal: cancellation.signal, timeoutMs: 1_000 }
+					: { signal: cancellation.signal, timeoutMs: 1_000 },
+			);
+			const stopped = await stopEntered.promise;
+
+			cancellation.abort(new Error(`${operation} request disconnected`));
+
+			await expect(mutation).rejects.toBeInstanceOf(AggregateError);
+			expect(stopped.signal.aborted).toBe(true);
+			expect(previous.signal.aborted).toBe(true);
+			const restored = fixture.manager.service("dev", "fixture").runningContext();
+			expect(restored.signal.aborted).toBe(false);
+			expect(await fixture.manager.get("dev")).toMatchObject({ status: "running" });
+			expect(await fixture.storage.readInstance(parseInstanceId("dev"))).toMatchObject({
+				status: "ready",
+			});
+			await fixture.manager.stopAll({ timeoutMs: 1_000 });
+		},
+	);
 });
 
 interface TemplateOptions {
@@ -395,6 +436,7 @@ interface TemplateOptions {
 	readonly seedCalls?: string[];
 	readonly seedFailure?: Error;
 	readonly stateVersion?: number;
+	readonly stopBarrier?: (context: RunningPluginContext<unknown, unknown>) => Promise<void>;
 	readonly stoppedContexts?: RunningPluginContext<unknown, unknown>[];
 	readonly updateCalls?: string[];
 }
@@ -419,7 +461,8 @@ function instanceTemplate(options: TemplateOptions = {}): InstanceTemplate {
 		},
 		start: async (context: BasePluginContext<unknown>) =>
 			JSON.parse(await readFile(context.storage.path("state.json"), "utf8")),
-		stop: (context) => {
+		stop: async (context) => {
+			await options.stopBarrier?.(context);
 			options.stoppedContexts?.push(context);
 		},
 		update: (context, version) => {
