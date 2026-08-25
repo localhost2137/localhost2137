@@ -81,12 +81,12 @@ export default defineConfig([
 				{
 					patterns: [
 						{
-							group: ["**/packages/localhost2137/src/**"],
 							message: "The test kit must consume public package exports, never src internals.",
+							regex: "(^|/)localhost2137/src(/|$)",
 						},
 						{
 							message: "The test kit may import only localhost2137 or localhost2137/testing.",
-							regex: "^localhost2137/(?!testing$).+",
+							regex: "^localhost2137/(?!testing$).*$",
 						},
 					],
 				},

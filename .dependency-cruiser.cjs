@@ -32,12 +32,10 @@ module.exports = {
 			to: { path: "^packages/localhost2137/src/(?!index\\.ts$)" },
 		},
 		{
-			name: "plugin-testkit-uses-public-entry-points-only",
+			name: "plugin-testkit-does-not-import-runtime-source",
 			severity: "error",
 			from: { path: "^packages/plugin-testkit/" },
-			to: {
-				path: "^packages/localhost2137/src/(?!index\\.ts$|testing/index\\.ts$)",
-			},
+			to: { path: "^packages/localhost2137/src/" },
 		},
 	],
 	options: {

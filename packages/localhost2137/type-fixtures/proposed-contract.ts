@@ -290,7 +290,7 @@ export interface InstanceClockStatus {
 	readonly now: string;
 }
 
-export interface InstanceClockHandle {
+interface InstanceClockHandle {
 	status(): Promise<InstanceClockStatus>;
 }
 

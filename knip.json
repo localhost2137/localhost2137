@@ -9,7 +9,7 @@
 			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
 		"packages/plugin-testkit": {
-			"project": ["src/**/*.ts"]
+			"project": ["src/**/*.ts", "test/**/*.ts"]
 		},
 		"plugins/*": {
 			"project": ["src/**/*.ts"]
