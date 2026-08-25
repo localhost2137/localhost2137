@@ -318,6 +318,38 @@ describe("InstanceManager with durable Node storage", () => {
 		).rejects.toBeInstanceOf(InstanceRuntimeClosedError);
 	});
 
+	it("shutdown drains an admitted persisted startup without publishing a partial instance", async () => {
+		const fixture = await managerFixture(instanceTemplate());
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+		const startEntered = deferred<BasePluginContext<unknown>>();
+		const restarting = await managerFixture(
+			instanceTemplate({
+				startBarrier: async (context) => {
+					startEntered.resolve(context);
+					throw await abortReason(context.signal);
+				},
+			}),
+			fixture.directory,
+		);
+		const starting = restarting.manager.startPersisted();
+		const startContext = await startEntered.promise;
+
+		const stopping = restarting.manager.stopAll({ timeoutMs: 1_000 });
+
+		await expect(starting).rejects.toBeInstanceOf(AggregateError);
+		await expect(stopping).resolves.toBeUndefined();
+		expect(startContext.signal.aborted).toBe(true);
+		expect(await restarting.storage.readInstance(parseInstanceId("dev"))).toMatchObject({
+			status: "ready",
+		});
+
+		const recovered = await managerFixture(instanceTemplate(), fixture.directory);
+		await recovered.manager.startPersisted();
+		expect(await recovered.manager.get("dev")).toMatchObject({ status: "running" });
+		await recovered.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
 	it("persists a deterministic seed failure when cancellation reaches its hook", async () => {
 		const seedEntered = deferred<RunningPluginContext<unknown, unknown>>();
 		const fixture = await managerFixture(
@@ -435,6 +467,7 @@ interface TemplateOptions {
 	readonly seedBarrier?: (context: RunningPluginContext<unknown, unknown>) => Promise<void>;
 	readonly seedCalls?: string[];
 	readonly seedFailure?: Error;
+	readonly startBarrier?: (context: BasePluginContext<unknown>) => Promise<void>;
 	readonly stateVersion?: number;
 	readonly stopBarrier?: (context: RunningPluginContext<unknown, unknown>) => Promise<void>;
 	readonly stoppedContexts?: RunningPluginContext<unknown, unknown>[];
@@ -459,8 +492,10 @@ function instanceTemplate(options: TemplateOptions = {}): InstanceTemplate {
 			await options.seedBarrier?.(context);
 			options.seedCalls?.push(`${context.instanceId}:${String(value)}`);
 		},
-		start: async (context: BasePluginContext<unknown>) =>
-			JSON.parse(await readFile(context.storage.path("state.json"), "utf8")),
+		start: async (context: BasePluginContext<unknown>) => {
+			await options.startBarrier?.(context);
+			return JSON.parse(await readFile(context.storage.path("state.json"), "utf8"));
+		},
 		stop: async (context) => {
 			await options.stopBarrier?.(context);
 			options.stoppedContexts?.push(context);
