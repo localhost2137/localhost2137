@@ -39,10 +39,14 @@ export function serviceDataDirectory(
 }
 
 export function transitionDirectory(paths: StoragePaths, transitionId: string): string {
+	validateTransitionId(transitionId);
+	return resolveBeneath(paths.trash, transitionId);
+}
+
+export function validateTransitionId(transitionId: string): void {
 	if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/.test(transitionId)) {
 		throw new TypeError(`Invalid storage transition id ${JSON.stringify(transitionId)}.`);
 	}
-	return resolveBeneath(paths.trash, transitionId);
 }
 
 function resolveBeneath(root: string, ...segments: readonly string[]): string {

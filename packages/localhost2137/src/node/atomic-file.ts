@@ -43,7 +43,7 @@ export async function writeTextAtomically(
 		await handle.close();
 		handle = undefined;
 		await fileSystem.rename(temporaryPath, filePath);
-		await syncDirectory(fileSystem, dirname(filePath));
+		await syncDirectoryWith(fileSystem, dirname(filePath));
 	} catch (cause) {
 		await closeAfterFailure(handle, cause);
 		await removeTemporaryFile(fileSystem, temporaryPath, cause);
@@ -59,7 +59,10 @@ export async function writeJsonAtomically(
 	await writeTextAtomically(filePath, `${JSON.stringify(value, undefined, 2)}\n`, options);
 }
 
-async function syncDirectory(fileSystem: AtomicWriteFileSystem, directory: string): Promise<void> {
+async function syncDirectoryWith(
+	fileSystem: AtomicWriteFileSystem,
+	directory: string,
+): Promise<void> {
 	let handle: AtomicFileHandle | undefined;
 	try {
 		handle = await fileSystem.open(directory, constants.O_RDONLY);
@@ -69,6 +72,10 @@ async function syncDirectory(fileSystem: AtomicWriteFileSystem, directory: strin
 		if (handle) await handle.close().catch(() => undefined);
 		if (!isUnsupportedDirectorySync(cause)) throw cause;
 	}
+}
+
+export async function syncDirectory(directory: string): Promise<void> {
+	await syncDirectoryWith(nodeAtomicWriteFileSystem, directory);
 }
 
 async function closeAfterFailure(
