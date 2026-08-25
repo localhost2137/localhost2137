@@ -5,6 +5,7 @@ const runtimeInternals = [
 	"**/config/**",
 	"**/kernel/**",
 	"**/node/**",
+	"**/http/**",
 	"**/control/**",
 	"**/cli/**",
 	"**/testing/**",

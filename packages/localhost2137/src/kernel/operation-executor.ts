@@ -11,6 +11,7 @@ export interface OperationDescriptorResolver {
 
 export interface OperationServiceLease {
 	readonly context: RunningPluginContext<unknown, unknown>;
+	readonly generation: object;
 	readonly logs: StructuredLogRing;
 	release(): void;
 }

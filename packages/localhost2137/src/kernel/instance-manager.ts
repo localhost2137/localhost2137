@@ -27,6 +27,8 @@ export interface InstanceManagerDependencies extends ActiveInstanceDependencies 
 
 export interface RunningServiceLease {
 	readonly context: RunningPluginContext<unknown, unknown>;
+	/** Stable only for the lifetime of one active instance generation. */
+	readonly generation: object;
 	readonly logs: StructuredLogRing;
 	release(): void;
 }
@@ -145,6 +147,7 @@ export class InstanceManager {
 			let released = false;
 			return Object.freeze({
 				context: service.runningContext(operationSignal),
+				generation: active.generation,
 				logs: active.logs,
 				release: () => {
 					if (released) return;

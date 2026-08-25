@@ -17,13 +17,13 @@ module.exports = {
 			name: "authoring-does-not-depend-on-runtime",
 			severity: "error",
 			from: { path: "^packages/localhost2137/src/authoring" },
-			to: { path: "^packages/localhost2137/src/(config|kernel|node|control|cli|testing)" },
+			to: { path: "^packages/localhost2137/src/(config|kernel|node|http|control|cli|testing)" },
 		},
 		{
 			name: "kernel-does-not-depend-on-adapters",
 			severity: "error",
 			from: { path: "^packages/localhost2137/src/kernel" },
-			to: { path: "^packages/localhost2137/src/(config|node|control|cli|testing)" },
+			to: { path: "^packages/localhost2137/src/(config|node|http|control|cli|testing)" },
 		},
 		{
 			name: "plugins-use-public-root-only",
