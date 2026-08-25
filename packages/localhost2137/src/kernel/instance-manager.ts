@@ -9,6 +9,7 @@ import { ActiveInstanceRegistry } from "./active-instance-registry.js";
 import {
 	DurableInstanceMutations,
 	type LifecycleMutationOptions,
+	type OwnedMutation,
 } from "./durable-instance-mutations.js";
 import { parseInstanceId, parseServiceKey } from "./identifiers.js";
 import type { InstanceLease } from "./instance-leases.js";
@@ -70,15 +71,12 @@ export class InstanceManager {
 		}>,
 	): Promise<InstanceSummary> {
 		const instanceId = parseInstanceId(options.id);
-		const admission = this.#runtime.admit();
-		try {
-			return await this.#mutations.create(instanceId, {
+		return this.#runMutation((runtimeSignal) =>
+			this.#mutations.create(instanceId, {
 				...options,
-				runtimeSignal: admission.signal,
-			});
-		} finally {
-			admission.release();
-		}
+				runtimeSignal,
+			}),
+		);
 	}
 
 	async list(): Promise<readonly InstanceSummary[]> {
@@ -130,42 +128,33 @@ export class InstanceManager {
 	}
 
 	async seed(id: string, options: LifecycleMutationOptions): Promise<void> {
-		const admission = this.#runtime.admit();
-		try {
-			await this.#mutations.seed(parseInstanceId(id), {
+		return this.#runMutation((runtimeSignal) =>
+			this.#mutations.seed(parseInstanceId(id), {
 				...options,
-				runtimeSignal: admission.signal,
-			});
-		} finally {
-			admission.release();
-		}
+				runtimeSignal,
+			}),
+		);
 	}
 
 	async destroy(id: string, options: LifecycleMutationOptions): Promise<void> {
-		const admission = this.#runtime.admit();
-		try {
-			await this.#mutations.destroy(parseInstanceId(id), {
+		return this.#runMutation((runtimeSignal) =>
+			this.#mutations.destroy(parseInstanceId(id), {
 				...options,
-				runtimeSignal: admission.signal,
-			});
-		} finally {
-			admission.release();
-		}
+				runtimeSignal,
+			}),
+		);
 	}
 
 	async reset(
 		id: string,
 		options: LifecycleMutationOptions & Readonly<{ seed: boolean }>,
 	): Promise<InstanceSummary> {
-		const admission = this.#runtime.admit();
-		try {
-			return await this.#mutations.reset(parseInstanceId(id), {
+		return this.#runMutation((runtimeSignal) =>
+			this.#mutations.reset(parseInstanceId(id), {
 				...options,
-				runtimeSignal: admission.signal,
-			});
-		} finally {
-			admission.release();
-		}
+				runtimeSignal,
+			}),
+		);
 	}
 
 	startPersisted(): Promise<void> {
@@ -174,6 +163,18 @@ export class InstanceManager {
 
 	stopAll(options: Readonly<{ timeoutMs: number }>): Promise<void> {
 		return this.#runtime.stopAll(options.timeoutMs);
+	}
+
+	#runMutation<Value>(start: (runtimeSignal: AbortSignal) => OwnedMutation<Value>): Promise<Value> {
+		const admission = this.#runtime.admit();
+		try {
+			const operation = start(admission.signal);
+			void operation.settled.then(() => admission.release());
+			return operation.result;
+		} catch (cause) {
+			admission.release();
+			throw cause;
+		}
 	}
 }
 

@@ -79,15 +79,17 @@ export class PersistedInstanceRuntime {
 			signals: [admission.signal],
 			timeoutMs: STARTUP_TIMEOUT_MS,
 		});
-		this.#startPromise = this.#startPersisted(scope)
-			.catch((cause: unknown) => {
+		const owned = this.#startPersisted(scope).finally(() => {
+			scope.dispose();
+			admission.release();
+		});
+		this.#startPromise = scope.report(owned);
+		void owned.then(
+			() => undefined,
+			() => {
 				this.#startPromise = undefined;
-				throw cause;
-			})
-			.finally(() => {
-				scope.dispose();
-				admission.release();
-			});
+			},
+		);
 		return this.#startPromise;
 	}
 
@@ -127,6 +129,10 @@ export class PersistedInstanceRuntime {
 				if (report.failures.length > 0 || report.unfinishedLabels.length > 0) {
 					failures.push(report);
 				}
+				const settled = await active.generation.settled();
+				if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
+					failures.push(settled);
+				}
 				this.#registry.remove(active);
 			}
 			throw new AggregateError(failures, "Could not start persisted instances.");
@@ -139,7 +145,9 @@ export class PersistedInstanceRuntime {
 			label: "closing the instance runtime",
 			timeoutMs,
 		});
-		this.#closePromise = this.#stopAll(scope).finally(() => scope.dispose());
+		const owned = this.#stopAll(scope).finally(() => scope.dispose());
+		this.#closePromise = scope.report(owned);
+		void owned.catch(() => undefined);
 		return this.#closePromise;
 	}
 
@@ -152,10 +160,7 @@ export class PersistedInstanceRuntime {
 		for (const active of [...this.#registry.all()].reverse()) {
 			let lease: { release(): void } | undefined;
 			try {
-				lease = await active.leases.acquireExclusive({
-					signal: scope.signal,
-					timeoutMs: scope.remainingMs(),
-				});
+				lease = await active.leases.acquireExclusiveOwned();
 				active.leases.retire();
 				await active.lifecycle.stopAll(scope.signal);
 			} catch (cause) {
@@ -166,9 +171,17 @@ export class PersistedInstanceRuntime {
 			}
 			const report = await active.generation.close(closing, scope.remainingMs());
 			if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
+			const settled = await active.generation.settled();
+			if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
+				failures.push(settled);
+			}
 		}
 		const cleanup = await this.#trash.close(scope.remainingMs());
 		if (cleanup.failures.length > 0 || cleanup.unfinishedLabels.length > 0) failures.push(cleanup);
+		const settledCleanup = await this.#trash.settled();
+		if (settledCleanup.failures.length > 0 || settledCleanup.unfinishedLabels.length > 0) {
+			failures.push(settledCleanup);
+		}
 		if (scope.signal.aborted) failures.push(scope.signal.reason);
 		if (failures.length > 0) {
 			throw new AggregateError(failures, "Instance runtime shutdown had failures.");

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BasePluginContext, RunningPluginContext } from "../../src/authoring/context.js";
 import { parseInstanceId, parseServiceKey } from "../../src/kernel/identifiers.js";
 import type { MonotonicClock } from "../../src/kernel/instance-leases.js";
-import { InstanceSeedError, SeedNotAllowedError } from "../../src/kernel/instance-lifecycle.js";
+import { SeedNotAllowedError } from "../../src/kernel/instance-lifecycle.js";
 import {
 	InstanceAlreadyExistsError,
 	InstanceCreationError,
@@ -14,7 +14,7 @@ import {
 	InstanceResetError,
 } from "../../src/kernel/instance-manager.js";
 import type { InstanceTemplate } from "../../src/kernel/instance-template.js";
-import { MutationTimeoutError } from "../../src/kernel/mutation-scope.js";
+import { MutationAbortedError, MutationTimeoutError } from "../../src/kernel/mutation-scope.js";
 import { InstanceRuntimeClosedError } from "../../src/kernel/persisted-instance-runtime.js";
 import type { RuntimeTime } from "../../src/kernel/runtime-time.js";
 import {
@@ -310,7 +310,7 @@ describe("InstanceManager with durable Node storage", () => {
 
 		const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
 
-		await expect(creating).rejects.toBeInstanceOf(InstanceCreationError);
+		await expect(creating).rejects.toBeInstanceOf(MutationAbortedError);
 		await expect(stopping).resolves.toBeUndefined();
 		expect(createContext.signal.aborted).toBe(true);
 		expect(await fixture.storage.readInstance(parseInstanceId("delayed"))).toBeUndefined();
@@ -337,10 +337,60 @@ describe("InstanceManager with durable Node storage", () => {
 		time.advance(10);
 
 		await expect(creating).rejects.toBeInstanceOf(MutationTimeoutError);
-		initialization.resolve(undefined);
+		const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
+		let stopped = false;
+		void stopping.then(
+			() => {
+				stopped = true;
+			},
+			() => {
+				stopped = true;
+			},
+		);
 		await Promise.resolve();
+		expect(stopped).toBe(false);
+		initialization.resolve(undefined);
+		await stopping;
 		expect(await fixture.storage.readInstance(parseInstanceId("delayed"))).toBeUndefined();
-		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it("reports a blocked create deadline but retains ownership until quarantine settles", async () => {
+		const time = new ManualTime();
+		const createEntered = deferred<BasePluginContext<unknown>>();
+		const releaseCreate = deferred<void>();
+		const fixture = await managerFixture(
+			instanceTemplate({
+				createBarrier: async (context) => {
+					createEntered.resolve(context);
+					await releaseCreate.promise;
+				},
+			}),
+			undefined,
+			{ monotonicClock: time, scheduler: time },
+		);
+		const creating = fixture.manager.create({
+			id: "blocked",
+			persistence: "persistent",
+			seed: false,
+			timeoutMs: 10,
+		});
+		const context = await createEntered.promise;
+
+		time.advance(10);
+
+		await expect(creating).rejects.toBeInstanceOf(MutationTimeoutError);
+		expect(context.signal.aborted).toBe(true);
+		const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
+		const didStop = settlementProbe(stopping);
+		await Promise.resolve();
+		expect(didStop()).toBe(false);
+		await expect(
+			fixture.manager.create({ id: "blocked", persistence: "persistent", seed: false }),
+		).rejects.toBeInstanceOf(InstanceRuntimeClosedError);
+
+		releaseCreate.resolve(undefined);
+		await stopping;
+		expect(await fixture.storage.readInstance(parseInstanceId("blocked"))).toBeUndefined();
 	});
 
 	it("shutdown drains an admitted persisted startup without publishing a partial instance", async () => {
@@ -362,12 +412,49 @@ describe("InstanceManager with durable Node storage", () => {
 
 		const stopping = restarting.manager.stopAll({ timeoutMs: 1_000 });
 
-		await expect(starting).rejects.toBeInstanceOf(AggregateError);
+		await expect(starting).rejects.toBeInstanceOf(MutationAbortedError);
 		await expect(stopping).resolves.toBeUndefined();
 		expect(startContext.signal.aborted).toBe(true);
 		expect(await restarting.storage.readInstance(parseInstanceId("dev"))).toMatchObject({
 			status: "ready",
 		});
+
+		const recovered = await managerFixture(instanceTemplate(), fixture.directory);
+		await recovered.manager.startPersisted();
+		expect(await recovered.manager.get("dev")).toMatchObject({ status: "running" });
+		await recovered.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it("retains a non-cooperative persisted start after its caller deadline", async () => {
+		const fixture = await managerFixture(instanceTemplate());
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+		const time = new ManualTime();
+		const startEntered = deferred<BasePluginContext<unknown>>();
+		const releaseStart = deferred<void>();
+		const restarting = await managerFixture(
+			instanceTemplate({
+				startBarrier: async (context) => {
+					startEntered.resolve(context);
+					await releaseStart.promise;
+				},
+			}),
+			fixture.directory,
+			{ monotonicClock: time, scheduler: time },
+		);
+		const starting = restarting.manager.startPersisted();
+		const context = await startEntered.promise;
+
+		time.advance(30_000);
+
+		await expect(starting).rejects.toBeInstanceOf(MutationTimeoutError);
+		expect(context.signal.aborted).toBe(true);
+		const stopping = restarting.manager.stopAll({ timeoutMs: 1_000 });
+		const didStop = settlementProbe(stopping);
+		await Promise.resolve();
+		expect(didStop()).toBe(false);
+		releaseStart.resolve(undefined);
+		await stopping;
 
 		const recovered = await managerFixture(instanceTemplate(), fixture.directory);
 		await recovered.manager.startPersisted();
@@ -396,7 +483,9 @@ describe("InstanceManager with durable Node storage", () => {
 
 		cancellation.abort(new Error("seed request disconnected"));
 
-		await expect(seeding).rejects.toBeInstanceOf(InstanceSeedError);
+		await expect(seeding).rejects.toBeInstanceOf(MutationAbortedError);
+		const ownership = await fixture.manager.acquireShared("dev");
+		ownership.release();
 		expect(seedContext.signal.aborted).toBe(true);
 		expect(await fixture.manager.get("dev")).toMatchObject({
 			seedStatus: "seed_failed",
@@ -433,13 +522,130 @@ describe("InstanceManager with durable Node storage", () => {
 
 		time.advance(10);
 
-		await expect(seeding).rejects.toBeInstanceOf(InstanceSeedError);
+		await expect(seeding).rejects.toBeInstanceOf(MutationTimeoutError);
+		const ownership = await fixture.manager.acquireShared("dev");
+		ownership.release();
 		expect(seedContext.signal.aborted).toBe(true);
 		expect(await fixture.manager.get("dev")).toMatchObject({
 			seedStatus: "seed_failed",
 			status: "seed_failed",
 		});
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it("retains a non-cooperative seed until its terminal state is durable", async () => {
+		const time = new ManualTime();
+		const seedEntered = deferred<RunningPluginContext<unknown, unknown>>();
+		const releaseSeed = deferred<void>();
+		const fixture = await managerFixture(
+			instanceTemplate({
+				configuredSeed: "fixture-seed",
+				seedBarrier: async (context) => {
+					seedEntered.resolve(context);
+					await releaseSeed.promise;
+				},
+			}),
+			undefined,
+			{ monotonicClock: time, scheduler: time },
+		);
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const seeding = fixture.manager.seed("dev", { timeoutMs: 10 });
+		const context = await seedEntered.promise;
+
+		time.advance(10);
+
+		await expect(seeding).rejects.toBeInstanceOf(MutationTimeoutError);
+		expect(context.signal.aborted).toBe(true);
+		const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
+		const didStop = settlementProbe(stopping);
+		await Promise.resolve();
+		expect(didStop()).toBe(false);
+		releaseSeed.resolve(undefined);
+		await stopping;
+
+		const restarted = await managerFixture(instanceTemplate(), fixture.directory);
+		await restarted.manager.startPersisted();
+		expect(await restarted.manager.get("dev")).toMatchObject({ seedStatus: "seed_failed" });
+		await restarted.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it.each(["reset", "destroy"] as const)(
+		"does not reuse storage while a non-cooperative %s stop hook is late",
+		async (operation) => {
+			const time = new ManualTime();
+			const stopEntered = deferred<RunningPluginContext<unknown, unknown>>();
+			const releaseStop = deferred<void>();
+			let blockFirstStop = true;
+			const fixture = await managerFixture(
+				instanceTemplate({
+					stopBarrier: async (context) => {
+						if (!blockFirstStop) return;
+						blockFirstStop = false;
+						stopEntered.resolve(context);
+						await releaseStop.promise;
+					},
+				}),
+				undefined,
+				{ monotonicClock: time, scheduler: time },
+			);
+			await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+			const stage = vi.spyOn(fixture.storage, "stageInstance");
+			const mutation = fixture.manager[operation](
+				"dev",
+				operation === "reset" ? { seed: false, timeoutMs: 10 } : { timeoutMs: 10 },
+			);
+			const context = await stopEntered.promise;
+
+			time.advance(10);
+
+			await expect(mutation).rejects.toBeInstanceOf(MutationTimeoutError);
+			expect(context.signal.aborted).toBe(true);
+			const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
+			const didStop = settlementProbe(stopping);
+			await Promise.resolve();
+			expect(didStop()).toBe(false);
+			expect(stage).not.toHaveBeenCalled();
+			releaseStop.resolve(undefined);
+			await stopping;
+			expect(stage).not.toHaveBeenCalled();
+
+			const restarted = await managerFixture(instanceTemplate(), fixture.directory);
+			await restarted.manager.startPersisted();
+			expect(await restarted.manager.get("dev")).toMatchObject({ status: "running" });
+			await restarted.manager.stopAll({ timeoutMs: 1_000 });
+		},
+	);
+
+	it("keeps shutdown ownership after a non-cooperative stop exceeds its report deadline", async () => {
+		const time = new ManualTime();
+		const stopEntered = deferred<RunningPluginContext<unknown, unknown>>();
+		const releaseStop = deferred<void>();
+		const fixture = await managerFixture(
+			instanceTemplate({
+				stopBarrier: async (context) => {
+					stopEntered.resolve(context);
+					await releaseStop.promise;
+				},
+			}),
+			undefined,
+			{ monotonicClock: time, scheduler: time },
+		);
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const stopping = fixture.manager.stopAll({ timeoutMs: 10 });
+		const context = await stopEntered.promise;
+
+		time.advance(10);
+
+		await expect(stopping).rejects.toBeInstanceOf(MutationTimeoutError);
+		expect(fixture.manager.stopAll({ timeoutMs: 10 })).toBe(stopping);
+		expect(context.signal.aborted).toBe(true);
+		expect(() => context.tasks.track("while stop is owned", Promise.resolve())).not.toThrow();
+		releaseStop.resolve(undefined);
+		await vi.waitFor(() => {
+			expect(() => context.tasks.track("after stop settled", Promise.resolve())).toThrow(
+				TaskTrackerClosedError,
+			);
+		});
 	});
 
 	it.each(["reset", "destroy"] as const)(
@@ -470,16 +676,19 @@ describe("InstanceManager with durable Node storage", () => {
 
 			cancellation.abort(new Error(`${operation} request disconnected`));
 
-			await expect(mutation).rejects.toBeInstanceOf(AggregateError);
+			await expect(mutation).rejects.toBeInstanceOf(MutationAbortedError);
 			expect(stopped.signal.aborted).toBe(true);
 			expect(previous.signal.aborted).toBe(true);
-			const restored = fixture.manager.service("dev", "fixture").runningContext();
+			await fixture.manager.stopAll({ timeoutMs: 1_000 });
+			const restarted = await managerFixture(instanceTemplate(), fixture.directory);
+			await restarted.manager.startPersisted();
+			const restored = restarted.manager.service("dev", "fixture").runningContext();
 			expect(restored.signal.aborted).toBe(false);
-			expect(await fixture.manager.get("dev")).toMatchObject({ status: "running" });
-			expect(await fixture.storage.readInstance(parseInstanceId("dev"))).toMatchObject({
+			expect(await restarted.manager.get("dev")).toMatchObject({ status: "running" });
+			expect(await restarted.storage.readInstance(parseInstanceId("dev"))).toMatchObject({
 				status: "ready",
 			});
-			await fixture.manager.stopAll({ timeoutMs: 1_000 });
+			await restarted.manager.stopAll({ timeoutMs: 1_000 });
 		},
 	);
 });
@@ -621,6 +830,19 @@ function deferred<Value>(): Readonly<{
 		resolve = settle;
 	});
 	return Object.freeze({ promise, resolve });
+}
+
+function settlementProbe(promise: Promise<unknown>): () => boolean {
+	let settled = false;
+	void promise.then(
+		() => {
+			settled = true;
+		},
+		() => {
+			settled = true;
+		},
+	);
+	return () => settled;
 }
 
 class ManualTime implements MonotonicClock, TaskScheduler {

@@ -32,6 +32,11 @@ export interface AdmittedMutationOptions extends LifecycleMutationOptions {
 	readonly runtimeSignal: AbortSignal;
 }
 
+export interface OwnedMutation<Value> {
+	readonly result: Promise<Value>;
+	readonly settled: Promise<void>;
+}
+
 type ResetCompletion = Readonly<{
 	failures: readonly unknown[];
 	kind: "finalized" | "pending";
@@ -97,7 +102,7 @@ export class DurableInstanceMutations {
 		this.#trash = input.trash;
 	}
 
-	async create(
+	create(
 		instanceId: InstanceId,
 		options: Readonly<{
 			persistence: "ephemeral" | "persistent";
@@ -106,12 +111,20 @@ export class DurableInstanceMutations {
 			signal?: AbortSignal;
 			timeoutMs?: number;
 		}>,
-	): Promise<InstanceSummary> {
+	): OwnedMutation<InstanceSummary> {
 		const scope = this.#scope(`creating instance ${instanceId.value}`, {
 			runtimeSignal: options.runtimeSignal,
 			...(options.signal ? { signal: options.signal } : {}),
 			timeoutMs: options.timeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS,
 		});
+		return this.#owned(scope, this.#create(instanceId, options, scope));
+	}
+
+	async #create(
+		instanceId: InstanceId,
+		options: Readonly<{ persistence: "ephemeral" | "persistent"; seed: boolean }>,
+		scope: MutationScope,
+	): Promise<InstanceSummary> {
 		const releaseReservation = this.#registry.reserve(instanceId);
 		try {
 			await scope.wait(() => this.#storage.initialize());
@@ -121,42 +134,49 @@ export class DurableInstanceMutations {
 			return await this.#createReserved(instanceId, options, scope);
 		} finally {
 			releaseReservation();
-			scope.dispose();
 		}
 	}
 
-	async seed(instanceId: InstanceId, options: AdmittedMutationOptions): Promise<void> {
+	seed(instanceId: InstanceId, options: AdmittedMutationOptions): OwnedMutation<void> {
 		const scope = this.#scope(`seeding instance ${instanceId.value}`, options);
+		return this.#owned(scope, this.#seed(instanceId, scope));
+	}
+
+	async #seed(instanceId: InstanceId, scope: MutationScope): Promise<void> {
 		const active = this.#registry.get(instanceId);
 		let committed = false;
+		const lease = await active.leases.acquireExclusive({
+			signal: scope.signal,
+			timeoutMs: scope.remainingMs(),
+		});
 		try {
-			const lease = await active.leases.acquireExclusive({
-				signal: scope.signal,
-				timeoutMs: scope.remainingMs(),
-			});
-			try {
-				await this.#finalizePendingReset(active, scope);
-				const result = await active.lifecycle.seed(scope.signal);
-				committed = active.lifecycle.seedStatus() === "seeded";
-				await active.tasks.idle({ signal: scope.signal, timeoutMs: scope.remainingMs() });
-				scope.checkpoint();
-				if (result.committedWarnings.length > 0) {
-					throw new InstanceMutationCommittedError("seed", result.committedWarnings);
-				}
-			} catch (cause) {
-				if (cause instanceof InstanceMutationCommittedError) throw cause;
-				if (committed) throw new InstanceMutationCommittedError("seed", [cause]);
-				throw cause;
-			} finally {
-				lease.release();
+			await this.#finalizePendingReset(active, scope);
+			const result = await active.lifecycle.seed(scope.signal);
+			committed = active.lifecycle.seedStatus() === "seeded";
+			await active.tasks.idle({ signal: scope.signal, timeoutMs: scope.remainingMs() });
+			scope.checkpoint();
+			if (result.committedWarnings.length > 0) {
+				throw new InstanceMutationCommittedError("seed", result.committedWarnings);
 			}
+		} catch (cause) {
+			if (cause instanceof InstanceMutationCommittedError) throw cause;
+			if (committed) throw new InstanceMutationCommittedError("seed", [cause]);
+			throw cause;
 		} finally {
-			scope.dispose();
+			lease.release();
 		}
 	}
 
-	async destroy(instanceId: InstanceId, options: AdmittedMutationOptions): Promise<void> {
+	destroy(instanceId: InstanceId, options: AdmittedMutationOptions): OwnedMutation<void> {
 		const scope = this.#scope(`destroying instance ${instanceId.value}`, options);
+		return this.#owned(scope, this.#destroy(instanceId, options, scope));
+	}
+
+	async #destroy(
+		instanceId: InstanceId,
+		options: AdmittedMutationOptions,
+		scope: MutationScope,
+	): Promise<void> {
 		const previous = this.#registry.get(instanceId);
 		const lease = await previous.leases.acquireExclusive({
 			signal: scope.signal,
@@ -193,15 +213,22 @@ export class DurableInstanceMutations {
 			);
 		} finally {
 			lease.release();
-			scope.dispose();
 		}
 	}
 
-	async reset(
+	reset(
 		instanceId: InstanceId,
 		options: AdmittedMutationOptions & Readonly<{ seed: boolean }>,
-	): Promise<InstanceSummary> {
+	): OwnedMutation<InstanceSummary> {
 		const scope = this.#scope(`resetting instance ${instanceId.value}`, options);
+		return this.#owned(scope, this.#reset(instanceId, options, scope));
+	}
+
+	async #reset(
+		instanceId: InstanceId,
+		options: AdmittedMutationOptions & Readonly<{ seed: boolean }>,
+		scope: MutationScope,
+	): Promise<InstanceSummary> {
 		const previous = this.#registry.get(instanceId);
 		const lease = await previous.leases.acquireExclusive({
 			signal: scope.signal,
@@ -276,7 +303,6 @@ export class DurableInstanceMutations {
 			throw new InstanceResetError([cause, ...rollbackFailures]);
 		} finally {
 			lease.release();
-			scope.dispose();
 		}
 	}
 
@@ -390,6 +416,8 @@ export class DurableInstanceMutations {
 		}
 		const report = await active.generation.close(reason, scope.remainingMs());
 		if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
+		const settled = await active.generation.settled();
+		if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) failures.push(settled);
 		return failures;
 	}
 
@@ -472,6 +500,17 @@ export class DurableInstanceMutations {
 			label,
 			signals: [...(options.signal ? [options.signal] : []), options.runtimeSignal],
 			timeoutMs: options.timeoutMs,
+		});
+	}
+
+	#owned<Value>(scope: MutationScope, work: Promise<Value>): OwnedMutation<Value> {
+		const owned = work.finally(() => scope.dispose());
+		return Object.freeze({
+			result: scope.report(owned),
+			settled: owned.then(
+				() => undefined,
+				() => undefined,
+			),
 		});
 	}
 }
