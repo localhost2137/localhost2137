@@ -33,7 +33,12 @@ export class ConfigError extends Error {
 		super(message);
 		this.name = "ConfigError";
 		this.code = code;
-		this.cause = cause;
+		Object.defineProperty(this, "cause", {
+			configurable: false,
+			enumerable: false,
+			value: cause,
+			writable: false,
+		});
 		this.details = Object.freeze({
 			...details,
 			...(details.issues

@@ -60,7 +60,7 @@ export function createSchemaMetadata(
 ): JsonObject {
 	try {
 		const jsonSchema: unknown = z.toJSONSchema(schema, {
-			cycles: "throw",
+			cycles: "ref",
 			io,
 			reused: "inline",
 			target: "draft-2020-12",
@@ -88,6 +88,13 @@ function compileCliInputSchema(schema: JsonObject): CliInputSchema {
 	}
 	if (hasComposition(schema)) {
 		return jsonFallback("Operation input uses a nested, referenced, or union schema.");
+	}
+	if (
+		(schema.additionalProperties !== undefined && schema.additionalProperties !== false) ||
+		schema.patternProperties !== undefined ||
+		schema.propertyNames !== undefined
+	) {
+		return jsonFallback("Operation input accepts dynamic object properties.");
 	}
 
 	const required = stringSet(schema.required);
@@ -289,17 +296,15 @@ function isJsonObject(value: JsonValue | undefined): value is JsonObject {
 }
 
 function freezeJsonObject(value: JsonObject): JsonObject {
-	for (const entry of Object.values(value)) {
-		if (Array.isArray(entry)) {
-			for (const item of entry) {
-				if (isJsonObject(item)) {
-					freezeJsonObject(item);
-				}
-			}
-			Object.freeze(entry);
-		} else if (isJsonObject(entry)) {
-			freezeJsonObject(entry);
-		}
-	}
+	for (const entry of Object.values(value)) freezeJsonValue(entry);
 	return Object.freeze(value);
+}
+
+function freezeJsonValue(value: JsonValue): void {
+	if (Array.isArray(value)) {
+		for (const entry of value) freezeJsonValue(entry);
+		Object.freeze(value);
+	} else if (isJsonObject(value)) {
+		freezeJsonObject(value);
+	}
 }

@@ -5,12 +5,14 @@ import { defineOperation, definePlugin, type PluginEnv } from "../src/authoring/
 import { ConfigError } from "../src/config/config-error.js";
 import { resolveConfig } from "../src/config/config-resolution.js";
 import { redact } from "../src/config/redaction.js";
+import { untypedConfiguredService } from "./fixtures/untyped-service.js";
 
 interface FixtureOptions {
 	readonly connectionName?: string;
 	readonly id?: string;
 	readonly nestedInput?: boolean;
 	readonly operationKeys?: readonly string[];
+	readonly observeConfig?: (config: unknown) => void;
 	readonly stateVersion?: number;
 }
 
@@ -41,10 +43,13 @@ function fixturePlugin(options: FixtureOptions = {}) {
 			nested: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
 			token: z.string().startsWith("local-"),
 		}),
-		connection: ({ config }) => ({
-			env: { [options.connectionName ?? "FIXTURE_TOKEN"]: config.token },
-			values: { credentials: { token: config.token } },
-		}),
+		connection: ({ config }) => {
+			options.observeConfig?.(config);
+			return {
+				env: { [options.connectionName ?? "FIXTURE_TOKEN"]: config.token },
+				values: { credentials: { token: config.token } },
+			};
+		},
 		description: "Resolver fixture",
 		id,
 		lifecycle: {
@@ -122,6 +127,136 @@ describe("config resolution", () => {
 		expect(Object.isFrozen(resolved.services.fixture?.connection.values.credentials)).toBe(true);
 		expect(Object.isFrozen(resolved.services.fixture?.plugin.api)).toBe(false);
 		expect(resolved.fingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+	});
+
+	it("owns and freezes parsed config before any plugin callback receives it", () => {
+		const observations: boolean[] = [];
+		const plugin = fixturePlugin({
+			observeConfig(value) {
+				if (!isRecord(value) || !isRecord(value.nested)) return;
+				observations.push(value.nested.enabled === true);
+				expect(Reflect.set(value.nested, "enabled", false)).toBe(false);
+			},
+		});
+		const firstInput = { nested: { enabled: true }, token: "local-first" };
+		const secondInput = { nested: { enabled: true }, token: "local-second" };
+		const resolved = resolveConfig(
+			{
+				services: {
+					first: plugin({ config: firstInput }),
+					second: plugin({ config: secondInput, exportEnv: false }),
+				},
+			},
+			configPath,
+		);
+
+		expect(observations).toEqual([true, true]);
+		expect(isRecord(resolved.services.first?.config)).toBe(true);
+		expect(firstInput.nested.enabled).toBe(true);
+		expect(secondInput.nested.enabled).toBe(true);
+	});
+
+	it("rejects mutable non-plain Zod outputs with an actionable invariant", () => {
+		type State = { readonly ready: true };
+		const configSchema = z.string().transform((value) => new Date(value));
+		const plugin = definePlugin({
+			api: new Hono<PluginEnv<State, Date>>(),
+			configSchema,
+			connection: () => ({ env: {}, values: {} }),
+			description: "Mutable output fixture",
+			id: "mutable-output",
+			lifecycle: {
+				create: () => undefined,
+				start: (): State => ({ ready: true }),
+			},
+			operations: {},
+			stateVersion: 1,
+		});
+
+		expect(() =>
+			resolveConfig(
+				{
+					services: {
+						mutable: plugin({ config: "2026-01-01T00:00:00.000Z" }),
+					},
+				},
+				configPath,
+			),
+		).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				details: expect.objectContaining({
+					issues: [
+						expect.objectContaining({
+							code: "parsed_data_not_immutable",
+							path: "$.services.mutable.config",
+							received: "Date",
+						}),
+					],
+				}),
+			}),
+		);
+	});
+
+	it.each([
+		["record", z.record(z.string(), z.string())],
+		[
+			"intersection",
+			z.intersection(z.object({ left: z.string() }), z.object({ right: z.string() })),
+		],
+		["union", z.union([z.object({ left: z.string() }), z.object({ right: z.string() })])],
+		[
+			"forged schema",
+			{
+				safeParse: (value: unknown) => ({ data: value, success: true }),
+				toJSONSchema: () => ({ properties: {}, type: "object" }),
+			},
+		],
+	])("rejects a non-ZodObject %s operation input at the runtime boundary", (_name, input) => {
+		expect(() =>
+			resolveConfig({ services: { untyped: untypedConfiguredService({ input }) } }, configPath),
+		).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				details: expect.objectContaining({
+					issues: expect.arrayContaining([
+						expect.objectContaining({
+							code: "operation_input_not_zod_object",
+							path: "$.services.untyped.$plugin.operations.operate.input",
+						}),
+					]),
+				}),
+			}),
+		);
+	});
+
+	it("accepts an actual ZodObject at the runtime boundary", () => {
+		const resolved = resolveConfig(
+			{
+				services: {
+					untyped: untypedConfiguredService({ input: z.object({ name: z.string() }) }),
+				},
+			},
+			configPath,
+		);
+		expect(resolved.services.untyped?.operations.operate?.input.type).toBe("object");
+	});
+
+	it("validates every present optional lifecycle hook and seed property", () => {
+		const descriptor = untypedConfiguredService({
+			lifecycle: { seed: undefined, stop: "not-a-function", update: null },
+		});
+		let error: ConfigError | undefined;
+		try {
+			resolveConfig({ services: { untyped: descriptor } }, configPath);
+		} catch (cause) {
+			if (cause instanceof ConfigError) error = cause;
+		}
+
+		expect(error?.details.issues?.map((issue) => issue.code)).toEqual([
+			"invalid_lifecycle_hook",
+			"invalid_lifecycle_hook",
+			"invalid_lifecycle_hook",
+			"seed_contract_mismatch",
+		]);
 	});
 
 	it("produces stable fingerprints without exposing configuration values", () => {
