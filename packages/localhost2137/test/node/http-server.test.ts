@@ -1,4 +1,5 @@
-import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
+import { createServer, type Server } from "node:http";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { HttpServerCloseTimeoutError, NodeHttpServer } from "../../src/node/http-server.js";
@@ -106,6 +107,22 @@ describe("NodeHttpServer", () => {
 		expect(createAdapter).not.toHaveBeenCalled();
 	});
 
+	it("rejects accessor-backed host and port values without invoking them", async () => {
+		const createAdapter = vi.fn(() => createServer());
+		for (const property of ["host", "port"] as const) {
+			const read = vi.fn(() => (property === "host" ? "127.0.0.1" : 0));
+			const options = { host: "127.0.0.1", port: 0 };
+			Object.defineProperty(options, property, { enumerable: true, get: read });
+			const server = new NodeHttpServer(new Hono(), createAdapter);
+
+			await expect(Reflect.apply(server.start, server, [options])).rejects.toThrow(
+				`HTTP server ${property} must be an own data property.`,
+			);
+			expect(read).not.toHaveBeenCalled();
+		}
+		expect(createAdapter).not.toHaveBeenCalled();
+	});
+
 	it("owns post-listen server errors and reports them through close and settlement", async () => {
 		let nativeServer: ReturnType<typeof createServer> | undefined;
 		const server = new NodeHttpServer(new Hono(), () => {
@@ -123,5 +140,58 @@ describe("NodeHttpServer", () => {
 		await expect(settlement).rejects.toMatchObject({ errors: [failure] });
 		expect(server.close(1_000)).toBe(report);
 		expect(server.settled()).toBe(settlement);
+	});
+
+	it("keeps fatal settlement independent from a later bounded close report", async () => {
+		let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+		let dispatch: ((request: Request) => Promise<Response>) | undefined;
+		let finishNativeClose: ((cause?: Error) => void) | undefined;
+		const nativeServer = Object.assign(new EventEmitter(), {
+			address: () => ({ address: "127.0.0.1", family: "IPv4", port: 21_337 }),
+			close: vi.fn((callback?: (cause?: Error) => void) => {
+				finishNativeClose = callback;
+				return nativeServer;
+			}),
+			closeIdleConnections: vi.fn(),
+			listen: vi.fn(function listen(this: EventEmitter) {
+				this.emit("listening");
+				return this;
+			}),
+		});
+		const app = new Hono().get("/stream", (context) =>
+			context.body(
+				new ReadableStream<Uint8Array>({
+					start(value) {
+						controller = value;
+						value.enqueue(new TextEncoder().encode("first"));
+					},
+				}),
+			),
+		);
+		const server = new NodeHttpServer(app, (options) => {
+			dispatch = options.fetch as (request: Request) => Promise<Response>;
+			return nativeServer as unknown as Server;
+		});
+		const address = await server.start({ host: "127.0.0.1", port: 0 });
+		if (!dispatch) throw new Error("Expected the adapter dispatch function.");
+		const response = await dispatch(new Request(`${address.url}/stream`));
+		if (!controller) throw new Error("Expected the active transport fixture.");
+		const fatal = new Error("late stream failure");
+		const observedFatal = vi.fn();
+		server.onFatal(observedFatal);
+
+		nativeServer.emit("error", fatal);
+		const settlement = server.settled();
+		const report = server.close(5);
+
+		expect(server.close(100)).toBe(report);
+		expect(server.settled()).toBe(settlement);
+		expect(observedFatal).toHaveBeenCalledOnce();
+		expect(observedFatal).toHaveBeenCalledWith(fatal);
+		await expect(report).rejects.toMatchObject({ activeRequests: 1, timeoutMs: 5 });
+		controller.close();
+		expect(await response.text()).toBe("first");
+		finishNativeClose?.();
+		await expect(settlement).rejects.toMatchObject({ errors: [fatal] });
 	});
 });

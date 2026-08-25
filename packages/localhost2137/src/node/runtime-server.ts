@@ -1,8 +1,11 @@
 import {
 	type HttpServerAddress,
+	type HttpServerOptions,
 	type LoopbackHost,
-	validateHttpServerOptions,
+	ownHttpServerOptions,
 } from "./http-server.js";
+
+const FATAL_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 export interface InstanceRuntimeOwner {
 	settled(): Promise<void>;
@@ -12,30 +15,35 @@ export interface InstanceRuntimeOwner {
 
 export interface HttpServerOwner {
 	close(timeoutMs: number): Promise<void>;
+	onFatal(listener: (cause: unknown) => void): () => void;
 	settled(): Promise<void>;
-	start(options: Readonly<{ host: LoopbackHost; port: number }>): Promise<HttpServerAddress>;
+	start(options: HttpServerOptions): Promise<HttpServerAddress>;
 }
 
 export class RuntimeServer {
 	readonly #http: HttpServerOwner;
 	readonly #runtime: InstanceRuntimeOwner;
 	#closeReport: Promise<void> | undefined;
+	#runtimeReport: Promise<void> | undefined;
 	#settled: Promise<void> | undefined;
 	#start: Promise<HttpServerAddress> | undefined;
 
 	constructor(runtime: InstanceRuntimeOwner, http: HttpServerOwner) {
 		this.#runtime = runtime;
 		this.#http = http;
+		http.onFatal(() => this.#beginFatalShutdown());
 	}
 
 	start(options: Readonly<{ host: LoopbackHost; port: number }>): Promise<HttpServerAddress> {
-		if (this.#closeReport) return Promise.reject(new Error("Runtime server shutdown has started."));
+		if (this.#settled || this.#closeReport)
+			return Promise.reject(new Error("Runtime server shutdown has started."));
+		let ownedOptions: HttpServerOptions;
 		try {
-			validateHttpServerOptions(options);
+			ownedOptions = ownHttpServerOptions(options);
 		} catch (cause) {
 			return Promise.reject(cause);
 		}
-		this.#start ??= this.#startOwned(options);
+		this.#start ??= this.#startOwned(ownedOptions);
 		return this.#start;
 	}
 
@@ -47,12 +55,9 @@ export class RuntimeServer {
 			);
 		}
 		const httpReport = invokeOwner(() => this.#http.close(timeoutMs));
-		const runtimeReport = invokeOwner(() => this.#runtime.stopAll({ timeoutMs }));
-		const httpSettlement = invokeOwner(() => this.#http.settled());
-		const runtimeSettlement = invokeOwner(() => this.#runtime.settled());
-		this.#settled = settleOwners([httpSettlement, runtimeSettlement]);
-		void this.#settled.catch(() => undefined);
-		this.#closeReport = settleOwners([httpReport, runtimeReport]);
+		this.#beginShutdown(timeoutMs);
+		if (!this.#runtimeReport) throw new Error("Runtime shutdown did not publish its report.");
+		this.#closeReport = settleOwners([httpReport, this.#runtimeReport]);
 		return this.#closeReport;
 	}
 
@@ -63,9 +68,7 @@ export class RuntimeServer {
 		return this.#settled;
 	}
 
-	async #startOwned(
-		options: Readonly<{ host: LoopbackHost; port: number }>,
-	): Promise<HttpServerAddress> {
+	async #startOwned(options: HttpServerOptions): Promise<HttpServerAddress> {
 		await this.#runtime.startPersisted();
 		try {
 			return await this.#http.start(options);
@@ -77,6 +80,19 @@ export class RuntimeServer {
 			await this.#runtime.settled().catch((failure: unknown) => cleanupFailures.push(failure));
 			throw new AggregateError(cleanupFailures, "Runtime HTTP startup failed.");
 		}
+	}
+
+	#beginFatalShutdown(): void {
+		this.#beginShutdown(FATAL_SHUTDOWN_TIMEOUT_MS);
+	}
+
+	#beginShutdown(timeoutMs: number): void {
+		if (this.#settled) return;
+		this.#runtimeReport = invokeOwner(() => this.#runtime.stopAll({ timeoutMs }));
+		const httpSettlement = invokeOwner(() => this.#http.settled());
+		const runtimeSettlement = invokeOwner(() => this.#runtime.settled());
+		this.#settled = settleOwners([httpSettlement, runtimeSettlement]);
+		void this.#settled.catch(() => undefined);
 	}
 }
 

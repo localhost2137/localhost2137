@@ -40,6 +40,40 @@ describe("RuntimeServer", () => {
 		expect(fixture.http.start).not.toHaveBeenCalled();
 	});
 
+	it("owns host and port before asynchronous runtime startup", async () => {
+		const fixture = owners();
+		const runtimeStarted = deferred<void>();
+		fixture.runtime.startPersisted.mockReturnValue(runtimeStarted.promise);
+		const server = new RuntimeServer(fixture.runtime, fixture.http);
+		const options = { host: "127.0.0.1" as const, port: 0 };
+
+		const started = server.start(options);
+		Reflect.set(options, "host", "0.0.0.0");
+		Reflect.set(options, "port", 65_535);
+		runtimeStarted.resolve();
+		await started;
+
+		expect(fixture.http.start).toHaveBeenCalledWith({ host: "127.0.0.1", port: 0 });
+		const owned = fixture.http.start.mock.calls[0]?.[0];
+		expect(Object.isFrozen(owned)).toBe(true);
+	});
+
+	it("rejects host and port accessors before starting either owner", async () => {
+		for (const property of ["host", "port"] as const) {
+			const fixture = owners();
+			const server = new RuntimeServer(fixture.runtime, fixture.http);
+			const read = vi.fn(() => (property === "host" ? "127.0.0.1" : 0));
+			const options = { host: "127.0.0.1", port: 0 };
+			Object.defineProperty(options, property, { enumerable: true, get: read });
+
+			await expect(Reflect.apply(server.start, server, [options])).rejects.toThrow(
+				`HTTP server ${property} must be an own data property.`,
+			);
+			expect(read).not.toHaveBeenCalled();
+			expect(fixture.runtime.startPersisted).not.toHaveBeenCalled();
+		}
+	});
+
 	it("starts both close owners and keeps settlement distinct from bounded reports", async () => {
 		const fixture = owners();
 		const httpSettlement = deferred<void>();
@@ -87,6 +121,49 @@ describe("RuntimeServer", () => {
 		expect(fixture.runtime.stopAll).toHaveBeenCalledWith({ timeoutMs: 30_000 });
 		expect(fixture.runtime.settled).toHaveBeenCalledOnce();
 	});
+
+	it("automatically owns fatal transport shutdown while preserving the first close deadline", async () => {
+		const fixture = owners();
+		const httpSettlement = deferred<void>();
+		const runtimeSettlement = deferred<void>();
+		const fatal = new Error("accept loop failed");
+		fixture.http.settled.mockReturnValue(httpSettlement.promise);
+		fixture.runtime.settled.mockReturnValue(runtimeSettlement.promise);
+		fixture.http.close.mockRejectedValue(
+			Object.assign(new Error("http deadline"), { timeoutMs: 5 }),
+		);
+		let notifyFatal: ((cause: unknown) => void) | undefined;
+		fixture.http.onFatal.mockImplementation((listener) => {
+			notifyFatal = listener;
+			return () => undefined;
+		});
+		const server = new RuntimeServer(fixture.runtime, fixture.http);
+
+		notifyFatal?.(fatal);
+		const settlement = server.settled();
+		const report = server.close(5);
+
+		expect(server.close(1_000)).toBe(report);
+		expect(server.settled()).toBe(settlement);
+		expect(fixture.runtime.stopAll).toHaveBeenCalledOnce();
+		expect(fixture.runtime.stopAll).toHaveBeenCalledWith({ timeoutMs: 30_000 });
+		expect(fixture.http.close).toHaveBeenCalledOnce();
+		expect(fixture.http.close).toHaveBeenCalledWith(5);
+		await expect(report).rejects.toMatchObject({ errors: [{ timeoutMs: 5 }] });
+		let settled = false;
+		void settlement
+			.catch(() => undefined)
+			.then(() => {
+				settled = true;
+			});
+		httpSettlement.reject(fatal);
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		const runtimeFailure = new Error("runtime cleanup failed");
+		runtimeSettlement.reject(runtimeFailure);
+		await expect(settlement).rejects.toMatchObject({ errors: [fatal, runtimeFailure] });
+		expect(settled).toBe(true);
+	});
 });
 
 function owners(): Readonly<{
@@ -96,6 +173,7 @@ function owners(): Readonly<{
 	return {
 		http: {
 			close: vi.fn(async () => undefined),
+			onFatal: vi.fn(() => () => undefined),
 			settled: vi.fn(async () => undefined),
 			start: vi.fn(async () => ADDRESS),
 		},
@@ -109,6 +187,7 @@ function owners(): Readonly<{
 
 type MockedHttpOwner = HttpServerOwner & {
 	readonly close: ReturnType<typeof vi.fn<HttpServerOwner["close"]>>;
+	readonly onFatal: ReturnType<typeof vi.fn<HttpServerOwner["onFatal"]>>;
 	readonly settled: ReturnType<typeof vi.fn<HttpServerOwner["settled"]>>;
 	readonly start: ReturnType<typeof vi.fn<HttpServerOwner["start"]>>;
 };
@@ -121,11 +200,14 @@ type MockedRuntimeOwner = InstanceRuntimeOwner & {
 
 function deferred<Value>(): Readonly<{
 	promise: Promise<Value>;
+	reject(cause: unknown): void;
 	resolve(value: Value): void;
 }> {
 	let resolve!: (value: Value) => void;
-	const promise = new Promise<Value>((settle) => {
+	let reject!: (cause: unknown) => void;
+	const promise = new Promise<Value>((settle, fail) => {
 		resolve = settle;
+		reject = fail;
 	});
-	return Object.freeze({ promise, resolve });
+	return Object.freeze({ promise, reject, resolve });
 }

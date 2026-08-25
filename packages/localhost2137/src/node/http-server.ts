@@ -14,6 +14,11 @@ export interface HttpServerAddress {
 
 export type LoopbackHost = "127.0.0.1" | "::1" | "localhost";
 
+export interface HttpServerOptions {
+	readonly host: LoopbackHost;
+	readonly port: number;
+}
+
 export class HttpServerCloseTimeoutError extends Error {
 	readonly activeRequests: number;
 	readonly timeoutMs: number;
@@ -35,6 +40,8 @@ export class NodeHttpServer {
 	#address: HttpServerAddress | undefined;
 	#closeReport: Promise<void> | undefined;
 	#closingServer = false;
+	#fatalNotified = false;
+	readonly #fatalListeners = new Set<(cause: unknown) => void>();
 	#listening = false;
 	readonly #postListenFailures: unknown[] = [];
 	#server: Server | undefined;
@@ -49,15 +56,22 @@ export class NodeHttpServer {
 		this.#createServer = createServer;
 	}
 
-	start(options: Readonly<{ host: LoopbackHost; port: number }>): Promise<HttpServerAddress> {
-		if (this.#closeReport) return Promise.reject(new Error("HTTP server shutdown has started."));
+	onFatal(listener: (cause: unknown) => void): () => void {
+		this.#fatalListeners.add(listener);
+		return () => this.#fatalListeners.delete(listener);
+	}
+
+	start(options: HttpServerOptions): Promise<HttpServerAddress> {
+		if (this.#settled || this.#closeReport)
+			return Promise.reject(new Error("HTTP server shutdown has started."));
 		if (this.#start) return this.#start;
+		let ownedOptions: HttpServerOptions;
 		try {
-			validateHttpServerOptions(options);
+			ownedOptions = ownHttpServerOptions(options);
 		} catch (cause) {
 			return Promise.reject(cause);
 		}
-		this.#start = this.#startServer(options);
+		this.#start = this.#startServer(ownedOptions);
 		return this.#start;
 	}
 
@@ -66,8 +80,8 @@ export class NodeHttpServer {
 		if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
 			return Promise.reject(new TypeError("HTTP close timeoutMs must be a non-negative integer."));
 		}
-		this.#settled = this.#closeServer();
-		void this.#settled.catch(() => undefined);
+		this.#beginShutdown();
+		if (!this.#settled) throw new Error("HTTP shutdown did not publish its settlement.");
 		this.#closeReport = reportDeadline(this.#settled, timeoutMs, () => this.#activeRequests);
 		return this.#closeReport;
 	}
@@ -79,9 +93,7 @@ export class NodeHttpServer {
 		return this.#settled;
 	}
 
-	async #startServer(
-		options: Readonly<{ host: LoopbackHost; port: number }>,
-	): Promise<HttpServerAddress> {
+	async #startServer(options: HttpServerOptions): Promise<HttpServerAddress> {
 		const server = this.#createServer({
 			autoCleanupIncoming: true,
 			fetch: (request) => this.#dispatch(request),
@@ -163,29 +175,50 @@ export class NodeHttpServer {
 	#handlePostListenError(cause: unknown): void {
 		if (!this.#listening) return;
 		this.#postListenFailures.push(cause);
-		if (this.#closeReport) return;
+		this.#beginShutdown();
+		if (this.#fatalNotified) return;
+		this.#fatalNotified = true;
+		for (const listener of this.#fatalListeners) {
+			try {
+				listener(cause);
+			} catch {
+				// Observers cannot escape the transport's owned error boundary.
+			}
+		}
+	}
+
+	#beginShutdown(): void {
+		if (this.#settled) return;
 		this.#settled = this.#closeServer();
 		void this.#settled.catch(() => undefined);
-		this.#closeReport = this.#settled;
 	}
 }
 
-export function validateHttpServerOptions(
-	options: Readonly<{ host: unknown; port: unknown }>,
-): asserts options is Readonly<{ host: LoopbackHost; port: number }> {
+export function ownHttpServerOptions(options: unknown): HttpServerOptions {
 	if (typeof options !== "object" || options === null) {
 		throw new TypeError("HTTP server options must be an object.");
 	}
-	if (options.host !== "127.0.0.1" && options.host !== "::1" && options.host !== "localhost") {
+	const prototype = Object.getPrototypeOf(options);
+	if (prototype !== Object.prototype && prototype !== null) {
+		throw new TypeError("HTTP server options must be a plain object.");
+	}
+	const hostDescriptor = Object.getOwnPropertyDescriptor(options, "host");
+	const portDescriptor = Object.getOwnPropertyDescriptor(options, "port");
+	if (!hostDescriptor || !("value" in hostDescriptor)) {
+		throw new TypeError("HTTP server host must be an own data property.");
+	}
+	if (!portDescriptor || !("value" in portDescriptor)) {
+		throw new TypeError("HTTP server port must be an own data property.");
+	}
+	const host = hostDescriptor.value;
+	const port = portDescriptor.value;
+	if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") {
 		throw new TypeError("HTTP server host must be localhost, 127.0.0.1, or ::1.");
 	}
-	if (
-		!Number.isSafeInteger(options.port) ||
-		(options.port as number) < 0 ||
-		(options.port as number) > 65_535
-	) {
+	if (!Number.isSafeInteger(port) || (port as number) < 0 || (port as number) > 65_535) {
 		throw new TypeError("HTTP server port must be an integer from 0 to 65535.");
 	}
+	return Object.freeze({ host, port: port as number });
 }
 
 async function reportDeadline(
