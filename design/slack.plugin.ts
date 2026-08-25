@@ -32,10 +32,8 @@ const configSchema = z.object({
 	workspaceName: z.string(),
 	botToken: z.string().startsWith("xoxb-"),
 	signingSecret: z.string(),
-	// Where Events API payloads get POSTed. Explicit URL by default; a plugin
-	// that prefers deriving it can compose from ctx.app.baseUrl instead
-	// (new URL("/slack/events", ctx.app.baseUrl)) — pick one convention per
-	// plugin, don't offer both.
+	// Where Events API payloads get POSTed. Explicit plugin-owned callback URL;
+	// runtime callback composition/interception is deferred.
 	eventsUrl: z.string().url().nullable().default(null),
 });
 
@@ -86,7 +84,7 @@ api.get("/api/users.list", async (c) => {
 
 // ── Control-plane operations ───────────────────────────────────────────
 // Privileged verbs for devs/tests/agents. Do NOT mirror real Slack endpoints.
-// Source of truth for CLI, TS API, /_/control HTTP, docs, MCP adapters.
+// Source of truth for CLI, TS API, /_/v1 control HTTP, docs, MCP adapters.
 const createUser = defineOperation({
 	description: "Create a user in the workspace",
 	input: z.object({
@@ -96,7 +94,6 @@ const createUser = defineOperation({
 	output: z.object({ id: z.string(), name: z.string(), admin: z.boolean() }),
 	run: async (ctx, input) => {
 		const user = await ctx.state.db.users.insert({
-			id: ctx.ids.next("U"), // deterministic IDs → reproducible worlds
 			name: input.name,
 			admin: input.admin,
 		});
@@ -142,6 +139,7 @@ const listMessages = defineOperation({
 
 export const slack = definePlugin({
 	id: "slack", // package identity; the services key in config names the mount
+	stateVersion: 1, // storage compatibility, independent of package version
 	description: "Stateful Slack emulator: users, channels, messages, events",
 
 	configSchema,
@@ -158,12 +156,11 @@ export const slack = definePlugin({
 			await createDb(ctx.storage.path("slack.db"));
 		},
 
-		// Invoked on an EXISTING instance when the plugin's package version
-		// changed since last boot. `fromVersion` is the version that created
-		// or last updated this instance's state; the plugin applies whatever
-		// migrations it needs to reach its current version.
-		async update(ctx, fromVersion: string) {
-			await migrateDb(ctx.storage.path("slack.db"), fromVersion);
+		// Invoked on an EXISTING instance when its stored integer state version
+		// is lower than this plugin's stateVersion. Package releases do not
+		// implicitly trigger persistence migrations.
+		async update(ctx, version: { from: number; to: number }) {
+			await migrateDb(ctx.storage.path("slack.db"), version);
 		},
 
 		// Interpret declared seed data into state. NEVER automatic — runs
@@ -171,9 +168,9 @@ export const slack = definePlugin({
 		// top-level scenario seed(localhost).
 		async seed(ctx, seed: Seed) {
 			const db = await openDb(ctx.storage.path("slack.db"));
-			for (const user of seed.users) await db.users.insert({ id: user.id ?? ctx.ids.next("U"), ...user });
+			for (const user of seed.users) await db.users.insert(user);
 			for (const ch of seed.channels) {
-				await db.channels.insert({ id: ch.id ?? ctx.ids.next("C"), ...ch });
+				await db.channels.insert(ch);
 				for (const member of ch.members) await db.channels.addMember(ch.id!, member);
 			}
 		},
@@ -190,14 +187,14 @@ export const slack = definePlugin({
 	},
 
 	// ── Connection metadata ─────────────────────────────────────────────
-	// `values`: typed programmatic metadata (tests read localhost.slack.values.apiUrl)
+	// `values`: typed metadata exposed as localhost.slack.connection.apiUrl
 	// `env`:    env-var projection (aggregated into .localhost2137/.env,
 	//           localhost env --json, and `localhost run -- <cmd>` injection).
 	// If two slack mounts declare overlapping env names → boot-time error
 	// telling you to wire those manually (multi-bot setups are hand-wired by nature).
-	connection({ url, config }) {
+	connection({ baseUrl, instanceId, serviceKey, config }) {
 		const values = {
-			apiUrl: url("/api"),
+			apiUrl: `${baseUrl}/${instanceId}/${serviceKey}/api`,
 			botToken: config.botToken,
 			signingSecret: config.signingSecret,
 		};
@@ -216,7 +213,7 @@ export const slack = definePlugin({
 declare function event(type: string, payload: unknown): unknown;
 declare function isAuthorized(auth: string | undefined, botToken: string): boolean;
 declare function createDb(path: string): Promise<void>;
-declare function migrateDb(path: string, fromVersion: string): Promise<void>;
+declare function migrateDb(path: string, version: { from: number; to: number }): Promise<void>;
 declare function openDb(path: string): Promise<Database>;
 
 // What the runtime injects as c.get("lh") into every api handler, and what
@@ -228,9 +225,7 @@ declare function openDb(path: string): Promise<Database>;
 interface PluginContext<S, C> {
 	state: S;
 	config: C;
-	app: { baseUrl: string }; // where the app under test lives (from config `app`)
-	clock: { now(): string };
-	ids: { next(prefix: string): string };
+	clock: { now(): Date };
 	storage: { path(relative: string): string };
 	fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }

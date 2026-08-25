@@ -43,26 +43,18 @@ export default defineConfig({
 		startAt: "2026-01-01T00:00:00.000Z", // deterministic tests want "pinned"
 	},
 
-	// ── App under test ──────────────────────────────────────────────────
-	// Where YOUR app listens. Plugins that push webhooks may compose their
-	// delivery URLs from this or take an explicit URL in their own config.
-	app: {
-		baseUrl: "http://127.0.0.1:3000",
-	},
-
 	// ── Services ────────────────────────────────────────────────────────
 	services: {
 		slack: slack({
 			config: {
 				workspaceName: "Acme Dev",
-				botToken: "xoxb-local-acme", // fake on purpose — see connect map
+				botToken: "xoxb-local-acme", // fake on purpose — see connection metadata
 				signingSecret: "local-signing-secret",
 				eventsUrl: "http://127.0.0.1:3000/slack/events", // emulator POSTs Events payloads here
 			},
 
-			// Baseline world: who exists before anyone touches anything.
-			// Validated against the plugin's seedSchema; applied at
-			// materialization and on reset, BEFORE the top-level seed below.
+			// Baseline world applied only by `localhost seed` or a reset/create
+			// with `--seed`, before the top-level scenario below.
 			seed: {
 				users: [
 					{ id: "U_ALICE", name: "Alice", admin: true },
@@ -100,7 +92,7 @@ export default defineConfig({
 	// ids (U_ALICE, cus_alice, price_pro_monthly). This is where cross-
 	// service stories go: ordinary TypeScript composing operations.
 	async seed(localhost) {
-		await localhost.billing.createSubscription({
+		await localhost.stripe.createSubscription({
 			customerId: "cus_alice",
 			priceId: "price_pro_monthly",
 		});
@@ -115,5 +107,5 @@ export default defineConfig({
 /*
  * Lifecycle for a fresh instance:  create (each plugin) → start
  * Seeding is explicit:             localhost seed → plugin seeds → top-level scenario
- * Plugin upgrades on existing worlds: update(fromVersion) before start
+ * Plugin state upgrades:          update({ from, to }) before start
  */

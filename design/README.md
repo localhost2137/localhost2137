@@ -12,13 +12,14 @@ point; everything here is a fuller proposal.
 | `localhost.basic.config.ts` | Smallest useful config |
 | `localhost.full.config.ts` | Every config knob we think v1 needs, annotated |
 | `slack.plugin.ts` | Proposed plugin-authoring contract (resolves open TODOs in `lib/slack.ts`) |
-| `testing.example.test.ts` | Programmatic API: ephemeral instances, clock, snapshots, forks |
+| `testing.example.test.ts` | Programmatic API: explicit test runtime and ephemeral instances |
+| `future.snapshots-and-forks.md` | Deferred interaction ideas, not a public contract |
 | `cli.session.sh` | The whole interaction story as a terminal transcript |
 
 ## The interaction loop these examples encode
 
 ```
-localhost dev                     1. boot the world from localhost.config.ts (+ seed)
+localhost dev                     1. boot an empty world from localhost.config.ts
         │
         ├── writes .localhost2137/.env
         │
@@ -26,7 +27,7 @@ app under test loads that .env    2. app talks to emulated APIs (HTTP)
         │                            emulator delivers webhooks back to the agent
 agent / human / test              3. manipulates the world via control plane
         │                          (CLI · TS API · plain HTTP — same operations)
-        └── inspect: logs, queries, snapshots → edit code → repeat
+        └── inspect logs and queries → edit code → repeat
 ```
 
 ## URL scheme
@@ -35,7 +36,7 @@ One server, everything path-addressed (decided):
 
 ```
 http://127.0.0.1:2137/{instance}/{service}/…     services, e.g. /dev/slack/api/chat.postMessage
-http://127.0.0.1:2137/_/{endpoint}/…             runtime's own API, e.g. /_/control/plugins
+http://127.0.0.1:2137/_/v1/{endpoint}/…          versioned runtime API
 ```
 
 - Default instance is `dev` — `/dev/slack` when unspecified.
@@ -57,7 +58,7 @@ Each of these is debatable — see chat discussion.
 2. **Credentials are world-data, not secrets.** Hardcoding
    `"xoxb-local-acme"` is correct and intentional. The config defines the
    simulated world; nothing needs vault-grade handling.
-3. **`connect` maps close the loop to the app — as sugar, not authority.** Each
+3. **Connection metadata closes the loop to the app — as sugar, not authority.** Each
    plugin declares env vars an app needs (`SLACK_BASE_URL`, …). The runtime
    merges them into `.localhost2137/.env` and `localhost env --json`. Manual
    wiring stays first-class: config values are ordinary constants you can put
@@ -77,14 +78,16 @@ Each of these is debatable — see chat discussion.
    under every instance and injects per-instance context via Hono variables
    (`c.get("lh")`; `PluginEnv<S, C>` exists purely as a typing helper).
    Lifecycle: `create → (update) → seed? → start/stop`, where `create` runs
-   once on empty storage, `update(fromVersion)` fires when the plugin's
-   version changed on an existing instance, and `seed` only runs when asked.
+   once on empty storage, `update({ from, to })` fires when the plugin's
+   integer state version changed on an existing instance, and `seed` only runs
+   when asked.
    No migrate hook — storage internals are plugin business; the runtime
    only says WHEN.
-7. **Control plane is also plain HTTP** under the reserved `/_/*` namespace
-   (`/_/control/plugins`, `/_/control/slack/ops/createUser`), generated from
-   the same operations. Services live under `/{instance}/{service}/*`. Free
-   adapter, huge for curl/Playwright/agents, feeds MCP generation later.
+7. **Control plane is also plain HTTP** under the reserved, versioned `/_/v1/*`
+   namespace. Instance identity is a path segment, for example
+   `/_/v1/instances/dev/services/slack/operations/createUser`. It is generated
+   from the same operations and protected by a per-runtime bearer token.
+   Services live under `/{instance}/{service}/*`.
 8. **Observability is always on** (ring buffers), not a config option:
    `localhost logs slack`, `localhost logs webhooks`.
 9. **Instances are managed, not configured.** Noun-first CLI:
@@ -126,10 +129,12 @@ the contract reserves the seam now.
 - MCP server — falls out of operations later
 - Per-plugin default seeds
 
-## Open questions
+## Callback URL decision
 
-- Who owns webhook path knowledge: runtime `app.baseUrl` composition vs
-  explicit per-plugin `eventsUrl` (sketches show both).
+In v0.1 each plugin owns one explicit callback URL setting such as Slack's
+`eventsUrl`. There is no top-level `app.baseUrl`. Runtime callback interception
+and per-instance rerouting remain deferred until their parallel-test semantics
+are designed.
 
 ## Decided in review round 2 (GPT comparison)
 
@@ -148,8 +153,9 @@ the contract reserves the seam now.
 
 - Plain `new Hono()` for plugin api — familiarity over dialects; `PluginEnv`
   exists only as a typing helper for the injected `lh` variable.
-- Lifecycle: `create` (once, empty storage), `update(fromVersion)` (plugin
-  version changed on existing instance), `seed` (manual only), `start`/`stop`.
+- Lifecycle: `create` (once, empty storage), `update({ from, to })` (integer
+  state version changed on existing instances), `seed` (manual only),
+  `start`/`stop`.
   No migrate hook — how a plugin manages its storage is its own business;
   the runtime only says WHEN.
 - No `mount` namespace: the service key is the URL. If you want `/stripe`,
@@ -157,3 +163,16 @@ the contract reserves the seam now.
   those manually.
 - `ctx.fetch` reserved on the plugin context as the future interception seam
   for outbound requests (see "Reserved runtime capability").
+
+## Reconciled before implementation
+
+- State compatibility uses a plugin-declared integer `stateVersion`, not its
+  package version. `update` receives `{ from, to }`.
+- IDs remain plugin-owned in v0.1; first-party plugins use deterministic
+  database sequences.
+- Programmatic connections consistently use
+  `instance.<service>.connection`; merged environment variables use
+  `instance.env`.
+- Tests explicitly own a `createTestRuntime()` and its instances.
+- Snapshot and fork sketches moved to `future.snapshots-and-forks.md`; they are
+  not part of v0.1 or v0.2 types or examples.

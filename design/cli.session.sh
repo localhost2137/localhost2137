@@ -8,7 +8,7 @@
 # ── 1. Boot the world ────────────────────────────────────────────────────────
 $ localhost dev
 
-  instance   dev · fresh · seeded from localhost.config.ts
+  instance   dev · fresh · empty
   slack      → http://127.0.0.1:2137/dev/slack     ready
   stripe     → http://127.0.0.1:2137/dev/stripe    ready
 
@@ -16,7 +16,7 @@ $ localhost dev
     load .localhost2137/.env   (SLACK_BASE_URL, SLACK_BOT_TOKEN,
                                 STRIPE_API_KEY, STRIPE_WEBHOOK_URL, …)
 
-  Control plane: CLI (localhost exec …) or POST /_/control/<plugin>/ops/<op>
+  Control plane: CLI (localhost exec …) or authenticated HTTP under /_/v1
 
 # ── 2. Discover the control surface (no service knowledge hardcoded) ────────
 $ localhost exec slack --help
@@ -36,7 +36,8 @@ $ localhost describe slack --json | jq '.operations.createUser.input'
 
 # Same discovery over plain HTTP (curl-only agents, Playwright, CI).
 # Runtime API lives under the reserved /_/ namespace:
-$ curl -s localhost:2137/_/control/plugins | jq -r '.[]|.name'
+$ curl -s localhost:2137/_/v1/instances/dev/services \
+    -H "authorization: Bearer $LOCALHOST_CONTROL_TOKEN" | jq -r '.data[]|.name'
 slack
 stripe
 
@@ -48,7 +49,8 @@ $ localhost exec slack create-user --name Alice --admin --json
 $ localhost exec slack create-user --instance t-w1 --name Alice --json
 
 # Or over HTTP, instance in the path:
-$ curl -s -X POST localhost:2137/_/control/slack/ops/createUser?instance=t-w1 \
+$ curl -s -X POST localhost:2137/_/v1/instances/t-w1/services/slack/operations/createUser \
+    -H "authorization: Bearer $LOCALHOST_CONTROL_TOKEN" \
     -H 'content-type: application/json' \
     -d '{"name":"Bob"}' | jq
 
@@ -87,8 +89,9 @@ $ localhost exec slack list-messages --channel general --instance nope
 error: no instance "nope" (existing: dev, pr-1337, review)
 hint:  localhost instance create nope
 
-# Over HTTP the instance rides in the path/query:
-$ curl -s -X POST 'localhost:2137/_/control/slack/ops/sendMessage?instance=review' \
+# Over HTTP the instance is a path segment:
+$ curl -s -X POST 'localhost:2137/_/v1/instances/review/services/slack/operations/sendMessage' \
+    -H "authorization: Bearer $LOCALHOST_CONTROL_TOKEN" \
     -H 'content-type: application/json' \
     -d '{"channel":"C_GENERAL","from":"U_ALICE","text":"ping"}' | jq
 
@@ -113,21 +116,14 @@ mode=real now=2026-08-25T14:02:11Z
 $ localhost clock advance 30d
 now=2026-09-24T14:02:11Z  emitted: stripe.invoice.paid, slack.subscription.renewed*
 
-# ── 7. Snapshots ─────────────────────────────────────────────────────────────
-$ localhost snapshot save clean-seed
-saved clean-seed (slack, stripe)
-
-$ localhost snapshot restore clean-seed
-restored clean-seed
-
-# ── 8. Seeding & reset (explicit, never automatic) ──────────────────────────
+# ── 7. Seeding & reset (explicit, never automatic) ──────────────────────────
 $ localhost seed            # plugin declarative seeds → top-level scenario seed
 seeded slack, stripe, then scenario
 
 $ localhost reset           # wipe state → create → start (world is empty)
 $ localhost reset --seed    # wipe, then run seeding right after
 
-# ── 9. Machine-readable env export (for sourcing in scripts/CI) ─────────────
+# ── 8. Machine-readable env export (for sourcing in scripts/CI) ─────────────
 $ localhost env --format dotenv >> .env.local
 
 # …or skip the file entirely: run your app with connection env injected

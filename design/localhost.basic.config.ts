@@ -5,8 +5,7 @@
  *   key      → stable identity: route /slack, CLI selector, storage
  *              namespace, localhost.slack lookup (all derived)
  *   config   → plugin-defined, validated against the plugin's schema
- *   seed     → optional initial world data, reset target
- *   mount    → optional runtime-owned overrides (path, envPrefix)
+ *   seed     → optional declarative world data, applied only when requested
  *
  * Credentials here are NOT secrets — they are part of the simulated world.
  */
