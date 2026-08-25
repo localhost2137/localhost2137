@@ -230,6 +230,38 @@ describe("config resolution", () => {
 		);
 	});
 
+	it("does not introspect operation entries with direct contract issues", () => {
+		let error: ConfigError | undefined;
+		try {
+			resolveConfig(
+				{
+					services: {
+						untyped: untypedConfiguredService({ operations: { broken: {} } }),
+					},
+				},
+				configPath,
+			);
+		} catch (cause) {
+			if (cause instanceof ConfigError) error = cause;
+		}
+
+		expect(error?.details.issues?.map(({ code, path }) => ({ code, path }))).toEqual([
+			{
+				code: "invalid_operation_run",
+				path: "$.services.untyped.$plugin.operations.broken.run",
+			},
+			{
+				code: "invalid_operation_description",
+				path: "$.services.untyped.$plugin.operations.broken.description",
+			},
+			{
+				code: "operation_input_not_zod_object",
+				path: "$.services.untyped.$plugin.operations.broken.input",
+			},
+		]);
+		expect(error?.cause).toBeUndefined();
+	});
+
 	it("accepts an actual ZodObject at the runtime boundary", () => {
 		const resolved = resolveConfig(
 			{

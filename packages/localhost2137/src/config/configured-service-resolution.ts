@@ -48,7 +48,7 @@ export function resolveConfiguredService(
 	const issueCountBefore = input.issues.length;
 	validateEnvelopeKeys(input.serviceKey, envelope, input.issues);
 	validatePluginDefinition(input.serviceKey, definition, input.issues);
-	const operationsAreStructurallyValid = validateOperationDefinitions(
+	const operationsCanBeIntrospected = validateOperationDefinitions(
 		input.serviceKey,
 		definition.operations,
 		input.issues,
@@ -76,9 +76,13 @@ export function resolveConfiguredService(
 	}
 
 	const seed = resolveSeed(input, definition, envelope);
-	const metadata = operationsAreStructurallyValid
-		? resolveServiceSchemaMetadata(input.serviceKey, definition, input.issues, input.causes)
-		: undefined;
+	const metadata = resolveServiceSchemaMetadata(
+		input.serviceKey,
+		definition,
+		input.issues,
+		input.causes,
+		operationsCanBeIntrospected,
+	);
 	const connection =
 		ownedConfig !== undefined && typeof definition.connection === "function"
 			? resolveConnection({

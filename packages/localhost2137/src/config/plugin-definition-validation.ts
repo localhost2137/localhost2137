@@ -193,11 +193,11 @@ function validateOperations(
 	}
 
 	const cliOwners = new Map<string, string>();
-	let structurallyValid = true;
+	let canIntrospectMetadata = true;
 	for (const [operationKey, operation] of Object.entries(operations)) {
 		const path = [...operationsPath, operationKey] as const;
 		if (!isPlainRecord(operation)) {
-			structurallyValid = false;
+			canIntrospectMetadata = false;
 			issues.push({
 				code: "invalid_operation_definition",
 				expected: "an operation definition object",
@@ -242,6 +242,7 @@ function validateOperations(
 			cliOwners.set(cliName, operationKey);
 		}
 		if (typeof operation.run !== "function") {
+			canIntrospectMetadata = false;
 			issues.push({
 				code: "invalid_operation_run",
 				expected: "a function",
@@ -252,6 +253,7 @@ function validateOperations(
 			});
 		}
 		if (typeof operation.description !== "string" || operation.description.trim() === "") {
+			canIntrospectMetadata = false;
 			issues.push({
 				code: "invalid_operation_description",
 				expected: "a non-empty string",
@@ -265,6 +267,7 @@ function validateOperations(
 		// the public, non-forgeable ZodObject boundary; packed-consumer tests
 		// verify the peer layout keeps this constructor identity shared.
 		if (!(operation.input instanceof z.ZodObject)) {
+			canIntrospectMetadata = false;
 			issues.push({
 				code: "operation_input_not_zod_object",
 				expected: "a ZodObject created with z.object()",
@@ -275,7 +278,7 @@ function validateOperations(
 			});
 		}
 	}
-	return structurallyValid;
+	return canIntrospectMetadata;
 }
 
 function hasOwn(value: unknown, key: PropertyKey): boolean {

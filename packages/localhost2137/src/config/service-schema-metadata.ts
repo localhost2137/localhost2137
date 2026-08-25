@@ -19,6 +19,7 @@ export function resolveServiceSchemaMetadata(
 	definition: RuntimePluginDefinition,
 	issues: ConfigIssue[],
 	causes: unknown[],
+	inspectOperations: boolean,
 ): ServiceSchemaMetadata | undefined {
 	let config: JsonObject | undefined;
 	let seed: JsonObject | undefined;
@@ -53,7 +54,8 @@ export function resolveServiceSchemaMetadata(
 	}
 
 	const operations: Record<string, OperationMetadata> = {};
-	for (const [operationKey, operation] of Object.entries(definition.operations)) {
+	const operationEntries = inspectOperations ? Object.entries(definition.operations) : [];
+	for (const [operationKey, operation] of operationEntries) {
 		try {
 			operations[operationKey] = createOperationMetadata(operation);
 		} catch (cause) {

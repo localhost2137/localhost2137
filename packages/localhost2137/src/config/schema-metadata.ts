@@ -59,9 +59,13 @@ export function createSchemaMetadata(
 	io: "input" | "output" = "output",
 ): JsonObject {
 	try {
+		const propertySchemasByObjectPath = new Map<string, Map<string, object>>();
 		const jsonSchema: unknown = z.toJSONSchema(schema, {
 			cycles: "ref",
 			io,
+			override: ({ jsonSchema: generatedSchema, path }) => {
+				preserveGeneratedObjectProperties(propertySchemasByObjectPath, generatedSchema, path);
+			},
 			reused: "inline",
 			target: "draft-2020-12",
 			unrepresentable: "throw",
@@ -76,6 +80,33 @@ export function createSchemaMetadata(
 			throw cause;
 		}
 		throw new SchemaIntrospectionError(schemaRole, cause);
+	}
+}
+
+function preserveGeneratedObjectProperties(
+	propertiesByObjectPath: Map<string, Map<string, object>>,
+	generatedSchema: object,
+	path: readonly (number | string)[],
+): void {
+	const propertyName = path.at(-1);
+	if (path.at(-2) === "properties" && typeof propertyName === "string") {
+		const parentPath = JSON.stringify(path.slice(0, -2));
+		const properties = propertiesByObjectPath.get(parentPath) ?? new Map<string, object>();
+		properties.set(propertyName, generatedSchema);
+		propertiesByObjectPath.set(parentPath, properties);
+	}
+
+	const generatedProperties = Reflect.get(generatedSchema, "properties");
+	const properties = propertiesByObjectPath.get(JSON.stringify(path));
+	if (!properties || !isUnknownRecord(generatedProperties)) return;
+	for (const [name, propertySchema] of properties) {
+		if (Object.hasOwn(generatedProperties, name)) continue;
+		Object.defineProperty(generatedProperties, name, {
+			configurable: true,
+			enumerable: true,
+			value: propertySchema,
+			writable: true,
+		});
 	}
 }
 
@@ -298,7 +329,12 @@ function normalizeJsonValue(value: unknown, ancestors: WeakSet<object>): JsonVal
 		const result: Record<string, JsonValue> = {};
 		for (const [key, entry] of Object.entries(value)) {
 			if (entry !== undefined) {
-				result[key] = normalizeJsonValue(entry, ancestors);
+				Object.defineProperty(result, key, {
+					configurable: false,
+					enumerable: true,
+					value: normalizeJsonValue(entry, ancestors),
+					writable: false,
+				});
 			}
 		}
 		ancestors.delete(value);

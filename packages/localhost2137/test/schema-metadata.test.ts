@@ -166,6 +166,27 @@ describe("operation schema metadata", () => {
 		},
 	);
 
+	it("preserves a computed __proto__ field and uses safe JSON input", () => {
+		const metadata = createOperationMetadata(
+			operation({
+				description: "Prototype-shaped property fixture",
+				input: z.object({ ["__proto__"]: z.string() }),
+				output: z.object({ ok: z.boolean() }),
+				run: () => ({ ok: true }),
+			}),
+		);
+		const properties = metadata.input.properties;
+
+		expect(Object.hasOwn(properties ?? {}, "__proto__")).toBe(true);
+		expect(Object.keys(properties ?? {})).toEqual(["__proto__"]);
+		expect(Reflect.get(properties ?? {}, "__proto__")).toEqual({ type: "string" });
+		expect(metadata.input.required).toEqual(["__proto__"]);
+		expect(metadata.cli).toEqual({
+			kind: "json",
+			reason: 'Field "__proto__" cannot map to a safe CLI flag.',
+		});
+	});
+
 	it("reports supported-API conversion failures with the schema role", () => {
 		expect(() => createSchemaMetadata(z.date(), "config")).toThrowError(
 			expect.objectContaining<Partial<SchemaIntrospectionError>>({
