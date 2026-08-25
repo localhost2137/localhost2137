@@ -60,6 +60,11 @@ export class ServiceLifecycleStateOwner<State> {
 		this.#current = Object.freeze({ status: "absent" });
 	}
 
+	restoreStopped(): void {
+		this.#expect("absent", "restore persisted service");
+		this.#current = Object.freeze({ status: "stopped" });
+	}
+
 	beginUpdate(): void {
 		this.#expect("stopped", "update");
 		this.#current = Object.freeze({ status: "updating" });
@@ -140,8 +145,12 @@ export class InstanceLifecycleStateOwner {
 		this.#transition(["stopped"], "starting", "start");
 	}
 
-	startFinished(succeeded: boolean): void {
-		this.#transition(["starting"], succeeded ? "running" : "stopped", "finish start");
+	startFinished(succeeded: boolean, cleanupSucceeded = true): void {
+		this.#transition(
+			["starting"],
+			succeeded ? "running" : cleanupSucceeded ? "stopped" : "failed",
+			"finish start",
+		);
 	}
 
 	beginSeed(): void {
@@ -150,6 +159,10 @@ export class InstanceLifecycleStateOwner {
 
 	seedFinished(succeeded: boolean): void {
 		this.#transition(["seeding"], succeeded ? "running" : "seed_failed", "finish seed");
+	}
+
+	seedCancelled(): void {
+		this.#transition(["seeding"], "running", "cancel seed");
 	}
 
 	beginStop(): void {

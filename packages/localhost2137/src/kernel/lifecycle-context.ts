@@ -1,0 +1,46 @@
+import type {
+	BasePluginContext,
+	PluginClock,
+	PluginLogger,
+	PluginStorage,
+	RunningPluginContext,
+	TaskTracker,
+} from "../authoring/context.js";
+
+export interface LifecycleContextCapabilities<Config> {
+	readonly clock: PluginClock;
+	readonly config: Readonly<Config>;
+	readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+	readonly instanceId: string;
+	readonly log: PluginLogger;
+	readonly serviceKey: string;
+	readonly signal: AbortSignal;
+	readonly storage: PluginStorage;
+	readonly tasks: TaskTracker;
+}
+
+export function createBasePluginContext<Config>(
+	capabilities: LifecycleContextCapabilities<Config>,
+): BasePluginContext<Config> {
+	return Object.freeze({
+		clock: capabilities.clock,
+		config: capabilities.config,
+		instanceId: capabilities.instanceId,
+		log: capabilities.log,
+		serviceKey: capabilities.serviceKey,
+		signal: capabilities.signal,
+		storage: capabilities.storage,
+	});
+}
+
+export function createRunningPluginContext<State, Config>(
+	capabilities: LifecycleContextCapabilities<Config>,
+	state: State,
+): RunningPluginContext<State, Config> {
+	return Object.freeze({
+		...createBasePluginContext(capabilities),
+		fetch: capabilities.fetch,
+		state,
+		tasks: capabilities.tasks,
+	});
+}

@@ -8,7 +8,7 @@ export type InstanceClockState =
 	| Readonly<{ mode: "real"; offsetMs: number }>
 	| Readonly<{ instantMs: number; mode: "pinned" }>;
 
-type InstanceSeedState =
+export type InstanceSeedState =
 	| Readonly<{ attempt: number; status: "unseeded" }>
 	| Readonly<{ attempt: number; status: "seeding" | "seeded" }>
 	| Readonly<{
