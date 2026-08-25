@@ -22,6 +22,30 @@ export class InstanceStagingError extends Error {
 	}
 }
 
+export type StorageWriteOperation =
+	| "commit_transition"
+	| "create_instance"
+	| "write_instance"
+	| "write_service";
+
+export class StorageWriteCommittedError extends Error {
+	override readonly cause: unknown;
+	readonly intendedManifest: InstanceManifest | ServiceManifest | StorageTransitionManifest;
+	readonly operation: StorageWriteOperation;
+
+	constructor(
+		operation: StorageWriteOperation,
+		intendedManifest: InstanceManifest | ServiceManifest | StorageTransitionManifest,
+		cause: unknown,
+	) {
+		super(`Storage operation ${operation} committed before its durability check failed.`);
+		this.name = "StorageWriteCommittedError";
+		this.operation = operation;
+		this.intendedManifest = intendedManifest;
+		this.cause = cause;
+	}
+}
+
 export interface InstanceStoragePort {
 	initialize(): Promise<void>;
 	recover(): Promise<StorageRecoveryReport>;

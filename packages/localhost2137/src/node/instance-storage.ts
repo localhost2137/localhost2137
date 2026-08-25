@@ -6,13 +6,15 @@ import {
 	InstanceStagingError,
 	type InstanceStoragePort,
 	type StorageRecoveryReport,
+	StorageWriteCommittedError,
+	type StorageWriteOperation,
 } from "../kernel/instance-storage.js";
 import type {
 	InstanceManifest,
 	ServiceManifest,
 	StorageTransitionManifest,
 } from "../kernel/manifests.js";
-import { syncDirectory } from "./atomic-file.js";
+import { AtomicWriteError, syncDirectory } from "./atomic-file.js";
 import { NodeManifestStore } from "./manifest-store.js";
 import { NodePluginStorage } from "./plugin-storage.js";
 import {
@@ -139,21 +141,33 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 		assertInstanceManifestIdentity(instanceId, manifest);
 		const directory = instanceDirectory(this.#paths, instanceId);
 		await mkdir(directory);
+		let manifestWritten = false;
 		try {
 			await this.#manifests.writeInstance(resolve(directory, "instance.json"), manifest);
+			manifestWritten = true;
 			await syncDirectory(this.#paths.instances);
 		} catch (cause) {
-			await rm(directory, { force: true, recursive: true }).catch(() => undefined);
-			throw cause;
+			if (!manifestWritten && !isCommittedAtomicWrite(cause)) {
+				await rm(directory, { force: true, recursive: true }).catch(() => undefined);
+				throw cause;
+			}
+			throw committedStorageWrite("create_instance", manifest, cause);
 		}
 	}
 
 	async writeInstance(instanceId: InstanceId, manifest: InstanceManifest): Promise<void> {
 		assertInstanceManifestIdentity(instanceId, manifest);
-		await this.#manifests.writeInstance(
-			resolve(instanceDirectory(this.#paths, instanceId), "instance.json"),
-			manifest,
-		);
+		try {
+			await this.#manifests.writeInstance(
+				resolve(instanceDirectory(this.#paths, instanceId), "instance.json"),
+				manifest,
+			);
+		} catch (cause) {
+			if (isCommittedAtomicWrite(cause)) {
+				throw committedStorageWrite("write_instance", manifest, cause);
+			}
+			throw cause;
+		}
 	}
 
 	async prepareService(instanceId: InstanceId, serviceKey: ServiceKey): Promise<void> {
@@ -184,10 +198,17 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 		if (manifest.serviceKey !== serviceKey.value) {
 			throw new TypeError("Service manifest identity does not match its validated storage path.");
 		}
-		await this.#manifests.writeService(
-			resolve(serviceDirectory(this.#paths, instanceId, serviceKey), "service.json"),
-			manifest,
-		);
+		try {
+			await this.#manifests.writeService(
+				resolve(serviceDirectory(this.#paths, instanceId, serviceKey), "service.json"),
+				manifest,
+			);
+		} catch (cause) {
+			if (isCommittedAtomicWrite(cause)) {
+				throw committedStorageWrite("write_service", manifest, cause);
+			}
+			throw cause;
+		}
 	}
 
 	pluginStorage(instanceId: InstanceId, serviceKey: ServiceKey): NodePluginStorage {
@@ -234,10 +255,18 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 	}
 
 	async commitTransition(transition: StorageTransitionManifest): Promise<void> {
-		await this.#manifests.writeTransition(
-			resolve(transitionDirectory(this.#paths, transition.transitionId), "transition.json"),
-			{ ...transition, phase: "committed" },
-		);
+		const committed = { ...transition, phase: "committed" } as const;
+		try {
+			await this.#manifests.writeTransition(
+				resolve(transitionDirectory(this.#paths, transition.transitionId), "transition.json"),
+				committed,
+			);
+		} catch (cause) {
+			if (isCommittedAtomicWrite(cause)) {
+				throw committedStorageWrite("commit_transition", committed, cause);
+			}
+			throw cause;
+		}
 	}
 
 	async quarantineActiveInstance(instanceId: InstanceId, trashId: string): Promise<void> {
@@ -382,4 +411,16 @@ function hasCode(value: unknown, expected: string): boolean {
 		"code" in value &&
 		Reflect.get(value, "code") === expected
 	);
+}
+
+function isCommittedAtomicWrite(value: unknown): value is AtomicWriteError {
+	return value instanceof AtomicWriteError && value.commitState === "committed";
+}
+
+function committedStorageWrite(
+	operation: StorageWriteOperation,
+	manifest: InstanceManifest | ServiceManifest | StorageTransitionManifest,
+	cause: unknown,
+): StorageWriteCommittedError {
+	return new StorageWriteCommittedError(operation, manifest, cause);
 }

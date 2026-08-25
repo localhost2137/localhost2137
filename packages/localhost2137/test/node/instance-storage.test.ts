@@ -1,14 +1,16 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseInstanceId, parseServiceKey } from "../../src/kernel/identifiers.js";
+import { StorageWriteCommittedError } from "../../src/kernel/instance-storage.js";
 import type {
 	InstanceManifest,
 	ServiceManifest,
 	StorageTransitionManifest,
 } from "../../src/kernel/manifests.js";
 import { NodeInstanceStorage } from "../../src/node/instance-storage.js";
+import { NodeManifestStore } from "../../src/node/manifest-store.js";
 
 const temporaryDirectories: string[] = [];
 const serviceKey = parseServiceKey("slack");
@@ -125,14 +127,97 @@ describe("NodeInstanceStorage", () => {
 		expect(report.cleanupTrashIds).toEqual([transition.transitionId]);
 		expect(await storage.readInstance(instanceId)).toBeUndefined();
 	});
+
+	it("preserves the intended manifest when a committed write cannot sync its directory", async () => {
+		const directory = await temporaryDirectory();
+		const failingDirectory = join(directory, "instances", "dev");
+		const failure = new Error("directory sync failed");
+		const syncFailure = directorySyncFailure(failingDirectory, failure);
+		const storage = new NodeInstanceStorage(directory, { manifestStore: syncFailure.manifests });
+		await storage.initialize();
+		const instanceId = parseInstanceId("dev");
+		await storage.createInstance(instanceId, instanceManifest("dev"));
+		const intended = instanceManifest("dev", { seed: { attempt: 1, status: "seeded" } });
+		syncFailure.enable();
+
+		const write = storage.writeInstance(instanceId, intended);
+		await expect(write).rejects.toMatchObject({
+			cause: { cause: failure, commitState: "committed" },
+			intendedManifest: intended,
+			operation: "write_instance",
+		});
+		await expect(write).rejects.toBeInstanceOf(StorageWriteCommittedError);
+		expect(await storage.readInstance(instanceId)).toEqual(intended);
+	});
+
+	it("identifies a transition commit whose manifest rename preceded directory-sync failure", async () => {
+		const directory = await temporaryDirectory();
+		const transition = transitionManifest("reset_commit_uncertain", "reset");
+		const failingDirectory = join(directory, "trash", transition.transitionId);
+		const failure = new Error("directory sync failed");
+		const syncFailure = directorySyncFailure(failingDirectory, failure);
+		const storage = new NodeInstanceStorage(directory, { manifestStore: syncFailure.manifests });
+		await storage.initialize();
+		const instanceId = parseInstanceId("dev");
+		await storage.createInstance(instanceId, instanceManifest("dev"));
+		await storage.stageInstance(instanceId, transition);
+		syncFailure.enable();
+
+		await expect(storage.commitTransition(transition)).rejects.toMatchObject({
+			cause: { cause: failure, commitState: "committed" },
+			intendedManifest: { ...transition, phase: "committed" },
+			operation: "commit_transition",
+		});
+		expect(
+			JSON.parse(
+				await readFile(
+					join(directory, "trash", transition.transitionId, "transition.json"),
+					"utf8",
+				),
+			),
+		).toMatchObject({ phase: "committed" });
+	});
 });
 
 async function fixtureStorage(): Promise<NodeInstanceStorage> {
-	const directory = await mkdtemp(join(tmpdir(), "localhost2137-instance-storage-"));
-	temporaryDirectories.push(directory);
+	const directory = await temporaryDirectory();
 	const storage = new NodeInstanceStorage(directory, { recoveryToken: () => "token12345" });
 	await storage.initialize();
 	return storage;
+}
+
+async function temporaryDirectory(): Promise<string> {
+	const directory = await mkdtemp(join(tmpdir(), "localhost2137-instance-storage-"));
+	temporaryDirectories.push(directory);
+	return directory;
+}
+
+function directorySyncFailure(failingDirectory: string, failure: Error) {
+	let enabled = false;
+	return {
+		enable() {
+			enabled = true;
+		},
+		manifests: new NodeManifestStore({
+			fileSystem: {
+				async open(path, flags, mode) {
+					if (enabled && path === failingDirectory) {
+						return {
+							close: async () => undefined,
+							sync: async () => {
+								throw failure;
+							},
+							writeFile: async () => undefined,
+						};
+					}
+					return open(path, flags, mode);
+				},
+				rename,
+				unlink,
+			},
+			token: () => "committed-write",
+		}),
+	};
 }
 
 function instanceManifest(id: string, overrides: Partial<InstanceManifest> = {}): InstanceManifest {
