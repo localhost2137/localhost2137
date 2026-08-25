@@ -25,6 +25,7 @@ export interface OperationRuntimeAccess {
 }
 
 export interface ScopedOperationInput {
+	readonly correlationId: string;
 	readonly context: RunningPluginContext<unknown, unknown>;
 	readonly instanceId: string;
 	readonly logs: StructuredLogRing;
@@ -48,16 +49,14 @@ export class OperationNotFoundError extends LocalhostError {
 
 /** Owns operation validation, invocation, result ownership, and observability. */
 export class OperationRunner {
-	readonly #correlationId: () => string;
 	readonly #time: RuntimeTime;
 
-	constructor(dependencies: Readonly<{ correlationId: () => string; time: RuntimeTime }>) {
-		this.#correlationId = dependencies.correlationId;
+	constructor(dependencies: Readonly<{ time: RuntimeTime }>) {
 		this.#time = dependencies.time;
 	}
 
 	async run(input: ScopedOperationInput): Promise<OperationJsonValue> {
-		const correlationId = this.#correlationId();
+		const correlationId = input.correlationId;
 		const startedAt = this.#time.nowMilliseconds();
 		appendOperationLog(input, {
 			correlationId,
@@ -131,6 +130,7 @@ export class OperationRunner {
 /** Adds shared-running lease acquisition around the common operation runner. */
 export class OperationExecutor {
 	readonly #access: OperationRuntimeAccess;
+	readonly #correlationId: () => string;
 	readonly #operations: OperationDescriptorResolver;
 	readonly #runner: OperationRunner;
 
@@ -138,14 +138,17 @@ export class OperationExecutor {
 		access: OperationRuntimeAccess,
 		operations: OperationDescriptorResolver,
 		runner: OperationRunner,
+		correlationId: () => string,
 	) {
 		this.#access = access;
+		this.#correlationId = correlationId;
 		this.#operations = operations;
 		this.#runner = runner;
 	}
 
 	async execute(
 		input: Readonly<{
+			correlationId?: string;
 			instanceId: string;
 			operationKey: string;
 			rawInput: unknown;
@@ -153,6 +156,7 @@ export class OperationExecutor {
 			signal?: AbortSignal;
 		}>,
 	): Promise<OperationJsonValue> {
+		const correlationId = input.correlationId ?? this.#correlationId();
 		const operation = this.#operations.resolve(input.serviceKey, input.operationKey);
 		if (!operation) throw new OperationNotFoundError(input.serviceKey, input.operationKey);
 		const lease = await this.#access.acquireService(
@@ -163,6 +167,7 @@ export class OperationExecutor {
 		try {
 			return await this.#runner.run({
 				...input,
+				correlationId,
 				context: lease.context,
 				logs: lease.logs,
 				operation,

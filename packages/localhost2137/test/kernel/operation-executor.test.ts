@@ -33,12 +33,10 @@ function fixtureContext(): RunningPluginContext<unknown, unknown> {
 
 function fixtureRunner(): Readonly<{ logs: StructuredLogRing; runner: OperationRunner }> {
 	let now = 1_000;
-	let correlation = 0;
 	const logs = new StructuredLogRing({ maxBytes: 100_000, maxEntries: 100 });
 	return {
 		logs,
 		runner: new OperationRunner({
-			correlationId: () => `correlation-${++correlation}`,
 			time: {
 				nowMilliseconds: () => ++now,
 				nowTimestamp: () => "2026-08-25T12:00:00.000Z",
@@ -60,6 +58,7 @@ describe("OperationRunner", () => {
 		const { logs, runner } = fixtureRunner();
 
 		const result = await runner.run({
+			correlationId: "correlation-1",
 			context: fixtureContext(),
 			instanceId: "dev",
 			logs,
@@ -86,6 +85,7 @@ describe("OperationRunner", () => {
 
 		const failure = await runner
 			.run({
+				correlationId: "correlation-1",
 				context: fixtureContext(),
 				instanceId: "dev",
 				logs,
@@ -121,6 +121,7 @@ describe("OperationRunner", () => {
 
 		const failure = await runner
 			.run({
+				correlationId: "correlation-1",
 				context: fixtureContext(),
 				instanceId: "dev",
 				logs,
@@ -154,6 +155,7 @@ describe("OperationRunner", () => {
 
 		await expect(
 			runner.run({
+				correlationId: "correlation-1",
 				context: fixtureContext(),
 				instanceId: "dev",
 				logs,
@@ -182,6 +184,7 @@ describe("OperationExecutor", () => {
 			},
 			{ resolve: () => operation },
 			runner,
+			() => "correlation-1",
 		);
 
 		await expect(
@@ -202,6 +205,7 @@ describe("OperationExecutor", () => {
 			{ acquireService },
 			{ resolve: () => undefined },
 			runner,
+			() => "correlation-1",
 		);
 
 		await expect(

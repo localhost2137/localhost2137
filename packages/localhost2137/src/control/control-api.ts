@@ -51,6 +51,7 @@ export interface ControlRuntime {
 export interface ControlOperationExecutor {
 	execute(
 		input: Readonly<{
+			correlationId: string;
 			instanceId: string;
 			operationKey: string;
 			rawInput: unknown;
@@ -142,6 +143,7 @@ export function createControlApi(
 	app.post("/instances/:instance/services/:service/operations/:operation", async (context) =>
 		success(
 			await input.operations.execute({
+				correlationId: context.get("correlationId"),
 				instanceId: requiredParam(context.req.param("instance")),
 				operationKey: requiredParam(context.req.param("operation")),
 				rawInput: await readControlJson(context.req.raw, bodyLimitBytes),

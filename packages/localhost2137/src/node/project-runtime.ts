@@ -43,10 +43,9 @@ export function createProjectRuntime(
 	dependencies: ProjectRuntimeDependencies,
 ): ProjectRuntimeComposition {
 	const runner = new OperationRunner({
-		correlationId: dependencies.correlationId,
 		time: dependencies.time,
 	});
-	const scenarioSeed = createScenarioSeedFactory(config, runner);
+	const scenarioSeed = createScenarioSeedFactory(config, runner, dependencies.correlationId);
 	const managerDependencies: InstanceManagerDependencies = {
 		correlationId: dependencies.correlationId,
 		fetch: dependencies.fetch,
@@ -59,7 +58,12 @@ export function createProjectRuntime(
 		token: dependencies.token,
 	};
 	const instances = new InstanceManager(createInstanceTemplate(config), managerDependencies);
-	const operations = new OperationExecutor(instances, new ResolvedOperationCatalog(config), runner);
+	const operations = new OperationExecutor(
+		instances,
+		new ResolvedOperationCatalog(config),
+		runner,
+		dependencies.correlationId,
+	);
 	const control = createControlApi({
 		catalog: new ResolvedControlServiceCatalog(config),
 		correlationId: dependencies.correlationId,

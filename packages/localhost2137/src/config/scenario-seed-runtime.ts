@@ -14,13 +14,24 @@ type RuntimeScenarioService = Readonly<Record<string, unknown>>;
 export function createScenarioSeedFactory(
 	config: ResolvedConfig,
 	runner: OperationRunner,
+	correlationId: () => string,
 ): ((input: ScenarioSeedFactoryInput) => ScenarioSeedPort | undefined) | undefined {
 	const seed = config.seed;
 	if (!seed) return undefined;
 	return (input) => ({
 		run: async (signal) => {
-			const facade = createScenarioFacade(config, runner, input, signal);
-			await Reflect.apply(seed, undefined, [facade]);
+			const scope = new ScenarioOperationScope();
+			const facade = createScenarioFacade(config, runner, input, signal, scope, correlationId);
+			let seedOutcome: SeedOutcome = Object.freeze({ failed: false });
+			try {
+				await Reflect.apply(seed, undefined, [facade]);
+			} catch (cause) {
+				seedOutcome = Object.freeze({ cause, failed: true });
+			} finally {
+				scope.deactivate();
+			}
+			const operationFailures = await scope.drain();
+			throwScenarioFailures(seedOutcome, operationFailures);
 		},
 	});
 }
@@ -30,6 +41,8 @@ function createScenarioFacade(
 	runner: OperationRunner,
 	input: ScenarioSeedFactoryInput,
 	signal: AbortSignal,
+	scope: ScenarioOperationScope,
+	correlationId: () => string,
 ): RuntimeScenario {
 	const facade: Record<string, RuntimeScenarioService> = Object.create(null);
 	for (const [serviceKey, configuredService] of Object.entries(config.services)) {
@@ -42,16 +55,19 @@ function createScenarioFacade(
 		);
 		for (const [operationKey, operation] of Object.entries(configuredService.plugin.operations)) {
 			defineEntry(service, operationKey, (rawInput: unknown) =>
-				runScopedOperation({
-					input,
-					lifecycle,
-					operation,
-					operationKey,
-					rawInput,
-					runner,
-					serviceKey,
-					signal,
-				}),
+				scope.run(() =>
+					runScopedOperation({
+						correlationId: correlationId(),
+						input,
+						lifecycle,
+						operation,
+						operationKey,
+						rawInput,
+						runner,
+						serviceKey,
+						signal,
+					}),
+				),
 			);
 		}
 		defineEntry(facade, serviceKey, Object.freeze(service));
@@ -61,6 +77,7 @@ function createScenarioFacade(
 
 async function runScopedOperation(
 	input: Readonly<{
+		correlationId: string;
 		input: ScenarioSeedFactoryInput;
 		lifecycle: AnyServiceLifecycle;
 		operation: RuntimeOperationDefinition;
@@ -72,6 +89,7 @@ async function runScopedOperation(
 	}>,
 ): Promise<unknown> {
 	return await input.runner.run({
+		correlationId: input.correlationId,
 		context: input.lifecycle.runningContext(input.signal),
 		instanceId: input.input.instanceId,
 		logs: input.input.logs,
@@ -81,6 +99,63 @@ async function runScopedOperation(
 		serviceKey: input.serviceKey,
 		signal: input.signal,
 	});
+}
+
+class ScenarioOperationScope {
+	readonly #operations: Promise<unknown>[] = [];
+	#active = true;
+
+	run<Value>(start: () => Promise<Value>): Promise<Value> {
+		if (!this.#active) {
+			return Promise.reject(new ScenarioOperationScopeClosedError());
+		}
+		const operation = Promise.resolve().then(start);
+		this.#operations.push(operation);
+		// The scope owns every started operation even when scenario code intentionally
+		// drops the returned promise. drain() remains the deterministic error surface.
+		void operation.catch(() => undefined);
+		return operation;
+	}
+
+	deactivate(): void {
+		this.#active = false;
+	}
+
+	async drain(): Promise<readonly unknown[]> {
+		const results = await Promise.allSettled(this.#operations);
+		return Object.freeze(
+			results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+		);
+	}
+}
+
+class ScenarioOperationScopeClosedError extends Error {
+	constructor() {
+		super("Scenario operations cannot start after the scenario seed function has returned.");
+		this.name = "ScenarioOperationScopeClosedError";
+	}
+}
+
+type SeedOutcome = Readonly<{ failed: false }> | Readonly<{ cause: unknown; failed: true }>;
+
+function throwScenarioFailures(
+	seedOutcome: SeedOutcome,
+	operationFailures: readonly unknown[],
+): void {
+	if (!seedOutcome.failed && operationFailures.length === 0) return;
+	const distinctOperationFailures = operationFailures.filter(
+		(failure) => !seedOutcome.failed || failure !== seedOutcome.cause,
+	);
+	if (seedOutcome.failed && distinctOperationFailures.length === 0) throw seedOutcome.cause;
+	if (!seedOutcome.failed && distinctOperationFailures.length === 1) {
+		throw distinctOperationFailures[0];
+	}
+	throw new AggregateError(
+		!seedOutcome.failed
+			? distinctOperationFailures
+			: [seedOutcome.cause, ...distinctOperationFailures],
+		"Scenario seed and its owned operations did not complete successfully.",
+	);
 }
 
 function instanceConnection(

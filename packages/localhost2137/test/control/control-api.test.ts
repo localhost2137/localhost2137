@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { RunningPluginContext } from "../../src/authoring/context.js";
+import { LocalhostError } from "../../src/authoring/localhost-error.js";
 import { defineOperation } from "../../src/authoring/operation.js";
 import { type ControlRuntime, createControlApi } from "../../src/control/control-api.js";
 import type { ControlServiceCatalog } from "../../src/control/control-service-catalog.js";
@@ -132,7 +133,6 @@ describe("control API policy", () => {
 		const logs = new StructuredLogRing({ maxBytes: 100_000, maxEntries: 100 });
 		let correlation = 0;
 		const runner = new OperationRunner({
-			correlationId: () => `operation-${++correlation}`,
 			time: fixedTime(),
 		});
 		const executor = new OperationExecutor(
@@ -148,6 +148,7 @@ describe("control API policy", () => {
 				resolve: (_serviceKey, operationKey) => (operationKey === "greet" ? operation : undefined),
 			},
 			runner,
+			() => `operation-${++correlation}`,
 		);
 		const fixture = controlFixture({ operations: executor });
 
@@ -198,6 +199,81 @@ describe("control API policy", () => {
 		expect(body).not.toContain("xoxb-never-return-this");
 		expect(body).not.toContain("stack");
 		expect(body).not.toContain(TOKEN);
+	});
+
+	it("uses the adapter correlation for operation failures and their logs", async () => {
+		const bindOperation = defineOperation<"fixture", object, object>();
+		const operations = {
+			expected: bindOperation({
+				description: "expected failure",
+				input: z.object({}),
+				output: z.null(),
+				run: () => {
+					throw new LocalhostError("EXPECTED_FAILURE", "Expected failure.", { status: 409 });
+				},
+			}),
+			invalid: bindOperation({
+				description: "invalid input",
+				input: z.object({ name: z.string() }),
+				output: z.null(),
+				run: () => null,
+			}),
+			unknown: bindOperation({
+				description: "unknown failure",
+				input: z.object({}),
+				output: z.null(),
+				run: () => {
+					throw new Error("private plugin failure");
+				},
+			}),
+		};
+		const logs = new StructuredLogRing({ maxBytes: 100_000, maxEntries: 100 });
+		const directCorrelation = vi.fn(() => "direct-correlation");
+		const executor = new OperationExecutor(
+			{
+				acquireService: async () => ({
+					context: runningContext(),
+					generation: {},
+					logs,
+					release: vi.fn(),
+				}),
+			},
+			{ resolve: (_service, operation) => operations[operation as keyof typeof operations] },
+			new OperationRunner({ time: fixedTime() }),
+			directCorrelation,
+		);
+		const fixture = controlFixture({ operations: executor });
+
+		const responses: Response[] = [];
+		for (const [operation, body] of [
+			["invalid", { name: 42 }],
+			["expected", {}],
+			["unknown", {}],
+		] as const) {
+			responses.push(
+				await fixture.app.request(`/instances/dev/services/fixture/operations/${operation}`, {
+					body: JSON.stringify(body),
+					headers: jsonHeaders(),
+					method: "POST",
+				}),
+			);
+		}
+		const envelopes = await Promise.all(responses.map((response) => response.json()));
+
+		expect(envelopes.map(({ error }) => error.correlationId)).toEqual([
+			"control-1",
+			"control-2",
+			"control-3",
+		]);
+		expect(logs.snapshot().entries.map(({ correlationId }) => correlationId)).toEqual([
+			"control-1",
+			"control-1",
+			"control-2",
+			"control-2",
+			"control-3",
+			"control-3",
+		]);
+		expect(directCorrelation).not.toHaveBeenCalled();
 	});
 
 	it("routes every v0.1 lifecycle, log, clock, and idle endpoint through the runtime", async () => {
