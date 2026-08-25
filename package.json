@@ -10,6 +10,7 @@
 	"scripts": {
 		"boundaries": "depcruise packages plugins --config .dependency-cruiser.cjs",
 		"build": "tsc -b",
+		"changeset": "changeset",
 		"check": "pnpm format:check && pnpm lint && pnpm boundaries && pnpm typecheck && pnpm test && pnpm knip",
 		"format": "biome format --write .",
 		"format:check": "biome format .",
@@ -17,10 +18,11 @@
 		"lint": "biome lint . && eslint .",
 		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
-		"typecheck": "tsc -b --pretty false"
+		"typecheck": "tsc -b --pretty false && pnpm --filter localhost2137 typecheck:fixtures"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.10",
+		"@changesets/cli": "3.0.1",
 		"@types/node": "24.13.3",
 		"@vitest/coverage-v8": "4.1.11",
 		"dependency-cruiser": "18.2.0",

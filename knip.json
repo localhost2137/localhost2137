@@ -5,7 +5,8 @@
 			"project": ["*.{js,ts}"]
 		},
 		"packages/localhost2137": {
-			"project": ["src/**/*.ts", "test/**/*.ts"]
+			"entry": ["type-fixtures/authoring-inference.ts"],
+			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
 		"packages/plugin-testkit": {
 			"project": ["src/**/*.ts"]
