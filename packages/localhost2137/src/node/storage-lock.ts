@@ -45,7 +45,7 @@ export interface StorageLockOptions {
 
 type StorageLockErrorCode = "LOCKED" | "LOCK_CORRUPT" | "LOCK_OWNERSHIP_LOST" | "LOCK_STALE";
 
-export class StorageLockError extends Error {
+class StorageLockError extends Error {
 	readonly code: StorageLockErrorCode;
 	readonly owner?: Readonly<{ acquiredAt: string; pid: number }>;
 
