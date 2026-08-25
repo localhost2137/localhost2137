@@ -2,18 +2,22 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { InstanceId, ServiceKey } from "../kernel/identifiers.js";
 
 export interface StoragePaths {
+	readonly controlToken: string;
 	readonly instances: string;
 	readonly lock: string;
 	readonly root: string;
+	readonly runtime: string;
 	readonly trash: string;
 }
 
 export function storagePaths(root: string): StoragePaths {
 	const absoluteRoot = resolve(root);
 	return Object.freeze({
+		controlToken: resolve(absoluteRoot, "control-token"),
 		instances: resolve(absoluteRoot, "instances"),
 		lock: resolve(absoluteRoot, "lock"),
 		root: absoluteRoot,
+		runtime: resolve(absoluteRoot, "runtime.json"),
 		trash: resolve(absoluteRoot, "trash"),
 	});
 }
