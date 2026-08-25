@@ -74,6 +74,40 @@ describe("config discovery and TypeScript import", () => {
 		});
 	});
 
+	it("imports a TypeScript config across a CommonJS module boundary", async () => {
+		const project = await temporaryProject();
+		const settingsPath = join(project, "settings.cjs");
+		const configPath = join(project, "localhost.config.ts");
+		await writeFile(settingsPath, "module.exports = { port: 42137 };\n");
+		await writeFile(
+			configPath,
+			'import settings from "./settings.cjs";\nexport default { port: settings.port, services: {} };\n',
+		);
+
+		const config = await loadResolvedConfig({ cwd: project });
+		expect(config.port).toBe(42_137);
+	});
+
+	it("retains a throwing module as the cause of an import error without serializing it", async () => {
+		const project = await temporaryProject();
+		const configPath = join(project, "localhost.config.ts");
+		await writeFile(configPath, 'throw new Error("private import detail");\n');
+
+		let error: unknown;
+		try {
+			await importConfigDefault(configPath);
+		} catch (cause) {
+			error = cause;
+		}
+		expect(error).toEqual(
+			expect.objectContaining({
+				cause: expect.objectContaining({ message: "private import detail" }),
+				code: "CONFIG_IMPORT_FAILED",
+			}),
+		);
+		expect(JSON.stringify(error)).not.toContain("private import detail");
+	});
+
 	it("reports exact discovery diagnostics", async () => {
 		const project = await temporaryProject();
 		await expect(discoverConfigFile({ cwd: project, explicitPath: "missing.ts" })).rejects.toEqual(
@@ -86,6 +120,15 @@ describe("config discovery and TypeScript import", () => {
 				message: `Config file does not exist: ${join(project, "missing.ts")}.`,
 			}),
 		);
+	});
+
+	it("reports an upward discovery miss from the normalized starting directory", async () => {
+		const project = await temporaryProject();
+		await expect(discoverConfigFile({ cwd: project })).rejects.toMatchObject({
+			code: "CONFIG_NOT_FOUND",
+			details: { searchedFrom: project },
+			message: `No localhost2137 config found while walking upward from ${project}.`,
+		});
 	});
 
 	it("uses the selected platform path semantics for config-relative paths", () => {

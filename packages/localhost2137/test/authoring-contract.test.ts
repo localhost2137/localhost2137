@@ -35,6 +35,16 @@ function greetOperation(binder: OperationBinder) {
 }
 
 describe("authoring descriptors", () => {
+	it("keeps the public root limited to authoring APIs", async () => {
+		const publicRoot = await import("localhost2137");
+		expect(Object.keys(publicRoot).sort()).toEqual([
+			"defineConfig",
+			"defineOperation",
+			"definePlugin",
+		]);
+		expect("loadResolvedConfig" in publicRoot).toBe(false);
+	});
+
 	it("creates immutable descriptors without freezing Hono or Zod internals", () => {
 		const operation = greetOperation(defineOperation<"fixture", State, Config>());
 		const api = new Hono<PluginEnv<State, Config>>();

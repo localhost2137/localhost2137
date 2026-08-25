@@ -11,6 +11,7 @@ interface FixtureOptions {
 	readonly id?: string;
 	readonly nestedInput?: boolean;
 	readonly operationKeys?: readonly string[];
+	readonly stateVersion?: number;
 }
 
 const configPath = "/workspace/project/localhost.config.ts";
@@ -51,11 +52,51 @@ function fixturePlugin(options: FixtureOptions = {}) {
 			start: (): State => ({ ready: true }),
 		},
 		operations,
-		stateVersion: 1,
+		stateVersion: options.stateVersion ?? 1,
 	});
 }
 
 describe("config resolution", () => {
+	it("groups top-level runtime field failures with stable paths", () => {
+		expect(() =>
+			resolveConfig(
+				{
+					clock: { mode: "real", startAt: "2026-01-01T00:00:00.000Z" },
+					port: 0,
+					services: {},
+					unexpected: true,
+				},
+				configPath,
+			),
+		).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				code: "CONFIG_INVALID",
+				details: expect.objectContaining({
+					issues: expect.arrayContaining([
+						expect.objectContaining({ code: "too_small", path: "$.port" }),
+						expect.objectContaining({ code: "unrecognized_keys", path: "$" }),
+						expect.objectContaining({ code: "unrecognized_keys", path: "$.clock" }),
+					]),
+				}),
+			}),
+		);
+	});
+
+	it("rejects values that did not come from a plugin factory", () => {
+		expect(() => resolveConfig({ services: { fixture: { config: {} } } }, configPath)).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				details: expect.objectContaining({
+					issues: [
+						expect.objectContaining({
+							code: "service_descriptor",
+							path: "$.services.fixture",
+						}),
+					],
+				}),
+			}),
+		);
+	});
+
 	it("normalizes and deeply freezes runtime-owned and parsed data", () => {
 		const plugin = fixturePlugin({ nestedInput: true });
 		const resolved = resolveConfig(
@@ -186,6 +227,89 @@ describe("config resolution", () => {
 							code: "env_collision",
 							message:
 								'Services "first" and "second" both export "FIXTURE_TOKEN"; set exportEnv: false on one mount and wire it manually.',
+						}),
+					]),
+				}),
+			}),
+		);
+	});
+
+	it("allows an intentional environment collision when one mount disables export", () => {
+		const plugin = fixturePlugin();
+		const config = resolveConfig(
+			{
+				services: {
+					first: plugin({ config: { token: "local-first" } }),
+					second: plugin({ config: { token: "local-second" }, exportEnv: false }),
+				},
+			},
+			configPath,
+		);
+		expect(config.services.second?.connection.values).toEqual({
+			credentials: { token: "local-second" },
+		});
+	});
+
+	it("validates plugin IDs, state versions, and environment names at runtime", () => {
+		const plugin = fixturePlugin({
+			connectionName: "invalid-name",
+			id: "Invalid Plugin",
+			stateVersion: 0,
+		});
+		const descriptor = plugin({ config: { token: "local-token" } });
+		expect(() => resolveConfig({ services: { fixture: descriptor } }, configPath)).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				details: expect.objectContaining({
+					issues: expect.arrayContaining([
+						expect.objectContaining({ code: "invalid_plugin_id" }),
+						expect.objectContaining({ code: "invalid_state_version" }),
+						expect.objectContaining({ code: "invalid_env_name" }),
+					]),
+				}),
+			}),
+		);
+	});
+
+	it("reports config and operation schema introspection failures precisely", () => {
+		type State = { readonly ready: true };
+		const dateConfig = z.date();
+		const bind = defineOperation<"dates", State, Date>();
+		const operation = bind({
+			description: "Return a date",
+			input: z.object({}),
+			output: z.date(),
+			run: () => new Date("2026-01-01T00:00:00.000Z"),
+		});
+		const plugin = definePlugin({
+			api: new Hono<PluginEnv<State, Date>>(),
+			configSchema: dateConfig,
+			connection: () => ({ env: {}, values: {} }),
+			description: "Unrepresentable schema fixture",
+			id: "dates",
+			lifecycle: {
+				create: () => undefined,
+				start: (): State => ({ ready: true }),
+			},
+			operations: { operation },
+			stateVersion: 1,
+		});
+
+		expect(() =>
+			resolveConfig(
+				{ services: { dates: plugin({ config: new Date("2026-01-01T00:00:00.000Z") }) } },
+				configPath,
+			),
+		).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				details: expect.objectContaining({
+					issues: expect.arrayContaining([
+						expect.objectContaining({
+							code: "schema_introspection_failed",
+							path: "$.services.dates.$plugin.configSchema",
+						}),
+						expect.objectContaining({
+							code: "schema_introspection_failed",
+							path: "$.services.dates.$plugin.operations.operation.output",
 						}),
 					]),
 				}),
