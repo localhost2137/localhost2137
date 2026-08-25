@@ -74,7 +74,9 @@ export default defineConfig({
 			},
 			seed: {
 				customers: [{ id: "cus_alice", email: "alice@acme.dev" }],
-				prices: [{ id: "price_pro_monthly", currency: "usd", unitAmount: 2_000, interval: "month" }],
+				prices: [
+					{ id: "price_pro_monthly", currency: "usd", unitAmount: 2_000, interval: "month" },
+				],
 			},
 		}),
 

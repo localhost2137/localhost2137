@@ -38,16 +38,24 @@ const configSchema = z.object({
 });
 
 const seedSchema = z.object({
-	users: z.array(z.object({
-		id: z.string().optional(), // deterministic ids welcome: "U_ALICE"
-		name: z.string(),
-		admin: z.boolean().default(false),
-	})).default([]),
-	channels: z.array(z.object({
-		id: z.string().optional(),
-		name: z.string(),
-		members: z.array(z.string()).default([]),
-	})).default([]),
+	users: z
+		.array(
+			z.object({
+				id: z.string().optional(), // deterministic ids welcome: "U_ALICE"
+				name: z.string(),
+				admin: z.boolean().default(false),
+			}),
+		)
+		.default([]),
+	channels: z
+		.array(
+			z.object({
+				id: z.string().optional(),
+				name: z.string(),
+				members: z.array(z.string()).default([]),
+			}),
+		)
+		.default([]),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -117,15 +125,15 @@ const sendMessage = defineOperation({
 			text: input.text,
 			ts: ctx.clock.now(),
 		});
-	if (ctx.config.eventsUrl) {
-		// Outbound delivery is just HTTP — always through ctx.fetch so the
-		// runtime can later intercept/route requests (see PluginContext).
-		await ctx.fetch(ctx.config.eventsUrl, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(event("message", message)),
-		});
-	}
+		if (ctx.config.eventsUrl) {
+			// Outbound delivery is just HTTP — always through ctx.fetch so the
+			// runtime can later intercept/route requests (see PluginContext).
+			await ctx.fetch(ctx.config.eventsUrl, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(event("message", message)),
+			});
+		}
 		return { id: message.id };
 	},
 });
@@ -170,8 +178,8 @@ export const slack = definePlugin({
 			const db = await openDb(ctx.storage.path("slack.db"));
 			for (const user of seed.users) await db.users.insert(user);
 			for (const ch of seed.channels) {
-				await db.channels.insert(ch);
-				for (const member of ch.members) await db.channels.addMember(ch.id!, member);
+				const channel = await db.channels.insert(ch);
+				for (const member of ch.members) await db.channels.addMember(channel.id, member);
 			}
 		},
 
@@ -244,7 +252,7 @@ interface Database {
 		list(): Promise<unknown[]>;
 	};
 	channels: {
-		insert(row: unknown): Promise<unknown>;
+		insert(row: unknown): Promise<{ id: string }>;
 		addMember(channelId: string, userId: string): Promise<void>;
 	};
 	messages: {

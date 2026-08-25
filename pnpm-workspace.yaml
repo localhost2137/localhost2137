@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+  - "plugins/*"
+
+minimumReleaseAge: 1440
+
+minimumReleaseAgeExclude:
+  - "@localhost2137/*"

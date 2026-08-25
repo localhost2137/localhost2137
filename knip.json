@@ -1,0 +1,17 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"workspaces": {
+		".": {
+			"project": ["*.{js,ts}"]
+		},
+		"packages/localhost2137": {
+			"project": ["src/**/*.ts", "test/**/*.ts"]
+		},
+		"packages/plugin-testkit": {
+			"project": ["src/**/*.ts"]
+		},
+		"plugins/*": {
+			"project": ["src/**/*.ts"]
+		}
+	}
+}

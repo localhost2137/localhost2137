@@ -1,0 +1,30 @@
+{
+	"name": "localhost2137",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -b",
+		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+	},
+	"peerDependencies": {
+		"hono": "^4.13.4",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"hono": "4.13.4",
+		"zod": "4.4.3"
+	}
+}

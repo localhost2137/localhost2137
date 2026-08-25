@@ -1,0 +1,8 @@
+{
+	"files": [],
+	"references": [
+		{ "path": "packages/localhost2137" },
+		{ "path": "packages/plugin-testkit" },
+		{ "path": "plugins/slack" }
+	]
+}
