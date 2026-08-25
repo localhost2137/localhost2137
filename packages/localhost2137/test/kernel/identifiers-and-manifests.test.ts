@@ -41,13 +41,50 @@ describe("versioned manifests", () => {
 
 		expect(instance.status).toBe("ready");
 		expect(service).toMatchObject({ pluginId: "slack", stateVersion: 2 });
+		expect(Object.isFrozen(instance)).toBe(true);
+		expect(Object.isFrozen(instance.clock)).toBe(true);
+		expect(Object.isFrozen(instance.configuredServices)).toBe(true);
+		expect(Object.isFrozen(instance.seed)).toBe(true);
+		expect(Object.isFrozen(service)).toBe(true);
 	});
 
-	it.each(["instance-old.json", "instance-newer.json", "instance-corrupt.json"])(
-		"rejects incompatible fixture %s without guessing",
-		async (name) => {
-			const value = JSON.parse(await readFile(`${fixtures}/${name}`, "utf8"));
-			expect(() => parseInstanceManifest(value, name)).toThrow(ManifestValidationError);
-		},
-	);
+	it.each([
+		"instance-old.json",
+		"instance-newer.json",
+		"instance-corrupt.json",
+		"instance-duplicate-services.json",
+		"instance-invalid-clock.json",
+		"instance-invalid-fingerprint.json",
+	])("rejects incompatible fixture %s without guessing", async (name) => {
+		const value = JSON.parse(await readFile(`${fixtures}/${name}`, "utf8"));
+		expect(() => parseInstanceManifest(value, name)).toThrow(ManifestValidationError);
+	});
+
+	it("deeply freezes nested seed failure and transition records", () => {
+		const manifest = parseInstanceManifest(
+			{
+				clock: { instantMs: 0, mode: "pinned" },
+				configuredServices: ["slack"],
+				configFingerprint: `sha256:${"a".repeat(64)}`,
+				createdAt: "2026-08-25T12:00:00.000Z",
+				id: "dev",
+				persistence: "persistent",
+				schemaVersion: 1,
+				seed: {
+					attempt: 1,
+					failure: { at: "2026-08-25T12:01:00.000Z", message: "Seed failed." },
+					status: "seed_failed",
+				},
+				status: "creating",
+				transition: { id: "reset_12345678", kind: "reset" },
+			},
+			"instance.json",
+		);
+
+		expect(Object.isFrozen(manifest.seed)).toBe(true);
+		expect(manifest.seed.status).toBe("seed_failed");
+		if (manifest.seed.status !== "seed_failed") throw new Error("Expected failed seed fixture.");
+		expect(Object.isFrozen(manifest.seed.failure)).toBe(true);
+		expect(Object.isFrozen(manifest.transition)).toBe(true);
+	});
 });

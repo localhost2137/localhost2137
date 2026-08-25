@@ -1,0 +1,11 @@
+{
+	"schemaVersion": 1,
+	"id": "dev",
+	"persistence": "persistent",
+	"createdAt": "2026-08-25T12:00:00.000Z",
+	"configFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	"configuredServices": ["slack", "slack"],
+	"clock": { "mode": "real", "offsetMs": 0 },
+	"seed": { "status": "unseeded", "attempt": 0 },
+	"status": "ready"
+}

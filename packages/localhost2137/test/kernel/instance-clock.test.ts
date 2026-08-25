@@ -30,4 +30,34 @@ describe("per-instance read-only clock", () => {
 			offsetMs: 0,
 		});
 	});
+
+	it.each([
+		{ mode: "pinned" as const, instantMs: 8_640_000_000_000_001 },
+		{ mode: "pinned" as const, instantMs: 1.5 },
+		{ mode: "real" as const, offsetMs: Number.NaN },
+	])("rejects clock state outside the exact Date-millisecond domain", (state) => {
+		expect(() => new ReadonlyInstanceClock(state, { nowMilliseconds: () => 0 })).toThrow(
+			RangeError,
+		);
+	});
+
+	it.each([Number.NaN, 1.5, 8_640_000_000_000_001])(
+		"rejects invalid real wall time %s",
+		(wallTime) => {
+			const clock = new ReadonlyInstanceClock(
+				{ mode: "real", offsetMs: 0 },
+				{ nowMilliseconds: () => wallTime },
+			);
+			expect(() => clock.now()).toThrow(RangeError);
+		},
+	);
+
+	it("checks real wall time and offset after addition", () => {
+		const clock = new ReadonlyInstanceClock(
+			{ mode: "real", offsetMs: 1 },
+			{ nowMilliseconds: () => 8_640_000_000_000_000 },
+		);
+
+		expect(() => clock.now()).toThrow(/wall time plus offset/);
+	});
 });

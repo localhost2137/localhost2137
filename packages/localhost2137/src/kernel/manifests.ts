@@ -3,6 +3,7 @@ import { z } from "zod";
 const INSTANCE_MANIFEST_SCHEMA_VERSION = 1;
 const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 const TRANSITION_MANIFEST_SCHEMA_VERSION = 1;
+const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 
 export type InstanceClockState =
 	| Readonly<{ mode: "real"; offsetMs: number }>
@@ -49,12 +50,15 @@ export interface StorageTransitionManifest {
 }
 
 const identifierSchema = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/);
-const timestampSchema = z.iso.datetime({ offset: true });
+const timestampSchema = z.iso
+	.datetime({ offset: true })
+	.refine((value) => Number.isFinite(Date.parse(value)), "Timestamp is outside the Date domain.");
 const transitionIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/);
+const dateMillisecondsSchema = z.int().min(-MAX_DATE_MILLISECONDS).max(MAX_DATE_MILLISECONDS);
 
 const clockStateSchema: z.ZodType<InstanceClockState> = z.discriminatedUnion("mode", [
-	z.strictObject({ mode: z.literal("real"), offsetMs: z.number().finite().safe() }),
-	z.strictObject({ mode: z.literal("pinned"), instantMs: z.number().finite().safe() }),
+	z.strictObject({ mode: z.literal("real"), offsetMs: dateMillisecondsSchema }),
+	z.strictObject({ mode: z.literal("pinned"), instantMs: dateMillisecondsSchema }),
 ]);
 
 const seedFailureSchema = z.strictObject({
@@ -81,8 +85,20 @@ const instanceTransitionSchema = z.strictObject({
 
 const instanceManifestSchema: z.ZodType<InstanceManifest> = z.strictObject({
 	clock: clockStateSchema,
-	configuredServices: z.array(identifierSchema),
-	configFingerprint: z.string().startsWith("sha256:"),
+	configuredServices: z.array(identifierSchema).superRefine((services, context) => {
+		const seen = new Set<string>();
+		for (const [index, service] of services.entries()) {
+			if (seen.has(service)) {
+				context.addIssue({
+					code: "custom",
+					message: `Configured service "${service}" appears more than once.`,
+					path: [index],
+				});
+			}
+			seen.add(service);
+		}
+	}),
+	configFingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/),
 	createdAt: timestampSchema,
 	id: identifierSchema,
 	persistence: z.enum(["persistent", "ephemeral"]),
@@ -127,18 +143,32 @@ export class ManifestValidationError extends Error {
 }
 
 export function parseInstanceManifest(value: unknown, filePath: string): InstanceManifest {
-	return parseManifest("instance", instanceManifestSchema, value, filePath);
+	return freezeInstanceManifest(parseManifest("instance", instanceManifestSchema, value, filePath));
 }
 
 export function parseServiceManifest(value: unknown, filePath: string): ServiceManifest {
-	return parseManifest("service", serviceManifestSchema, value, filePath);
+	return Object.freeze(parseManifest("service", serviceManifestSchema, value, filePath));
 }
 
 export function parseTransitionManifest(
 	value: unknown,
 	filePath: string,
 ): StorageTransitionManifest {
-	return parseManifest("transition", transitionManifestSchema, value, filePath);
+	return Object.freeze(parseManifest("transition", transitionManifestSchema, value, filePath));
+}
+
+function freezeInstanceManifest(manifest: InstanceManifest): InstanceManifest {
+	const seed =
+		manifest.seed.status === "seed_failed"
+			? Object.freeze({ ...manifest.seed, failure: Object.freeze({ ...manifest.seed.failure }) })
+			: Object.freeze({ ...manifest.seed });
+	return Object.freeze({
+		...manifest,
+		clock: Object.freeze({ ...manifest.clock }),
+		configuredServices: Object.freeze([...manifest.configuredServices]),
+		seed,
+		...(manifest.transition ? { transition: Object.freeze({ ...manifest.transition }) } : {}),
+	});
 }
 
 function parseManifest<Schema extends z.ZodType>(
