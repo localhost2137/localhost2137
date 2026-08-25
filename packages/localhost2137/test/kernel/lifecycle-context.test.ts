@@ -25,7 +25,9 @@ describe("phase-specific lifecycle contexts", () => {
 		expect(context.state).toBe(state);
 		expect(context.tasks).toBe(capabilities.tasks);
 		await context.fetch("http://example.test");
-		expect(capabilities.fetch).toHaveBeenCalledWith("http://example.test");
+		expect(capabilities.fetch).toHaveBeenCalledWith("http://example.test", {
+			signal: context.signal,
+		});
 	});
 });
 

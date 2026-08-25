@@ -78,30 +78,36 @@ export class InstanceTaskTracker implements TaskTracker {
 	}
 
 	track<T>(label: string, task: Promise<T>): Promise<T> {
-		return this.#track(label, task, true);
+		return this.#start(label, () => task, true);
 	}
 
 	own<T>(label: string, task: Promise<T>): Promise<T> {
-		return this.#track(label, task, false);
+		return this.#start(label, () => task, false);
 	}
 
-	#track<T>(label: string, task: Promise<T>, recordFailure: boolean): Promise<T> {
+	start<T>(label: string, task: () => Promise<T>): Promise<T> {
+		return this.#start(label, task, true);
+	}
+
+	#start<T>(label: string, task: () => Promise<T>, recordFailure: boolean): Promise<T> {
 		if (!this.#accepting) throw new TaskTrackerClosedError();
 		if (label.trim() === "") throw new TypeError("Tracked task labels must not be empty.");
 		const taskId = this.#nextTaskId;
 		this.#nextTaskId += 1;
 		this.#tasks.set(taskId, label);
-		const tracked = task.then(
-			(value) => {
-				this.#finishTask(taskId);
-				return value;
-			},
-			(cause: unknown) => {
-				if (recordFailure) this.#failures.push(Object.freeze({ cause, label }));
-				this.#finishTask(taskId);
-				throw cause;
-			},
-		);
+		const tracked = Promise.resolve()
+			.then(task)
+			.then(
+				(value) => {
+					this.#finishTask(taskId);
+					return value;
+				},
+				(cause: unknown) => {
+					if (recordFailure) this.#failures.push(Object.freeze({ cause, label }));
+					this.#finishTask(taskId);
+					throw cause;
+				},
+			);
 		// Tracking owns the background rejection even when a caller intentionally
 		// ignores the returned promise. The original rejecting promise remains
 		// awaitable and its failure is still surfaced by idle()/close().

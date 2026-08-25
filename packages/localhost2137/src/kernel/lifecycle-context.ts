@@ -49,8 +49,22 @@ export function createRunningPluginContext<State, Config>(
 ): RunningPluginContext<State, Config> {
 	return Object.freeze({
 		...createBasePluginContext(capabilities),
-		fetch: capabilities.fetch,
+		fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+			capabilities.fetch(input, withContextSignal(input, init, capabilities.signal)),
 		state,
 		tasks: capabilities.tasks,
 	});
+}
+
+function withContextSignal(
+	input: RequestInfo | URL,
+	init: RequestInit | undefined,
+	contextSignal: AbortSignal,
+): RequestInit {
+	const signals = [
+		contextSignal,
+		...(init?.signal ? [init.signal] : []),
+		...(input instanceof Request ? [input.signal] : []),
+	];
+	return { ...init, signal: signals.length === 1 ? contextSignal : AbortSignal.any(signals) };
 }

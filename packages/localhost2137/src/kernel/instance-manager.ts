@@ -159,6 +159,27 @@ export class InstanceManager {
 		}
 	}
 
+	async idle(
+		id: string,
+		options: Readonly<{ signal?: AbortSignal; timeoutMs: number }>,
+	): Promise<void> {
+		const admission = this.#runtime.admit();
+		try {
+			const active = this.#registry.get(parseInstanceId(id));
+			const idleSignal = options.signal
+				? AbortSignal.any([options.signal, admission.signal])
+				: admission.signal;
+			const lease = await active.leases.acquireShared(idleSignal);
+			try {
+				await active.tasks.idle({ signal: idleSignal, timeoutMs: options.timeoutMs });
+			} finally {
+				lease.release();
+			}
+		} finally {
+			admission.release();
+		}
+	}
+
 	service(id: string, key: string): AnyServiceLifecycle {
 		this.#runtime.assertOpen();
 		const instanceId = parseInstanceId(id);

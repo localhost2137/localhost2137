@@ -29,6 +29,7 @@ import {
 	type StructuredLogSnapshot,
 } from "./structured-log.js";
 import { InstanceTaskTracker, type TaskScheduler } from "./task-tracker.js";
+import { TrackedPluginFetch } from "./tracked-plugin-fetch.js";
 
 export interface ActiveInstance {
 	readonly clock: ReadonlyInstanceClock;
@@ -178,11 +179,22 @@ export class ActiveInstanceFactory {
 		hookRunner: LifecycleHookRunner,
 	): AnyServiceLifecycle {
 		const serviceKey = parseServiceKey(template.serviceKey);
+		const trackedFetch = new TrackedPluginFetch({
+			clock,
+			correlationId: this.#dependencies.correlationId,
+			fetch: this.#dependencies.fetch,
+			instanceId: instanceId.value,
+			logs,
+			monotonicClock: this.#dependencies.monotonicClock,
+			serviceKey: serviceKey.value,
+			tasks,
+			time: this.#dependencies.time,
+		});
 		return new ServiceLifecycle<unknown, LifecycleConfigData, unknown>({
 			capabilities: {
 				clock,
 				config: template.config,
-				fetch: this.#dependencies.fetch,
+				fetch: trackedFetch.fetch,
 				instanceId: instanceId.value,
 				log: new StructuredPluginLogger({
 					clock,
