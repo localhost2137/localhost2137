@@ -52,12 +52,21 @@ function fileDependency(path) {
 	return `file:${path.split(sep).join("/")}`;
 }
 
+function resolveFileDependency(specifier, workingDirectory) {
+	if (typeof specifier !== "string" || !specifier.startsWith("file:")) {
+		return undefined;
+	}
+
+	return resolve(workingDirectory, specifier.slice("file:".length));
+}
+
 async function main() {
 	const temporaryRoot = await mkdtemp(join(tmpdir(), "localhost2137-package-smoke-"));
 
 	try {
 		const tarballDirectory = join(temporaryRoot, "tarballs");
 		const consumerDirectory = join(temporaryRoot, "consumer");
+		const consumerStoreDirectory = join(temporaryRoot, "pnpm-store");
 		await mkdir(tarballDirectory);
 		await mkdir(consumerDirectory);
 
@@ -66,6 +75,8 @@ async function main() {
 		if (workspacePackages.length === 0) {
 			throw new Error("pnpm did not discover any non-root workspace packages");
 		}
+		const packageNames = workspacePackages.map(({ manifest }) => manifest.name);
+		const workspacePackageNames = new Set(packageNames);
 		const packageDependencies = {};
 		const peerDependencies = {};
 
@@ -95,6 +106,10 @@ async function main() {
 			);
 
 			for (const peerName of Object.keys(workspacePackage.manifest.peerDependencies ?? {})) {
+				if (workspacePackageNames.has(peerName)) {
+					continue;
+				}
+
 				const exactVersion =
 					workspacePackage.manifest.devDependencies?.[peerName] ??
 					rootManifest.devDependencies?.[peerName];
@@ -112,7 +127,15 @@ async function main() {
 			}
 		}
 
-		const packageNames = workspacePackages.map(({ manifest }) => manifest.name);
+		const consumerDependencies = { ...peerDependencies, ...packageDependencies };
+		for (const packageName of packageNames) {
+			if (consumerDependencies[packageName] !== packageDependencies[packageName]) {
+				throw new Error(
+					`Workspace tarball dependency ${packageName} was replaced by a peer fixture`,
+				);
+			}
+		}
+
 		const imports = packageNames.map(
 			(name, index) => `import * as package${index} from ${JSON.stringify(name)};`,
 		);
@@ -129,7 +152,7 @@ async function main() {
 						smoke: "node smoke.mjs",
 						typecheck: "tsc --project tsconfig.json --pretty false",
 					},
-					dependencies: { ...packageDependencies, ...peerDependencies },
+					dependencies: consumerDependencies,
 					devDependencies: { typescript: rootManifest.devDependencies.typescript },
 				},
 				null,
@@ -164,11 +187,35 @@ async function main() {
 			)}\n`,
 		);
 
-		runPnpm(["install", "--offline", "--ignore-scripts"], consumerDirectory);
+		runPnpm(
+			["install", "--store-dir", consumerStoreDirectory, "--ignore-scripts"],
+			consumerDirectory,
+		);
+		const installedResult = runPnpm(["list", "--depth", "0", "--json"], consumerDirectory, [
+			"ignore",
+			"pipe",
+			"inherit",
+		]);
+		const [installedConsumer] = JSON.parse(installedResult.stdout.toString());
+		for (const packageName of packageNames) {
+			const installed = installedConsumer?.dependencies?.[packageName];
+			const expectedTarball = resolveFileDependency(
+				packageDependencies[packageName],
+				consumerDirectory,
+			);
+			const installedTarball = resolveFileDependency(installed?.resolved, consumerDirectory);
+			if (!expectedTarball || installedTarball !== expectedTarball) {
+				throw new Error(
+					`Installed workspace package ${packageName} did not resolve from its generated tarball`,
+				);
+			}
+		}
 		runPnpm(["smoke"], consumerDirectory);
 		runPnpm(["typecheck"], consumerDirectory);
 
-		process.stdout.write(`Package smoke passed for ${packageNames.length} workspace tarballs.\n`);
+		process.stdout.write(
+			`Package smoke passed for ${packageNames.length} workspace tarballs with install provenance verified.\n`,
+		);
 	} finally {
 		await rm(temporaryRoot, { force: true, recursive: true });
 		process.stdout.write(`Removed package-smoke temporary directory ${temporaryRoot}.\n`);
