@@ -15,10 +15,11 @@ export interface ServiceReconciliationStore {
 export async function reconcileServices(
 	services: readonly AnyServiceLifecycle[],
 	store: ServiceReconciliationStore,
+	signal?: AbortSignal,
 ): Promise<void> {
 	for (const service of services) {
 		const stored = await store.read(service.serviceKey);
-		const result = await service.reconcile(stored);
+		const result = await service.reconcile(stored, signal);
 		if (result.kind !== "unchanged") {
 			await store.write({ pluginId: service.pluginId, serviceKey: service.serviceKey }, result);
 		}

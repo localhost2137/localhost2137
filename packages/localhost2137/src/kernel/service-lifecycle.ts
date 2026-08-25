@@ -146,11 +146,15 @@ export class ServiceLifecycle<State, Config, Seed> {
 		return this.#state.status();
 	}
 
-	async reconcile(stored?: StoredServiceIdentity): Promise<ServiceReconciliation> {
+	async reconcile(
+		stored?: StoredServiceIdentity,
+		signal?: AbortSignal,
+	): Promise<ServiceReconciliation> {
+		const capabilities = this.#phaseCapabilities(signal);
 		if (!stored) {
 			this.#state.beginCreate();
 			try {
-				await this.#hooks.create(createBasePluginContext(this.#capabilities));
+				await this.#hooks.create(createBasePluginContext(capabilities));
 				this.#state.createSucceeded();
 				return Object.freeze({ kind: "created", stateVersion: this.#stateVersion });
 			} catch (cause) {
@@ -183,7 +187,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 
 		this.#state.beginUpdate();
 		try {
-			await this.#hooks.update(createBasePluginContext(this.#capabilities), {
+			await this.#hooks.update(createBasePluginContext(capabilities), {
 				from: stored.stateVersion,
 				to: this.#stateVersion,
 			});
@@ -199,10 +203,12 @@ export class ServiceLifecycle<State, Config, Seed> {
 		}
 	}
 
-	async start(): Promise<void> {
+	async start(signal?: AbortSignal): Promise<void> {
 		this.#state.beginStart();
 		try {
-			const state = await this.#hooks.start(createBasePluginContext(this.#capabilities));
+			const state = await this.#hooks.start(
+				createBasePluginContext(this.#phaseCapabilities(signal)),
+			);
 			this.#state.startSucceeded(state);
 		} catch (cause) {
 			this.#state.startFailed();
@@ -210,7 +216,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 		}
 	}
 
-	async seed(): Promise<void> {
+	async seed(signal?: AbortSignal): Promise<void> {
 		if (this.#configuredSeed === undefined) return;
 		const hook = this.#hooks.seed;
 		if (!hook) {
@@ -218,7 +224,10 @@ export class ServiceLifecycle<State, Config, Seed> {
 		}
 		const state = this.#state.beginSeed();
 		try {
-			await hook(createRunningPluginContext(this.#capabilities, state), this.#configuredSeed);
+			await hook(
+				createRunningPluginContext(this.#phaseCapabilities(signal), state),
+				this.#configuredSeed,
+			);
 		} catch (cause) {
 			throw this.#hookError("seed", cause);
 		} finally {
@@ -226,10 +235,10 @@ export class ServiceLifecycle<State, Config, Seed> {
 		}
 	}
 
-	async stop(): Promise<void> {
+	async stop(signal?: AbortSignal): Promise<void> {
 		const state = this.#state.beginStop();
 		try {
-			await this.#hooks.stop?.(createRunningPluginContext(this.#capabilities, state));
+			await this.#hooks.stop?.(createRunningPluginContext(this.#phaseCapabilities(signal), state));
 			this.#state.stopFinished(true);
 		} catch (cause) {
 			this.#state.stopFinished(false);
@@ -237,8 +246,16 @@ export class ServiceLifecycle<State, Config, Seed> {
 		}
 	}
 
-	runningContext(): RunningPluginContext<State, Config> {
-		return createRunningPluginContext(this.#capabilities, this.#state.runningState());
+	runningContext(signal?: AbortSignal): RunningPluginContext<State, Config> {
+		return createRunningPluginContext(this.#phaseCapabilities(signal), this.#state.runningState());
+	}
+
+	#phaseCapabilities(signal?: AbortSignal): LifecycleContextCapabilities<Config> {
+		if (!signal || signal === this.#capabilities.signal) return this.#capabilities;
+		return Object.freeze({
+			...this.#capabilities,
+			signal: AbortSignal.any([this.#capabilities.signal, signal]),
+		});
 	}
 
 	#hookError(
@@ -261,10 +278,10 @@ export interface AnyServiceLifecycle {
 	readonly pluginId: string;
 	readonly serviceKey: string;
 	readonly stateVersion: number;
-	reconcile(stored?: StoredServiceIdentity): Promise<ServiceReconciliation>;
-	runningContext(): RunningPluginContext<unknown, unknown>;
-	seed(): Promise<void>;
-	start(): Promise<void>;
+	reconcile(stored?: StoredServiceIdentity, signal?: AbortSignal): Promise<ServiceReconciliation>;
+	runningContext(signal?: AbortSignal): RunningPluginContext<unknown, unknown>;
+	seed(signal?: AbortSignal): Promise<void>;
+	start(signal?: AbortSignal): Promise<void>;
 	status(): ServiceLifecycleStatus;
-	stop(): Promise<void>;
+	stop(signal?: AbortSignal): Promise<void>;
 }

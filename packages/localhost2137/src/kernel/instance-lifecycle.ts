@@ -112,32 +112,34 @@ export class InstanceLifecycle {
 		this.#state.restoreAfterDestroyFailure();
 	}
 
-	async start(): Promise<void> {
+	async start(signal?: AbortSignal): Promise<void> {
+		const phaseSignal = this.#phaseSignal(signal);
 		this.#state.beginStart();
 		const started: AnyServiceLifecycle[] = [];
 		try {
 			for (const service of this.#services) {
-				await service.start();
+				await service.start(phaseSignal);
 				started.push(service);
 			}
 			this.#state.startFinished(true);
 			if (this.#seedState.status === "seed_failed") this.#state.restoreSeedFailure();
 		} catch (startFailure) {
-			const cleanupFailures = await stopServices([...started].reverse());
+			const cleanupFailures = await stopServices([...started].reverse(), phaseSignal);
 			this.#state.startFinished(false, cleanupFailures.length === 0);
 			throw new InstanceStartError(startFailure, cleanupFailures);
 		}
 	}
 
-	async stopAll(): Promise<void> {
+	async stopAll(signal?: AbortSignal): Promise<void> {
 		if (this.#state.status() === "stopped") return;
 		this.#state.beginStop();
-		const failures = await stopServices([...this.#services].reverse());
+		const failures = await stopServices([...this.#services].reverse(), this.#phaseSignal(signal));
 		this.#state.stopFinished(failures.length === 0);
 		if (failures.length > 0) throw new InstanceStopError(failures);
 	}
 
-	async seed(): Promise<void> {
+	async seed(signal?: AbortSignal): Promise<void> {
+		const phaseSignal = this.#phaseSignal(signal);
 		if (this.#seedState.status !== "unseeded") {
 			throw new SeedNotAllowedError(this.#seedState.status);
 		}
@@ -153,8 +155,8 @@ export class InstanceLifecycle {
 		}
 
 		try {
-			for (const service of this.#services) await service.seed();
-			await this.#scenarioSeed?.run(this.#signal);
+			for (const service of this.#services) await service.seed(phaseSignal);
+			await this.#scenarioSeed?.run(phaseSignal);
 			const seeded: InstanceSeedState = { attempt, status: "seeded" };
 			await this.#seedStateStore.write(seeded);
 			this.#seedState = seeded;
@@ -182,16 +184,23 @@ export class InstanceLifecycle {
 			throw new InstanceSeedError(seedFailure, persistenceFailures);
 		}
 	}
+
+	#phaseSignal(signal?: AbortSignal): AbortSignal {
+		return !signal || signal === this.#signal
+			? this.#signal
+			: AbortSignal.any([this.#signal, signal]);
+	}
 }
 
 async function stopServices(
 	services: readonly AnyServiceLifecycle[],
+	signal: AbortSignal,
 ): Promise<LifecycleHookError[]> {
 	const failures: LifecycleHookError[] = [];
 	for (const service of services) {
 		if (service.status() !== "running") continue;
 		try {
-			await service.stop();
+			await service.stop(signal);
 		} catch (cause) {
 			if (cause instanceof LifecycleHookError) failures.push(cause);
 			else throw cause;
