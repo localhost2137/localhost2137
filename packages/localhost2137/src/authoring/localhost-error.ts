@@ -130,7 +130,12 @@ function safeBoundedText(value: unknown, label: string, maximumLength: number): 
 	if (owned.length > maximumLength) {
 		throw new TypeError(`${label} must not exceed ${maximumLength} characters.`);
 	}
-	if (/[\u0000-\u001f\u007f]/.test(owned)) {
+	if (
+		[...owned].some((character) => {
+			const codePoint = character.codePointAt(0);
+			return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
+		})
+	) {
 		throw new TypeError(`${label} must not contain control characters.`);
 	}
 	return owned;
