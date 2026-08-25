@@ -44,6 +44,9 @@ importers:
       '@hono/node-server':
         specifier: 2.1.1
         version: 2.1.1(hono@4.13.4)
+      commander:
+        specifier: 15.0.0
+        version: 15.0.0
       tsx:
         specifier: 4.20.5
         version: 4.20.5

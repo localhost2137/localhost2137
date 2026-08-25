@@ -12,7 +12,7 @@ interface GeneratedSchemaAtPath {
 	readonly schema: object;
 }
 
-interface CliOption {
+export interface CliOption {
 	readonly default?: JsonPrimitive | readonly JsonPrimitive[];
 	readonly description?: string;
 	readonly enum?: readonly JsonPrimitive[];
@@ -24,7 +24,7 @@ interface CliOption {
 	readonly type: CliScalarType;
 }
 
-type CliInputSchema =
+export type CliInputSchema =
 	| Readonly<{ kind: "flags"; options: readonly CliOption[] }>
 	| Readonly<{ kind: "json"; reason: string }>;
 
