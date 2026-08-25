@@ -31,7 +31,6 @@ export type ServiceReconciliation =
 	| Readonly<{ kind: "unchanged"; stateVersion: number }>;
 
 export class LifecycleHookError extends Error {
-	override readonly cause: unknown;
 	readonly correlationId: string;
 	readonly hook: "create" | "seed" | "start" | "stop" | "update";
 	readonly instanceId: string;
@@ -48,13 +47,13 @@ export class LifecycleHookError extends Error {
 	) {
 		super(
 			`Lifecycle ${context.hook} failed for service "${context.serviceKey}" in instance "${context.instanceId}" (correlation ${context.correlationId}).`,
+			{ cause },
 		);
 		this.name = "LifecycleHookError";
 		this.correlationId = context.correlationId;
 		this.hook = context.hook;
 		this.instanceId = context.instanceId;
 		this.serviceKey = context.serviceKey;
-		this.cause = cause;
 	}
 }
 

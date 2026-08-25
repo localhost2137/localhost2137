@@ -49,15 +49,17 @@ export class SeedNotAllowedError extends Error {
 }
 
 export class InstanceSeedError extends AggregateError {
-	readonly seedFailure: unknown;
-
 	constructor(seedFailure: unknown, persistenceFailures: readonly unknown[] = []) {
 		super(
 			[seedFailure, ...persistenceFailures],
 			"Instance seeding failed and requires an explicit reset.",
+			{ cause: seedFailure },
 		);
 		this.name = "InstanceSeedError";
-		this.seedFailure = seedFailure;
+	}
+
+	get seedFailure(): unknown {
+		return this.cause;
 	}
 }
 
@@ -165,7 +167,7 @@ export class InstanceLifecycle {
 					...(seedFailure instanceof LifecycleHookError
 						? { correlationId: seedFailure.correlationId }
 						: {}),
-					message: failureMessage(seedFailure),
+					message: persistedFailureMessage(seedFailure),
 				},
 				status: "seed_failed",
 			};
@@ -198,9 +200,8 @@ async function stopServices(
 	return failures;
 }
 
-function failureMessage(cause: unknown): string {
-	if (cause instanceof LifecycleHookError && cause.cause instanceof Error && cause.cause.message) {
-		return `${cause.message} Cause: ${cause.cause.message}`;
-	}
-	return cause instanceof Error && cause.message ? cause.message : "Unknown seed failure";
+function persistedFailureMessage(cause: unknown): string {
+	return cause instanceof LifecycleHookError
+		? "Plugin seed failed; inspect runtime logs using the recorded correlation ID."
+		: "Scenario seed failed; inspect runtime logs for details.";
 }

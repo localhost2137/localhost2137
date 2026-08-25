@@ -144,12 +144,39 @@ describe("InstanceLifecycle", () => {
 		expect(states.at(-1)).toMatchObject({
 			failure: {
 				correlationId: "correlation-second",
-				message: expect.stringContaining("bad seed"),
+				message: "Plugin seed failed; inspect runtime logs using the recorded correlation ID.",
 			},
 			status: "seed_failed",
 		});
 		expect(lifecycle.seedStatus()).toBe("seed_failed");
 		await expect(lifecycle.seed()).rejects.toBeInstanceOf(SeedNotAllowedError);
+	});
+
+	it("never persists plugin credentials while retaining inspectable non-enumerable causes", async () => {
+		const secret = "xoxb-private-credential";
+		const original = new Error(`seed rejected token=${secret}`);
+		const states: InstanceSeedState[] = [];
+		const service = await stoppedService("only", { seed: () => Promise.reject(original) }, {});
+		const lifecycle = instance([service], {
+			seedStateStore: { write: async (state) => void states.push(state) },
+		});
+		await lifecycle.start();
+
+		const seeding = lifecycle.seed();
+		const failure = await seeding.catch((cause: unknown) => cause);
+
+		expect(failure).toBeInstanceOf(InstanceSeedError);
+		expect(failure).toMatchObject({ cause: { cause: original } });
+		expect(Object.prototype.propertyIsEnumerable.call(failure, "cause")).toBe(false);
+		expect(Object.prototype.propertyIsEnumerable.call(failure.cause, "cause")).toBe(false);
+		expect(JSON.stringify(states.at(-1))).not.toContain(secret);
+		expect(states.at(-1)).toMatchObject({
+			failure: {
+				correlationId: "correlation-only",
+				message: "Plugin seed failed; inspect runtime logs using the recorded correlation ID.",
+			},
+			status: "seed_failed",
+		});
 	});
 
 	it("keeps the in-memory seed failure terminal when failure persistence also fails", async () => {
