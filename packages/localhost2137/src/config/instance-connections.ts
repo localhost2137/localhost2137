@@ -47,7 +47,7 @@ export class ConnectionResolutionError extends Error {
 	}
 }
 
-export interface ResolvedServiceConnection {
+interface ResolvedServiceConnection {
 	readonly env: Readonly<Record<string, string>>;
 	readonly values: JsonObject;
 }

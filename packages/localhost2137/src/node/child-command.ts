@@ -51,7 +51,7 @@ export class ChildCommandStartError extends Error {
 	}
 }
 
-export class ChildSignalForwardError extends Error {
+class ChildSignalForwardError extends Error {
 	declare readonly cause: unknown;
 	readonly signal: ForwardedSignal;
 

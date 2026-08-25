@@ -1,5 +1,3 @@
-export type ControlClientFailureKind = "api" | "protocol" | "transport";
-
 export class ControlApiError extends Error {
 	readonly code: string;
 	readonly correlationId: string;
@@ -50,8 +48,8 @@ export class ControlTransportError extends Error {
 	}
 }
 
-export type ControlJsonPrimitive = boolean | number | string | null;
-export interface ControlJsonArray extends ReadonlyArray<ControlJsonValue> {}
+type ControlJsonPrimitive = boolean | number | string | null;
+interface ControlJsonArray extends ReadonlyArray<ControlJsonValue> {}
 export interface ControlJsonObject {
 	readonly [key: string]: ControlJsonValue;
 }

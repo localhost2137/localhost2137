@@ -10,7 +10,7 @@ export interface DynamicExecIo {
 	writeOutput(value: string): void;
 }
 
-export interface DynamicOperationInvocation {
+interface DynamicOperationInvocation {
 	readonly input: Readonly<Record<string, unknown>>;
 	readonly instanceId: string;
 	readonly json: boolean;

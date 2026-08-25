@@ -1,8 +1,8 @@
 const CONFIG_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const OWNER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$/;
 
-export const RUNTIME_DESCRIPTOR_SCHEMA_VERSION: 1 = 1;
-export const RUNTIME_PROTOCOL_VERSION: "v1" = "v1";
+const RUNTIME_DESCRIPTOR_SCHEMA_VERSION: 1 = 1;
+const RUNTIME_PROTOCOL_VERSION: "v1" = "v1";
 
 export interface RuntimeDescriptor {
 	readonly configFingerprint: string;

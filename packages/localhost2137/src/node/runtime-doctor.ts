@@ -18,7 +18,7 @@ export interface RuntimeDoctorDependencies {
 	readonly manifests?: NodeManifestStore;
 }
 
-export interface RuntimeDoctorIssue {
+interface RuntimeDoctorIssue {
 	readonly code: string;
 	readonly instanceId?: string;
 	readonly message: string;

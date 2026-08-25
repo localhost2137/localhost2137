@@ -5,7 +5,7 @@ import { type DevDaemon, startDevDaemon } from "./dev-daemon.js";
 type TerminationSignal = "SIGINT" | "SIGTERM";
 const TERMINATION_SIGNALS: readonly TerminationSignal[] = Object.freeze(["SIGINT", "SIGTERM"]);
 
-export interface DevCommandSignalSource {
+interface DevCommandSignalSource {
 	subscribe(signal: TerminationSignal, listener: () => void): () => void;
 }
 

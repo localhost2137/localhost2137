@@ -285,13 +285,7 @@ function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown
 	return prototype === Object.prototype || prototype === null;
 }
 
-export type {
-	ControlClientFailureKind,
-	ControlJsonArray,
-	ControlJsonObject,
-	ControlJsonPrimitive,
-	ControlJsonValue,
-} from "./control-client-errors.js";
+export type { ControlJsonValue } from "./control-client-errors.js";
 export {
 	ControlApiError,
 	ControlProtocolError,

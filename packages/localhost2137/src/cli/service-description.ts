@@ -12,7 +12,7 @@ export interface CliServiceDescription {
 	readonly operationMetadata: Readonly<Record<string, OperationMetadata>>;
 }
 
-export class CliServiceDescriptionError extends TypeError {
+class CliServiceDescriptionError extends TypeError {
 	readonly path: string;
 
 	constructor(path: string, message: string) {
