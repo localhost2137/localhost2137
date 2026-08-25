@@ -37,8 +37,15 @@ export class LeaseAbortedError extends Error {
 	}
 }
 
+export class LeaseRetiredError extends Error {
+	constructor() {
+		super("The active instance generation was retired during a lifecycle change.");
+		this.name = "LeaseRetiredError";
+	}
+}
+
 interface QueuedWaiter {
-	readonly abort: () => void;
+	readonly cancel: (cause: Error) => void;
 	readonly grant: () => void;
 }
 
@@ -50,6 +57,7 @@ export class InstanceLeaseCoordinator {
 	readonly #tasks: TrackedTaskDrain;
 	#activeExclusive = false;
 	#activeShared = 0;
+	#retired = false;
 
 	constructor(tasks: TrackedTaskDrain, scheduler: TaskScheduler, clock: MonotonicClock) {
 		this.#tasks = tasks;
@@ -58,25 +66,28 @@ export class InstanceLeaseCoordinator {
 	}
 
 	acquireShared(signal?: AbortSignal): Promise<InstanceLease> {
+		if (this.#retired) return Promise.reject(new LeaseRetiredError());
 		if (signal?.aborted) return Promise.reject(new LeaseAbortedError(signal.reason));
 		if (!this.#activeExclusive && this.#exclusiveQueue.length === 0) {
 			return Promise.resolve(this.#grantSharedLease());
 		}
 		return new Promise((resolve, reject) => {
 			let settled = false;
-			const abort = () => {
+			const cancel = (cause: Error) => {
 				if (settled) return;
 				settled = true;
 				removeWaiter(this.#sharedQueue, waiter);
-				reject(new LeaseAbortedError(signal?.reason));
+				signal?.removeEventListener("abort", abort);
+				reject(cause);
 			};
+			const abort = () => cancel(new LeaseAbortedError(signal?.reason));
 			const grant = () => {
 				if (settled) return;
 				settled = true;
 				signal?.removeEventListener("abort", abort);
 				resolve(this.#grantSharedLease());
 			};
-			const waiter: QueuedWaiter = { abort, grant };
+			const waiter: QueuedWaiter = { cancel, grant };
 			this.#sharedQueue.push(waiter);
 			signal?.addEventListener("abort", abort, { once: true });
 			if (signal?.aborted) abort();
@@ -85,6 +96,7 @@ export class InstanceLeaseCoordinator {
 
 	async acquireExclusive(options: ExclusiveLeaseOptions): Promise<InstanceLease> {
 		validateTimeout(options.timeoutMs);
+		if (this.#retired) throw new LeaseRetiredError();
 		const deadline = this.#clock.nowMilliseconds() + options.timeoutMs;
 		const lease = await this.#waitForExclusive(options);
 		try {
@@ -100,6 +112,14 @@ export class InstanceLeaseCoordinator {
 		}
 	}
 
+	retire(): void {
+		if (this.#retired) return;
+		this.#retired = true;
+		const cause = new LeaseRetiredError();
+		for (const waiter of [...this.#exclusiveQueue]) waiter.cancel(cause);
+		for (const waiter of [...this.#sharedQueue]) waiter.cancel(cause);
+	}
+
 	#waitForExclusive(options: ExclusiveLeaseOptions): Promise<InstanceLease> {
 		return new Promise((resolve, reject) => {
 			let settled = false;
@@ -108,7 +128,7 @@ export class InstanceLeaseCoordinator {
 				timeout?.cancel();
 				options.signal?.removeEventListener("abort", abort);
 			};
-			const fail = (cause: Error) => {
+			const cancel = (cause: Error) => {
 				if (settled) return;
 				settled = true;
 				removeWaiter(this.#exclusiveQueue, waiter);
@@ -116,7 +136,7 @@ export class InstanceLeaseCoordinator {
 				reject(cause);
 				this.#pump();
 			};
-			const abort = () => fail(new LeaseAbortedError(options.signal?.reason));
+			const abort = () => cancel(new LeaseAbortedError(options.signal?.reason));
 			const grant = () => {
 				if (settled) return;
 				settled = true;
@@ -124,11 +144,11 @@ export class InstanceLeaseCoordinator {
 				this.#activeExclusive = true;
 				resolve(this.#exclusiveLease());
 			};
-			const waiter: QueuedWaiter = { abort, grant };
+			const waiter: QueuedWaiter = { cancel, grant };
 			this.#exclusiveQueue.push(waiter);
 			options.signal?.addEventListener("abort", abort, { once: true });
 			timeout = this.#scheduler.schedule(options.timeoutMs, () => {
-				fail(new LeaseTimeoutError(this.#activeShared));
+				cancel(new LeaseTimeoutError(this.#activeShared));
 			});
 			if (options.signal?.aborted) abort();
 			this.#pump();
@@ -161,6 +181,7 @@ export class InstanceLeaseCoordinator {
 	}
 
 	#pump(): void {
+		if (this.#retired) return;
 		if (this.#activeExclusive || this.#activeShared > 0) return;
 		const exclusive = this.#exclusiveQueue.shift();
 		if (exclusive) {

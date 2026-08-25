@@ -94,6 +94,22 @@ export class InstanceLifecycle {
 		return this.#seedState.status;
 	}
 
+	beginReset(): void {
+		this.#state.beginReset();
+	}
+
+	restoreResetFailure(): void {
+		this.#state.restoreAfterResetFailure("stopped");
+	}
+
+	beginDestroy(): void {
+		this.#state.beginDestroy();
+	}
+
+	restoreDestroyFailure(): void {
+		this.#state.restoreAfterDestroyFailure();
+	}
+
 	async start(): Promise<void> {
 		this.#state.beginStart();
 		const started: AnyServiceLifecycle[] = [];
@@ -103,6 +119,7 @@ export class InstanceLifecycle {
 				started.push(service);
 			}
 			this.#state.startFinished(true);
+			if (this.#seedState.status === "seed_failed") this.#state.restoreSeedFailure();
 		} catch (startFailure) {
 			const cleanupFailures = await stopServices([...started].reverse());
 			this.#state.startFinished(false, cleanupFailures.length === 0);

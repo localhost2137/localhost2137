@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { type InstanceId, parseInstanceId, type ServiceKey } from "../kernel/identifiers.js";
-import type { InstanceStoragePort, StorageRecoveryReport } from "../kernel/instance-storage.js";
+import {
+	InstanceStagingError,
+	type InstanceStoragePort,
+	type StorageRecoveryReport,
+} from "../kernel/instance-storage.js";
 import type {
 	InstanceManifest,
 	ServiceManifest,
@@ -197,15 +201,17 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 		assertTransitionIdentity(instanceId, transition);
 		const staging = transitionDirectory(this.#paths, transition.transitionId);
 		await mkdir(staging);
+		let staged = false;
 		try {
 			await this.#manifests.writeTransition(resolve(staging, "transition.json"), transition);
 			await rename(instanceDirectory(this.#paths, instanceId), resolve(staging, "instance"));
+			staged = true;
 			await Promise.all([syncDirectory(this.#paths.instances), syncDirectory(this.#paths.trash)]);
 		} catch (cause) {
-			if (!(await exists(resolve(staging, "instance")))) {
+			if (!staged) {
 				await rm(staging, { force: true, recursive: true }).catch(() => undefined);
 			}
-			throw cause;
+			throw new InstanceStagingError(staged, cause);
 		}
 	}
 

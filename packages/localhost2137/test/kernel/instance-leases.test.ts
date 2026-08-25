@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	InstanceLeaseCoordinator,
 	LeaseAbortedError,
+	LeaseRetiredError,
 	LeaseTimeoutError,
 	type MonotonicClock,
 } from "../../src/kernel/instance-leases.js";
@@ -134,6 +135,25 @@ describe("InstanceLeaseCoordinator", () => {
 		});
 		otherExclusiveController.abort("shutdown");
 		await expect(otherExclusive).rejects.toBeInstanceOf(LeaseAbortedError);
+		exclusive.release();
+	});
+
+	it("rejects queued and future work when an active generation is retired", async () => {
+		const time = new ManualTime();
+		const tracker = new InstanceTaskTracker(time);
+		const leases = new InstanceLeaseCoordinator(tracker, time, time);
+		const exclusive = await leases.acquireExclusive({ timeoutMs: 100 });
+		const queuedShared = leases.acquireShared();
+		const queuedExclusive = leases.acquireExclusive({ timeoutMs: 100 });
+
+		leases.retire();
+
+		await expect(queuedShared).rejects.toBeInstanceOf(LeaseRetiredError);
+		await expect(queuedExclusive).rejects.toBeInstanceOf(LeaseRetiredError);
+		await expect(leases.acquireShared()).rejects.toBeInstanceOf(LeaseRetiredError);
+		await expect(leases.acquireExclusive({ timeoutMs: 100 })).rejects.toBeInstanceOf(
+			LeaseRetiredError,
+		);
 		exclusive.release();
 	});
 });

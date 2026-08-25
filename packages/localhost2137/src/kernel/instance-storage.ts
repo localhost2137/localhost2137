@@ -8,6 +8,20 @@ export interface StorageRecoveryReport {
 	readonly restoredResetIds: readonly string[];
 }
 
+export class InstanceStagingError extends Error {
+	override readonly cause: unknown;
+	readonly staged: boolean;
+
+	constructor(staged: boolean, cause: unknown) {
+		super(
+			staged ? "Instance was staged but its directory sync failed." : "Instance staging failed.",
+		);
+		this.name = "InstanceStagingError";
+		this.staged = staged;
+		this.cause = cause;
+	}
+}
+
 export interface InstanceStoragePort {
 	initialize(): Promise<void>;
 	recover(): Promise<StorageRecoveryReport>;

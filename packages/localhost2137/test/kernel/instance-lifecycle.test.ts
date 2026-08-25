@@ -14,6 +14,26 @@ import {
 import { fixtureCapabilities } from "./support/lifecycle-fixtures.js";
 
 describe("InstanceLifecycle", () => {
+	it("restores the runtime status of a persisted seed failure after services start", async () => {
+		const service = await stoppedService("one", {});
+		const lifecycle = new InstanceLifecycle({
+			now: () => "2026-08-25T12:00:00.000Z",
+			seedState: {
+				attempt: 1,
+				failure: { at: "2026-08-25T11:00:00.000Z", message: "prior failure" },
+				status: "seed_failed",
+			},
+			seedStateStore: { write: async () => undefined },
+			services: [service],
+			signal: new AbortController().signal,
+		});
+
+		await lifecycle.start();
+
+		expect(lifecycle.status()).toBe("seed_failed");
+		expect(lifecycle.seedStatus()).toBe("seed_failed");
+	});
+
 	it("starts in config order, stops prior services after failure, and starts no later service", async () => {
 		const events: string[] = [];
 		const services = [

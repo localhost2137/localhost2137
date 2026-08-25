@@ -165,6 +165,10 @@ export class InstanceLifecycleStateOwner {
 		this.#transition(["seeding"], "running", "cancel seed");
 	}
 
+	restoreSeedFailure(): void {
+		this.#transition(["running"], "seed_failed", "restore persisted seed failure");
+	}
+
 	beginStop(): void {
 		this.#transition(["running", "seed_failed"], "stopping", "stop");
 	}
@@ -188,6 +192,10 @@ export class InstanceLifecycleStateOwner {
 
 	beginDestroy(): void {
 		this.#transition(["stopped"], "destroying", "destroy");
+	}
+
+	restoreAfterDestroyFailure(): void {
+		this.#transition(["destroying"], "stopped", "restore failed destroy");
 	}
 
 	#transition(

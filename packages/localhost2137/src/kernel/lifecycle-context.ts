@@ -7,6 +7,16 @@ import type {
 	TaskTracker,
 } from "../authoring/context.js";
 
+type LifecycleConfigPrimitive = boolean | number | string | null;
+interface LifecycleConfigObject {
+	readonly [key: string]: LifecycleConfigData;
+}
+interface LifecycleConfigArray extends ReadonlyArray<LifecycleConfigData> {}
+export type LifecycleConfigData =
+	| LifecycleConfigPrimitive
+	| LifecycleConfigObject
+	| LifecycleConfigArray;
+
 export interface LifecycleContextCapabilities<Config> {
 	readonly clock: PluginClock;
 	readonly config: Readonly<Config>;

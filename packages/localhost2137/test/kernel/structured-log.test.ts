@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ReadonlyInstanceClock } from "../../src/kernel/instance-clock.js";
+import { StructuredPluginLogger } from "../../src/kernel/plugin-log-adapter.js";
 import { type StructuredLogInput, StructuredLogRing } from "../../src/kernel/structured-log.js";
 
 describe("StructuredLogRing", () => {
@@ -37,6 +39,37 @@ describe("StructuredLogRing", () => {
 		expect(ring.append(logInput("small"))).toBe(true);
 		expect(ring.append(logInput("x".repeat(1_000)))).toBe(false);
 		expect(ring.snapshot()).toMatchObject({ droppedEntries: 1, entries: [{ message: "small" }] });
+	});
+
+	it("adapts plugin messages to instance-scoped structured entries", () => {
+		const ring = new StructuredLogRing({ maxBytes: 10_000, maxEntries: 10 });
+		const logger = new StructuredPluginLogger({
+			clock: new ReadonlyInstanceClock(
+				{ instantMs: Date.parse("2026-08-25T10:00:00.000Z"), mode: "pinned" },
+				{ nowMilliseconds: () => 0 },
+			),
+			instanceId: "dev",
+			logs: ring,
+			nextCorrelationId: () => "correlation-plugin",
+			now: () => "2026-08-25T12:00:00.000Z",
+			serviceKey: "slack",
+		});
+
+		logger.info("ready");
+		logger.info("configured", { token: "secret", visible: true });
+
+		expect(ring.snapshot().entries).toEqual([
+			expect.objectContaining({
+				correlationId: "correlation-plugin",
+				instanceId: "dev",
+				kind: "plugin",
+				message: "ready",
+				serviceKey: "slack",
+				virtualTime: "2026-08-25T10:00:00.000Z",
+				wallTime: "2026-08-25T12:00:00.000Z",
+			}),
+			expect.objectContaining({ attributes: { token: "[REDACTED]", visible: true } }),
+		]);
 	});
 });
 

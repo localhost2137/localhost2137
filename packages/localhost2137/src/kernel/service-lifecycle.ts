@@ -258,4 +258,14 @@ export class ServiceLifecycle<State, Config, Seed> {
 	}
 }
 
-export type AnyServiceLifecycle = ServiceLifecycle<unknown, unknown, unknown>;
+export interface AnyServiceLifecycle {
+	readonly pluginId: string;
+	readonly serviceKey: string;
+	readonly stateVersion: number;
+	reconcile(stored?: StoredServiceIdentity): Promise<ServiceReconciliation>;
+	runningContext(): RunningPluginContext<unknown, unknown>;
+	seed(): Promise<void>;
+	start(): Promise<void>;
+	status(): ServiceLifecycleStatus;
+	stop(): Promise<void>;
+}
