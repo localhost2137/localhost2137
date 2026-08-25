@@ -21,6 +21,51 @@ describe("StructuredLogRing", () => {
 		});
 	});
 
+	it("preserves prototype-shaped keys in null-prototype records and densifies arrays", () => {
+		const ring = new StructuredLogRing({ maxBytes: 10_000, maxEntries: 10 });
+		const attributes: Record<string, unknown> = Object.create(null);
+		Object.defineProperty(attributes, "__proto__", {
+			enumerable: true,
+			value: { constructor: "visible" },
+		});
+		const sparse: unknown[] = [];
+		sparse[2] = "last";
+		attributes.values = sparse;
+
+		ring.append(logInput("prototype-safe", attributes));
+
+		const owned = ring.snapshot().entries[0]?.attributes;
+		expect(Object.getPrototypeOf(owned)).toBeNull();
+		expect(Object.hasOwn(owned ?? {}, "__proto__")).toBe(true);
+		expect(Reflect.get(owned ?? {}, "__proto__")).toEqual({ constructor: "visible" });
+		expect(owned?.values).toEqual([
+			"[UNSERIALIZABLE:undefined]",
+			"[UNSERIALIZABLE:undefined]",
+			"last",
+		]);
+		expect(Object.isFrozen(owned?.values)).toBe(true);
+	});
+
+	it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+		"rejects invalid duration %s without retaining an entry",
+		(durationMs) => {
+			const ring = new StructuredLogRing({ maxBytes: 10_000, maxEntries: 10 });
+			expect(() => ring.append({ ...logInput("invalid duration"), durationMs })).toThrow(
+				/durationMs/,
+			);
+			expect(ring.snapshot().entries).toEqual([]);
+		},
+	);
+
+	it.each([
+		{ field: "wallTime" as const, value: "not-a-date" },
+		{ field: "wallTime" as const, value: "2026-02-30T00:00:00.000Z" },
+		{ field: "virtualTime" as const, value: "2026-08-25" },
+	])("rejects invalid $field values", ({ field, value }) => {
+		const ring = new StructuredLogRing({ maxBytes: 10_000, maxEntries: 10 });
+		expect(() => ring.append({ ...logInput("invalid timestamp"), [field]: value })).toThrow(field);
+	});
+
 	it("evicts by entry count and reports dropped entries", () => {
 		const ring = new StructuredLogRing({ maxBytes: 10_000, maxEntries: 2 });
 		ring.append(logInput("one"));

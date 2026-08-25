@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { redact } from "./redaction.js";
 
 type LogKind = "delivery" | "lifecycle" | "operation" | "plugin" | "request" | "task";
@@ -8,6 +9,10 @@ interface SafeLogObject {
 	readonly [key: string]: SafeLogValue;
 }
 type SafeLogValue = JsonPrimitive | SafeLogArray | SafeLogObject;
+
+const timestampSchema = z.iso
+	.datetime({ offset: true })
+	.refine((value) => Number.isFinite(Date.parse(value)));
 
 export interface StructuredLogInput {
 	readonly attributes?: Readonly<Record<string, unknown>>;
@@ -93,6 +98,14 @@ export class StructuredLogRing {
 }
 
 function ownLogEntry(input: StructuredLogInput): StructuredLogEntry {
+	if (
+		input.durationMs !== undefined &&
+		(!Number.isFinite(input.durationMs) || input.durationMs < 0)
+	) {
+		throw new TypeError("Structured log durationMs must be a non-negative finite number.");
+	}
+	assertTimestamp(input.wallTime, "wallTime");
+	if (input.virtualTime !== undefined) assertTimestamp(input.virtualTime, "virtualTime");
 	const attributes = input.attributes
 		? safeLogObject(redact(input.attributes), new WeakSet())
 		: undefined;
@@ -112,9 +125,9 @@ function ownLogEntry(input: StructuredLogInput): StructuredLogEntry {
 
 function safeLogObject(value: unknown, ancestors: WeakSet<object>): SafeLogObject {
 	if (!isRecord(value)) return Object.freeze({ value: safeLogValue(value, ancestors) });
-	const result: Record<string, SafeLogValue> = {};
+	const result: Record<string, SafeLogValue> = Object.create(null);
 	for (const [key, entry] of Object.entries(value)) {
-		result[key] = isBodyKey(key) ? "[OMITTED]" : safeLogValue(entry, ancestors);
+		defineSafeEntry(result, key, isBodyKey(key) ? "[OMITTED]" : safeLogValue(entry, ancestors));
 	}
 	return Object.freeze(result);
 }
@@ -125,21 +138,40 @@ function safeLogValue(value: unknown, ancestors: WeakSet<object>): SafeLogValue 
 	if (Array.isArray(value)) {
 		if (ancestors.has(value)) return "[CIRCULAR]";
 		ancestors.add(value);
-		const result = Object.freeze(value.map((entry) => safeLogValue(entry, ancestors)));
+		const result = Object.freeze(Array.from(value, (entry) => safeLogValue(entry, ancestors)));
 		ancestors.delete(value);
 		return result;
 	}
 	if (isRecord(value)) {
 		if (ancestors.has(value)) return "[CIRCULAR]";
 		ancestors.add(value);
-		const result: Record<string, SafeLogValue> = {};
+		const result: Record<string, SafeLogValue> = Object.create(null);
 		for (const [key, entry] of Object.entries(value)) {
-			result[key] = isBodyKey(key) ? "[OMITTED]" : safeLogValue(entry, ancestors);
+			defineSafeEntry(result, key, isBodyKey(key) ? "[OMITTED]" : safeLogValue(entry, ancestors));
 		}
 		ancestors.delete(value);
 		return Object.freeze(result);
 	}
 	return `[UNSERIALIZABLE:${typeof value}]`;
+}
+
+function defineSafeEntry(
+	target: Record<string, SafeLogValue>,
+	key: string,
+	value: SafeLogValue,
+): void {
+	Object.defineProperty(target, key, {
+		configurable: false,
+		enumerable: true,
+		value,
+		writable: false,
+	});
+}
+
+function assertTimestamp(value: string, field: "virtualTime" | "wallTime"): void {
+	if (!timestampSchema.safeParse(value).success) {
+		throw new TypeError(`Structured log ${field} must be a valid RFC 3339 timestamp.`);
+	}
 }
 
 function isBodyKey(key: string): boolean {

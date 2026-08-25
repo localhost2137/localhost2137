@@ -14,7 +14,7 @@ function redactValue(value: unknown, sensitiveKey: RegExp, ancestors: WeakSet<ob
 	if (Array.isArray(value)) {
 		if (ancestors.has(value)) return "[CIRCULAR]";
 		ancestors.add(value);
-		const result = value.map((entry) => redactValue(entry, sensitiveKey, ancestors));
+		const result = Array.from(value, (entry) => redactValue(entry, sensitiveKey, ancestors));
 		ancestors.delete(value);
 		return result;
 	}
