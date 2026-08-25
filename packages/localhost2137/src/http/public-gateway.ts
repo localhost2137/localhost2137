@@ -209,7 +209,8 @@ function tryAppendRequestLog(lease: RunningServiceLease, input: StructuredLogInp
 function isUnambiguousPublicPath(pathname: string): boolean {
 	for (const rawSegment of pathname.split("/")) {
 		let decoded = rawSegment;
-		for (let pass = 0; pass < 4; pass += 1) {
+		for (let remainingPasses = rawSegment.length + 1; remainingPasses > 0; remainingPasses -= 1) {
+			if (hasAmbiguousRouteSyntax(decoded)) return false;
 			let next: string;
 			try {
 				next = decodeURIComponent(decoded);
@@ -217,13 +218,17 @@ function isUnambiguousPublicPath(pathname: string): boolean {
 				return false;
 			}
 			if (next === decoded) break;
+			// A changed successful percent-decoding is strictly shorter. Bounding the
+			// loop by the untrusted segment's own length therefore covers every level.
+			if (next.length >= decoded.length) return false;
 			decoded = next;
-		}
-		if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) {
-			return false;
 		}
 	}
 	return true;
+}
+
+function hasAmbiguousRouteSyntax(segment: string): boolean {
+	return segment === "." || segment === ".." || segment.includes("/") || segment.includes("\\");
 }
 
 function responseSize(response: Response): number | undefined {

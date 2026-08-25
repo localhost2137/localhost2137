@@ -57,6 +57,7 @@ export class OperationRunner {
 
 	async run(input: ScopedOperationInput): Promise<OperationJsonValue> {
 		const correlationId = input.correlationId;
+		const context = executionContext(input.context, input.signal);
 		const startedAt = this.#time.nowMilliseconds();
 		appendOperationLog(input, {
 			correlationId,
@@ -78,10 +79,9 @@ export class OperationRunner {
 					},
 				);
 			}
-			input.signal?.throwIfAborted();
-			const context = executionContext(input.context, input.signal);
+			context.signal.throwIfAborted();
 			const rawOutput = await invokeOperation(input.operation.run, context, parsedInput.data);
-			input.signal?.throwIfAborted();
+			context.signal.throwIfAborted();
 			const parsedOutput = await input.operation.output.safeParseAsync(rawOutput);
 			if (!parsedOutput.success) {
 				throw new LocalhostError(
@@ -113,7 +113,7 @@ export class OperationRunner {
 			});
 			return data;
 		} catch (cause) {
-			const error = operationError(cause, correlationId, input.signal);
+			const error = operationError(cause, correlationId, context.signal);
 			appendOperationLog(input, {
 				attributes: Object.freeze({ code: error.code, internalCause: cause }),
 				correlationId,
@@ -200,6 +200,13 @@ function operationError(
 	correlationId: string,
 	signal: AbortSignal | undefined,
 ): LocalhostError {
+	if (signal?.aborted) {
+		return new LocalhostError("REQUEST_ABORTED", "Operation execution was cancelled.", {
+			cause,
+			correlationId,
+			status: 499,
+		});
+	}
 	if (cause instanceof LocalhostError) {
 		try {
 			return withCorrelation(cause, correlationId);
@@ -207,13 +214,6 @@ function operationError(
 			// An untyped plugin can forge or corrupt a prototype-compatible value.
 			// Treat it as an unknown plugin failure instead of trusting its fields.
 		}
-	}
-	if (signal?.aborted && cause === signal.reason) {
-		return new LocalhostError("REQUEST_ABORTED", "Operation execution was cancelled.", {
-			cause,
-			correlationId,
-			status: 499,
-		});
 	}
 	return new LocalhostError("PLUGIN_EXECUTION_FAILED", "The plugin operation failed.", {
 		cause,

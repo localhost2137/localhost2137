@@ -9,11 +9,11 @@ import type { PluginEnv, RunningPluginContext } from "../../src/authoring/contex
 import { defineOperation } from "../../src/authoring/operation.js";
 import { definePlugin } from "../../src/authoring/plugin.js";
 import { resolveConfig } from "../../src/config/config-resolution.js";
+import { InstanceRuntimeCloseTimeoutError } from "../../src/kernel/persisted-instance-runtime.js";
 import { NodeInstanceStorage } from "../../src/node/instance-storage.js";
 import { nodeMonotonicClock } from "../../src/node/monotonic-clock.js";
 import { createProjectRuntime } from "../../src/node/project-runtime.js";
 import { nodeTaskScheduler } from "../../src/node/task-scheduler.js";
-import { InstanceRuntimeCloseTimeoutError } from "../../src/kernel/persisted-instance-runtime.js";
 
 const temporaryDirectories: string[] = [];
 const CONTROL_TOKEN = "integration-control-token";
@@ -157,7 +157,14 @@ describe("project runtime HTTP composition", () => {
 			unfinishedTaskLabels: [expect.stringMatching(/^dev:fetch:fixture:/)],
 		});
 		expect(fetchSignal.aborted).toBe(true);
-		expect([499, 500]).toContain((await operation).status);
+		const operationResponse = await operation;
+		expect(operationResponse.status).toBe(499);
+		await expect(operationResponse.json()).resolves.toMatchObject({
+			error: {
+				code: "REQUEST_ABORTED",
+				correlationId: expect.stringMatching(/^correlation\d+$/),
+			},
+		});
 		await expect(runtime.server.settled()).rejects.toBeInstanceOf(AggregateError);
 	});
 });

@@ -206,6 +206,57 @@ describe("OperationRunner", () => {
 		});
 		expect(JSON.stringify(failure)).not.toContain("xoxb-forged-value");
 	});
+
+	it("maps generation cancellation through the exact signal passed to the operation", async () => {
+		const generation = new AbortController();
+		const request = new AbortController();
+		let operationSignal: AbortSignal | undefined;
+		const entered = deferred<void>();
+		const operation = defineFixtureOperation({
+			description: "wait for cancellation",
+			input: z.object({}),
+			output: z.null(),
+			run: async (context) => {
+				operationSignal = context.signal;
+				entered.resolve();
+				await new Promise<never>((_resolve, reject) => {
+					const aborted = () => reject(context.signal.reason);
+					context.signal.addEventListener("abort", aborted, { once: true });
+					if (context.signal.aborted) aborted();
+				});
+			},
+		});
+		const { logs, runner } = fixtureRunner();
+		const running = runner.run({
+			correlationId: "cancel-correlation",
+			context: Object.freeze({ ...fixtureContext(), signal: generation.signal }),
+			instanceId: "dev",
+			logs,
+			operation,
+			operationKey: "wait",
+			rawInput: {},
+			serviceKey: "fixture",
+			signal: request.signal,
+		});
+		await entered.promise;
+
+		expect(operationSignal).not.toBe(generation.signal);
+		expect(operationSignal).not.toBe(request.signal);
+		generation.abort(new Error("generation shutdown"));
+		const failure = await running.catch((cause: unknown) => cause);
+
+		expect(request.signal.aborted).toBe(false);
+		expect(failure).toMatchObject({
+			code: "REQUEST_ABORTED",
+			correlationId: "cancel-correlation",
+			status: 499,
+		});
+		expect(logs.snapshot().entries.at(-1)).toMatchObject({
+			attributes: { code: "REQUEST_ABORTED" },
+			correlationId: "cancel-correlation",
+			status: "failed",
+		});
+	});
 });
 
 describe("OperationExecutor", () => {
@@ -259,3 +310,11 @@ describe("OperationExecutor", () => {
 		expect(acquireService).not.toHaveBeenCalled();
 	});
 });
+
+function deferred<Value>(): Readonly<{ promise: Promise<Value>; resolve(value: Value): void }> {
+	let resolve!: (value: Value) => void;
+	const promise = new Promise<Value>((settle) => {
+		resolve = settle;
+	});
+	return Object.freeze({ promise, resolve });
+}

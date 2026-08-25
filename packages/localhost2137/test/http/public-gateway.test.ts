@@ -156,6 +156,24 @@ describe("public Hono gateway", () => {
 		expect(await normalizedTraversal.json()).toEqual({ path: "/inside" });
 	});
 
+	it("rejects malformed and deeply nested route ambiguity without a fixed decode depth", async () => {
+		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
+		api.get("/*", (context) => context.json({ path: context.req.path }));
+		const fixture = gatewayFixture(api);
+		const ambiguousPaths = [
+			nestedEncoding("%2f", 12),
+			nestedEncoding("%5c", 9),
+			nestedEncoding("%2e%2e", 7),
+			"%E0%A4%A",
+		];
+
+		for (const path of ambiguousPaths) {
+			const response = await fixture.app.request(`/dev/fixture/${path}/admin`);
+			expect(response.status).toBe(400);
+			await expect(response.json()).resolves.toMatchObject({ error: "invalid_route" });
+		}
+	});
+
 	it("releases exactly once when plugin dispatch fails before producing a response", async () => {
 		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
 		Object.defineProperty(api, "routes", {
@@ -313,4 +331,10 @@ function runningContext(
 		storage: { path: (path) => `/tmp/${instanceId}/${path}` },
 		tasks: { track: async (_label, task) => task },
 	});
+}
+
+function nestedEncoding(encodedValue: string, additionalDepth: number): string {
+	let result = encodedValue;
+	for (let depth = 0; depth < additionalDepth; depth += 1) result = encodeURIComponent(result);
+	return result;
 }
