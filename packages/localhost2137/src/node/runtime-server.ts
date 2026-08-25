@@ -34,6 +34,9 @@ export class RuntimeServer {
 	readonly #http: HttpServerOwner;
 	readonly #runtime: InstanceRuntimeOwner;
 	#closeReport: Promise<void> | undefined;
+	#fatalCause: unknown;
+	#fatalOccurred = false;
+	readonly #fatalListeners = new Set<(cause: unknown) => void>();
 	#ownerReport: Promise<void> | undefined;
 	#settled: Promise<void> | undefined;
 	#start: Promise<HttpServerAddress> | undefined;
@@ -41,7 +44,19 @@ export class RuntimeServer {
 	constructor(runtime: InstanceRuntimeOwner, http: HttpServerOwner) {
 		this.#runtime = runtime;
 		this.#http = http;
-		http.onFatal(() => this.#beginFatalShutdown());
+		http.onFatal((cause) => this.#beginFatalShutdown(cause));
+	}
+
+	onFatal(listener: (cause: unknown) => void): () => void {
+		if (typeof listener !== "function") {
+			throw new TypeError("Runtime fatal listener must be a function.");
+		}
+		if (this.#fatalOccurred) {
+			notifyFatalListener(listener, this.#fatalCause);
+			return () => undefined;
+		}
+		this.#fatalListeners.add(listener);
+		return () => this.#fatalListeners.delete(listener);
 	}
 
 	start(options: Readonly<{ host: LoopbackHost; port: number }>): Promise<HttpServerAddress> {
@@ -94,7 +109,13 @@ export class RuntimeServer {
 		}
 	}
 
-	#beginFatalShutdown(): void {
+	#beginFatalShutdown(cause: unknown): void {
+		if (!this.#fatalOccurred) {
+			this.#fatalOccurred = true;
+			this.#fatalCause = cause;
+			for (const listener of this.#fatalListeners) notifyFatalListener(listener, cause);
+			this.#fatalListeners.clear();
+		}
 		this.#beginShutdown(FATAL_SHUTDOWN_TIMEOUT_MS);
 	}
 
@@ -108,6 +129,14 @@ export class RuntimeServer {
 		const runtimeSettlement = invokeOwner(() => this.#runtime.settled());
 		this.#settled = settleOwners([httpSettlement, runtimeSettlement]);
 		void this.#settled.catch(() => undefined);
+	}
+}
+
+function notifyFatalListener(listener: (cause: unknown) => void, cause: unknown): void {
+	try {
+		listener(cause);
+	} catch {
+		// Observers cannot escape the runtime owner's fatal-error boundary.
 	}
 }
 

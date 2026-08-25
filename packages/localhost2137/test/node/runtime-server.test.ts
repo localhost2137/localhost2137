@@ -184,6 +184,36 @@ describe("RuntimeServer", () => {
 		runtimeReport.resolve();
 		vi.useRealTimers();
 	});
+
+	it("notifies fatal observers once, contains observer failures, and replays the cause", () => {
+		const fixture = owners();
+		let notifyFatal: ((cause: unknown) => void) | undefined;
+		fixture.http.onFatal.mockImplementation((listener) => {
+			notifyFatal = listener;
+			return () => undefined;
+		});
+		const server = new RuntimeServer(fixture.runtime, fixture.http);
+		const first = vi.fn(() => {
+			throw new Error("observer failed");
+		});
+		const second = vi.fn();
+		server.onFatal(first);
+		server.onFatal(second);
+		const fatal = new Error("accept loop failed");
+
+		expect(() => notifyFatal?.(fatal)).not.toThrow();
+		notifyFatal?.(new Error("later failure"));
+		const replayed = vi.fn();
+		server.onFatal(replayed);
+
+		expect(first).toHaveBeenCalledOnce();
+		expect(first).toHaveBeenCalledWith(fatal);
+		expect(second).toHaveBeenCalledOnce();
+		expect(second).toHaveBeenCalledWith(fatal);
+		expect(replayed).toHaveBeenCalledOnce();
+		expect(replayed).toHaveBeenCalledWith(fatal);
+		expect(fixture.runtime.stopAll).toHaveBeenCalledOnce();
+	});
 });
 
 function owners(): Readonly<{
