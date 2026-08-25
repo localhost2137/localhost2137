@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BasePluginContext, RunningPluginContext } from "../../src/authoring/context.js";
 import { parseInstanceId, parseServiceKey } from "../../src/kernel/identifiers.js";
-import { SeedNotAllowedError } from "../../src/kernel/instance-lifecycle.js";
+import type { MonotonicClock } from "../../src/kernel/instance-leases.js";
+import { InstanceSeedError, SeedNotAllowedError } from "../../src/kernel/instance-lifecycle.js";
 import {
 	InstanceAlreadyExistsError,
 	InstanceCreationError,
@@ -20,6 +21,11 @@ import {
 	type ServiceLifecycleHooks,
 	ServiceStateDowngradeError,
 } from "../../src/kernel/service-lifecycle.js";
+import {
+	type ScheduledTask,
+	type TaskScheduler,
+	TaskTrackerClosedError,
+} from "../../src/kernel/task-tracker.js";
 import { NodeInstanceStorage } from "../../src/node/instance-storage.js";
 import { nodeMonotonicClock } from "../../src/node/monotonic-clock.js";
 import { nodeTaskScheduler } from "../../src/node/task-scheduler.js";
@@ -261,15 +267,135 @@ describe("InstanceManager with durable Node storage", () => {
 		expect(stage).not.toHaveBeenCalled();
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 	});
+
+	it("retires a reset generation and gives the replacement fresh runtime capabilities", async () => {
+		const stoppedContexts: RunningPluginContext<unknown, unknown>[] = [];
+		const fixture = await managerFixture(instanceTemplate({ stoppedContexts }));
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const previous = fixture.manager.service("dev", "fixture").runningContext();
+
+		await fixture.manager.reset("dev", { seed: false, timeoutMs: 1_000 });
+
+		const replacement = fixture.manager.service("dev", "fixture").runningContext();
+		expect(stoppedContexts).toHaveLength(1);
+		expect(stoppedContexts[0]?.signal.aborted).toBe(true);
+		expect(previous.signal.aborted).toBe(true);
+		expect(() => previous.tasks.track("late old-generation work", Promise.resolve())).toThrow(
+			TaskTrackerClosedError,
+		);
+		expect(replacement.signal.aborted).toBe(false);
+		await expect(
+			replacement.tasks.track("replacement work", Promise.resolve("completed")),
+		).resolves.toBe("completed");
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it("shutdown aborts an admitted create before it can become live", async () => {
+		const createEntered = deferred<BasePluginContext<unknown>>();
+		const fixture = await managerFixture(
+			instanceTemplate({
+				createBarrier: async (context) => {
+					createEntered.resolve(context);
+					throw await abortReason(context.signal);
+				},
+			}),
+		);
+		const creating = fixture.manager.create({
+			id: "delayed",
+			persistence: "persistent",
+			seed: false,
+		});
+		const createContext = await createEntered.promise;
+
+		const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
+
+		await expect(creating).rejects.toBeInstanceOf(InstanceCreationError);
+		await expect(stopping).resolves.toBeUndefined();
+		expect(createContext.signal.aborted).toBe(true);
+		expect(await fixture.storage.readInstance(parseInstanceId("delayed"))).toBeUndefined();
+		await expect(
+			fixture.manager.create({ id: "too-late", persistence: "persistent", seed: false }),
+		).rejects.toBeInstanceOf(InstanceRuntimeClosedError);
+	});
+
+	it("persists a deterministic seed failure when cancellation reaches its hook", async () => {
+		const seedEntered = deferred<RunningPluginContext<unknown, unknown>>();
+		const fixture = await managerFixture(
+			instanceTemplate({
+				configuredSeed: "fixture-seed",
+				seedBarrier: async (context) => {
+					seedEntered.resolve(context);
+					throw await abortReason(context.signal);
+				},
+			}),
+		);
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const cancellation = new AbortController();
+		const seeding = fixture.manager.seed("dev", {
+			signal: cancellation.signal,
+			timeoutMs: 1_000,
+		});
+		const seedContext = await seedEntered.promise;
+
+		cancellation.abort(new Error("seed request disconnected"));
+
+		await expect(seeding).rejects.toBeInstanceOf(InstanceSeedError);
+		expect(seedContext.signal.aborted).toBe(true);
+		expect(await fixture.manager.get("dev")).toMatchObject({
+			seedStatus: "seed_failed",
+			status: "seed_failed",
+		});
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+
+		const restarted = await managerFixture(instanceTemplate(), fixture.directory);
+		await restarted.manager.startPersisted();
+		expect(await restarted.manager.get("dev")).toMatchObject({
+			seedStatus: "seed_failed",
+			status: "seed_failed",
+		});
+		await restarted.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it("uses the mutation deadline inside an admitted seed hook", async () => {
+		const time = new ManualTime();
+		const seedEntered = deferred<RunningPluginContext<unknown, unknown>>();
+		const fixture = await managerFixture(
+			instanceTemplate({
+				configuredSeed: "fixture-seed",
+				seedBarrier: async (context) => {
+					seedEntered.resolve(context);
+					throw await abortReason(context.signal);
+				},
+			}),
+			undefined,
+			{ monotonicClock: time, scheduler: time },
+		);
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const seeding = fixture.manager.seed("dev", { timeoutMs: 10 });
+		const seedContext = await seedEntered.promise;
+
+		time.advance(10);
+
+		await expect(seeding).rejects.toBeInstanceOf(InstanceSeedError);
+		expect(seedContext.signal.aborted).toBe(true);
+		expect(await fixture.manager.get("dev")).toMatchObject({
+			seedStatus: "seed_failed",
+			status: "seed_failed",
+		});
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+	});
 });
 
 interface TemplateOptions {
 	readonly beforeCreate?: (instanceId: string) => void;
 	readonly configuredSeed?: string;
+	readonly createBarrier?: (context: BasePluginContext<unknown>) => Promise<void>;
 	readonly pluginId?: string;
+	readonly seedBarrier?: (context: RunningPluginContext<unknown, unknown>) => Promise<void>;
 	readonly seedCalls?: string[];
 	readonly seedFailure?: Error;
 	readonly stateVersion?: number;
+	readonly stoppedContexts?: RunningPluginContext<unknown, unknown>[];
 	readonly updateCalls?: string[];
 }
 
@@ -278,6 +404,7 @@ function instanceTemplate(options: TemplateOptions = {}): InstanceTemplate {
 	const hooks: ServiceLifecycleHooks<unknown, unknown, unknown> = Object.freeze({
 		create: async (context: BasePluginContext<unknown>) => {
 			options.beforeCreate?.(context.instanceId);
+			await options.createBarrier?.(context);
 			const attempt = (createAttempts.get(context.instanceId) ?? 0) + 1;
 			createAttempts.set(context.instanceId, attempt);
 			await writeFile(
@@ -287,11 +414,14 @@ function instanceTemplate(options: TemplateOptions = {}): InstanceTemplate {
 		},
 		seed: async (context: RunningPluginContext<unknown, unknown>, value: unknown) => {
 			if (options.seedFailure) throw options.seedFailure;
+			await options.seedBarrier?.(context);
 			options.seedCalls?.push(`${context.instanceId}:${String(value)}`);
 		},
 		start: async (context: BasePluginContext<unknown>) =>
 			JSON.parse(await readFile(context.storage.path("state.json"), "utf8")),
-		stop: () => undefined,
+		stop: (context) => {
+			options.stoppedContexts?.push(context);
+		},
 		update: (context, version) => {
 			options.updateCalls?.push(`${context.instanceId}:${version.from}->${version.to}`);
 		},
@@ -323,6 +453,10 @@ function emptyTemplate(): InstanceTemplate {
 async function managerFixture(
 	template: InstanceTemplate,
 	existingDirectory?: string,
+	coordination: Readonly<{
+		monotonicClock?: MonotonicClock;
+		scheduler?: TaskScheduler;
+	}> = {},
 ): Promise<
 	Readonly<{ directory: string; manager: InstanceManager; storage: NodeInstanceStorage }>
 > {
@@ -334,8 +468,8 @@ async function managerFixture(
 		correlationId: () => `correlation-${++sequence}`,
 		fetch: async () => new Response(null, { status: 204 }),
 		logLimits: { maxBytes: 100_000, maxEntries: 100 },
-		monotonicClock: nodeMonotonicClock,
-		scheduler: nodeTaskScheduler,
+		monotonicClock: coordination.monotonicClock ?? nodeMonotonicClock,
+		scheduler: coordination.scheduler ?? nodeTaskScheduler,
 		storage,
 		time: fixedTime,
 		token: () => `token${String(++sequence).padStart(8, "0")}`,
@@ -366,4 +500,52 @@ function collectErrors(cause: unknown): readonly unknown[] {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return typeof value === "object" && value !== null;
+}
+
+function abortReason(signal: AbortSignal): Promise<unknown> {
+	if (signal.aborted) return Promise.resolve(signal.reason);
+	return new Promise((resolve) => {
+		signal.addEventListener("abort", () => resolve(signal.reason), { once: true });
+	});
+}
+
+function deferred<Value>(): Readonly<{
+	promise: Promise<Value>;
+	resolve(value: Value): void;
+}> {
+	let resolve!: (value: Value) => void;
+	const promise = new Promise<Value>((settle) => {
+		resolve = settle;
+	});
+	return Object.freeze({ promise, resolve });
+}
+
+class ManualTime implements MonotonicClock, TaskScheduler {
+	readonly #scheduled = new Set<{
+		readonly callback: () => void;
+		readonly deadline: number;
+	}>();
+	#now = 0;
+
+	nowMilliseconds(): number {
+		return this.#now;
+	}
+
+	schedule(delayMs: number, callback: () => void): ScheduledTask {
+		const scheduled = { callback, deadline: this.#now + delayMs };
+		this.#scheduled.add(scheduled);
+		return Object.freeze({ cancel: () => this.#scheduled.delete(scheduled) });
+	}
+
+	advance(milliseconds: number): void {
+		this.#now += milliseconds;
+		while (true) {
+			const next = [...this.#scheduled]
+				.filter(({ deadline }) => deadline <= this.#now)
+				.sort((left, right) => left.deadline - right.deadline)[0];
+			if (!next) return;
+			this.#scheduled.delete(next);
+			next.callback();
+		}
+	}
 }
