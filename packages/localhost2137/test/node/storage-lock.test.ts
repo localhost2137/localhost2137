@@ -1,27 +1,35 @@
 import { constants } from "node:fs";
 import {
-	link,
 	mkdir,
 	mkdtemp,
 	open,
+	readdir,
 	readFile,
 	rename,
 	rm,
+	rmdir,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-	acquireStorageLock,
-	StorageLockError,
-	type StorageLockFileSystem,
-} from "../../src/node/storage-lock.js";
+import { acquireStorageLock, type StorageLockFileSystem } from "../../src/node/storage-lock.js";
 import { storagePaths } from "../../src/node/storage-paths.js";
 
 const temporaryDirectories: string[] = [];
-const nodeFileSystem: StorageLockFileSystem = { link, mkdir, open, unlink };
+const nodeFileSystem: StorageLockFileSystem = {
+	async createDirectory(path) {
+		await mkdir(path);
+	},
+	async ensureDirectory(path) {
+		await mkdir(path, { recursive: true });
+	},
+	open,
+	readDirectory: readdir,
+	removeDirectory: rmdir,
+	unlink,
+};
 
 afterEach(async () => {
 	await Promise.all(
@@ -45,47 +53,75 @@ describe("storage root lock", () => {
 		await first.release();
 	});
 
-	it("quarantines a stale owner and acquires with a new token", async () => {
+	it("refuses automatic takeover of a stale owner", async () => {
 		const paths = storagePaths(await temporaryDirectory());
 		const first = await acquireStorageLock(paths, { ownerToken: () => "stale-owner" });
-		const second = await acquireStorageLock(paths, {
-			isProcessAlive: async () => false,
-			ownerToken: () => "new-owner",
-		});
 
-		const current = JSON.parse(await readFile(paths.lock, "utf8"));
-		expect(current.ownerToken).toBe("new-owner");
-		await expect(first.release()).rejects.toBeInstanceOf(StorageLockError);
+		await expect(
+			acquireStorageLock(paths, {
+				isProcessAlive: async () => false,
+				ownerToken: () => "new-owner",
+			}),
+		).rejects.toMatchObject({
+			code: "LOCK_STALE",
+			message: expect.stringContaining("remove that exact lock path explicitly"),
+			owner: { pid: process.pid },
+		});
+		expect(await readOwner(paths.lock)).toMatchObject({ ownerToken: "stale-owner" });
+
+		await first.release();
+		const second = await acquireStorageLock(paths, { ownerToken: () => "new-owner" });
 		await second.release();
 	});
 
-	it("does not steal a recently incomplete lock file", async () => {
+	it("fails closed for an incomplete lock directory", async () => {
 		const paths = storagePaths(await temporaryDirectory());
-		await writeFile(paths.lock, "", { flag: "wx" });
+		await mkdir(paths.lock);
 
-		await expect(acquireStorageLock(paths)).rejects.toMatchObject({ code: "LOCK_CORRUPT" });
+		await expect(acquireStorageLock(paths)).rejects.toMatchObject({
+			code: "LOCK_CORRUPT",
+			message: expect.stringContaining("Retry if another runtime is starting"),
+		});
 	});
 
-	it("release is idempotent", async () => {
+	it("reports the obsolete lock-file format without replacing it", async () => {
 		const paths = storagePaths(await temporaryDirectory());
-		const lock = await acquireStorageLock(paths);
-		await lock.release();
-		await lock.release();
+		await writeFile(paths.lock, `${JSON.stringify(lockOwner("old-owner", 101))}\n`, {
+			flag: "wx",
+		});
+
+		await expect(acquireStorageLock(paths)).rejects.toMatchObject({
+			code: "LOCK_CORRUPT",
+			message: expect.stringContaining("obsolete lock-file format"),
+		});
+		expect(JSON.parse(await readFile(paths.lock, "utf8"))).toMatchObject({
+			ownerToken: "old-owner",
+		});
 	});
 
-	it("observes ownership bytes and identity through one open file handle", async () => {
+	it("release is idempotent and permits a later owner", async () => {
 		const paths = storagePaths(await temporaryDirectory());
-		await writeLock(paths.lock, lockOwner("stale-owner", 101));
+		const first = await acquireStorageLock(paths, { ownerToken: () => "owner-one" });
+		await first.release();
+		await first.release();
+
+		const second = await acquireStorageLock(paths, { ownerToken: () => "owner-two" });
+		await second.release();
+	});
+
+	it("observes owner metadata through one open file handle", async () => {
+		const paths = storagePaths(await temporaryDirectory());
+		await writeLockDirectory(paths.lock, lockOwner("stale-owner", 101));
 		const retiredPath = `${paths.lock}.retired`;
 		let replaced = false;
 		const fileSystem: StorageLockFileSystem = {
 			...nodeFileSystem,
 			async open(path, flags, mode) {
 				const handle = await open(path, flags, mode);
-				if (path === paths.lock && flags === constants.O_RDONLY && !replaced) {
+				if (path === join(paths.lock, "stale-owner") && flags === constants.O_RDONLY && !replaced) {
 					replaced = true;
 					await rename(paths.lock, retiredPath);
-					await writeLock(paths.lock, lockOwner("replacement-owner", 202));
+					await writeLockDirectory(paths.lock, lockOwner("replacement-owner", 202));
 				}
 				return handle;
 			},
@@ -94,70 +130,65 @@ describe("storage root lock", () => {
 		await expect(
 			acquireStorageLock(paths, {
 				fileSystem,
-				isProcessAlive: async (pid) => pid === 202,
+				isProcessAlive: async () => false,
 				ownerToken: () => "candidate-owner",
-				quarantineToken: () => "observe-race",
 			}),
-		).rejects.toMatchObject({ code: "LOCKED", owner: { pid: 202 } });
-		expect(JSON.parse(await readFile(paths.lock, "utf8"))).toMatchObject({
+		).rejects.toMatchObject({ code: "LOCK_STALE", owner: { pid: 101 } });
+		expect(await readOwner(paths.lock)).toMatchObject({
 			ownerToken: "replacement-owner",
 		});
 	});
 
-	it("does not quarantine a replacement installed after observation", async () => {
-		const paths = storagePaths(await temporaryDirectory());
-		await writeLock(paths.lock, lockOwner("stale-owner", 101));
-		const retiredPath = `${paths.lock}.retired`;
-		let replaced = false;
-		const fileSystem: StorageLockFileSystem = {
-			...nodeFileSystem,
-			async link(existingPath, newPath) {
-				if (existingPath === paths.lock && !replaced) {
-					replaced = true;
-					await rename(paths.lock, retiredPath);
-					await writeLock(paths.lock, lockOwner("replacement-owner", 202));
-				}
-				await link(existingPath, newPath);
-			},
-		};
-
-		await expect(
-			acquireStorageLock(paths, {
-				fileSystem,
-				isProcessAlive: async (pid) => pid === 202,
-				ownerToken: () => "candidate-owner",
-				quarantineToken: () => "replace-race",
-			}),
-		).rejects.toMatchObject({ code: "LOCKED", owner: { pid: 202 } });
-		expect(JSON.parse(await readFile(paths.lock, "utf8"))).toMatchObject({
-			ownerToken: "replacement-owner",
-		});
-	});
-
-	it("refuses to release a path replaced after ownership observation", async () => {
+	it("preserves a replacement installed immediately before owner removal", async () => {
 		const paths = storagePaths(await temporaryDirectory());
 		const retiredPath = `${paths.lock}.retired`;
-		let replaceDuringLink = false;
+		let replaceBeforeOwnerRemoval = false;
 		const fileSystem: StorageLockFileSystem = {
 			...nodeFileSystem,
-			async link(existingPath, newPath) {
-				if (existingPath === paths.lock && replaceDuringLink) {
-					replaceDuringLink = false;
+			async unlink(path) {
+				if (path === join(paths.lock, "original-owner") && replaceBeforeOwnerRemoval) {
+					replaceBeforeOwnerRemoval = false;
 					await rename(paths.lock, retiredPath);
-					await writeLock(paths.lock, lockOwner("replacement-owner", 202));
+					await writeLockDirectory(paths.lock, lockOwner("replacement-owner", 202));
 				}
-				await link(existingPath, newPath);
+				await unlink(path);
 			},
 		};
 		const lock = await acquireStorageLock(paths, {
 			fileSystem,
 			ownerToken: () => "original-owner",
-			quarantineToken: () => "release-race",
 		});
-		replaceDuringLink = true;
+		replaceBeforeOwnerRemoval = true;
 
 		await expect(lock.release()).rejects.toMatchObject({ code: "LOCK_OWNERSHIP_LOST" });
-		expect(JSON.parse(await readFile(paths.lock, "utf8"))).toMatchObject({
+		expect(await readOwner(paths.lock)).toMatchObject({
+			ownerToken: "replacement-owner",
+		});
+	});
+
+	it("preserves a replacement installed before the empty lock directory is removed", async () => {
+		const paths = storagePaths(await temporaryDirectory());
+		const retiredPath = `${paths.lock}.retired`;
+		let replaceBeforeDirectoryRemoval = false;
+		const fileSystem: StorageLockFileSystem = {
+			...nodeFileSystem,
+			async removeDirectory(path) {
+				if (path === paths.lock && replaceBeforeDirectoryRemoval) {
+					replaceBeforeDirectoryRemoval = false;
+					await rename(paths.lock, retiredPath);
+					await writeLockDirectory(paths.lock, lockOwner("replacement-owner", 202));
+				}
+				await rmdir(path);
+			},
+		};
+		const lock = await acquireStorageLock(paths, {
+			fileSystem,
+			ownerToken: () => "original-owner",
+		});
+		replaceBeforeDirectoryRemoval = true;
+
+		await expect(lock.release()).rejects.toMatchObject({ code: "LOCK_OWNERSHIP_LOST" });
+		expect(await readOwner(paths.lock)).toMatchObject({
 			ownerToken: "replacement-owner",
 		});
 	});
@@ -170,9 +201,9 @@ describe("storage root lock", () => {
 			"invalid timestamp",
 			{ ...lockOwner("invalid-owner", 101), acquiredAt: "2026-02-30T12:00:00.000Z" },
 		],
-	])("rejects recently written metadata with a %s", async (_label, owner) => {
+	])("rejects metadata with a %s", async (_label, owner) => {
 		const paths = storagePaths(await temporaryDirectory());
-		await writeLock(paths.lock, owner);
+		await writeLockDirectory(paths.lock, owner);
 
 		await expect(acquireStorageLock(paths)).rejects.toMatchObject({ code: "LOCK_CORRUPT" });
 	});
@@ -187,8 +218,18 @@ function lockOwner(ownerToken: string, pid: number) {
 	};
 }
 
-async function writeLock(path: string, owner: unknown): Promise<void> {
-	await writeFile(path, `${JSON.stringify(owner)}\n`);
+async function readOwner(lockPath: string): Promise<Record<string, unknown>> {
+	const entries = await readdir(lockPath);
+	expect(entries).toHaveLength(1);
+	return JSON.parse(await readFile(join(lockPath, entries[0] ?? "missing"), "utf8"));
+}
+
+async function writeLockDirectory(
+	lockPath: string,
+	owner: Readonly<{ ownerToken: string }>,
+): Promise<void> {
+	await mkdir(lockPath);
+	await writeFile(join(lockPath, owner.ownerToken), `${JSON.stringify(owner)}\n`);
 }
 
 async function temporaryDirectory(): Promise<string> {

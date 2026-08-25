@@ -1,11 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { type FileHandle, link, mkdir, open, unlink } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { type FileHandle, mkdir, open, readdir, rmdir, unlink } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { StoragePaths } from "./storage-paths.js";
 
 const LOCK_SCHEMA_VERSION = 1;
-const INCOMPLETE_LOCK_GRACE_MS = 5_000;
 const OWNER_TOKEN_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
 
 interface LockOwner {
@@ -15,41 +14,43 @@ interface LockOwner {
 	readonly schemaVersion: 1;
 }
 
-interface LockFileIdentity {
-	readonly device: number;
-	readonly inode: number;
-}
-
-interface ObservedLock {
-	readonly bytes: string;
-	readonly identity: LockFileIdentity;
-	readonly modifiedAtMs: number;
-	readonly owner?: LockOwner;
-}
-
 export interface StorageLockFileSystem {
-	link(existingPath: string, newPath: string): Promise<void>;
-	mkdir(path: string, options: Readonly<{ recursive: true }>): Promise<string | undefined>;
+	createDirectory(path: string): Promise<void>;
+	ensureDirectory(path: string): Promise<void>;
 	open(path: string, flags: number, mode?: number): Promise<FileHandle>;
+	readDirectory(path: string): Promise<readonly string[]>;
+	removeDirectory(path: string): Promise<void>;
 	unlink(path: string): Promise<void>;
 }
 
-const nodeStorageLockFileSystem: StorageLockFileSystem = { link, mkdir, open, unlink };
+const nodeStorageLockFileSystem: StorageLockFileSystem = {
+	async createDirectory(path) {
+		await mkdir(path);
+	},
+	async ensureDirectory(path) {
+		await mkdir(path, { recursive: true });
+	},
+	open,
+	readDirectory: readdir,
+	removeDirectory: rmdir,
+	unlink,
+};
 
 export interface StorageLockOptions {
 	readonly fileSystem?: StorageLockFileSystem;
 	readonly isProcessAlive?: (pid: number) => Promise<boolean>;
 	readonly now?: () => Date;
 	readonly ownerToken?: () => string;
-	readonly quarantineToken?: () => string;
 }
 
+type StorageLockErrorCode = "LOCKED" | "LOCK_CORRUPT" | "LOCK_OWNERSHIP_LOST" | "LOCK_STALE";
+
 export class StorageLockError extends Error {
-	readonly code: "LOCKED" | "LOCK_CORRUPT" | "LOCK_OWNERSHIP_LOST";
+	readonly code: StorageLockErrorCode;
 	readonly owner?: Readonly<{ acquiredAt: string; pid: number }>;
 
 	constructor(
-		code: "LOCKED" | "LOCK_CORRUPT" | "LOCK_OWNERSHIP_LOST",
+		code: StorageLockErrorCode,
 		message: string,
 		owner?: Readonly<{ acquiredAt: string; pid: number }>,
 	) {
@@ -63,43 +64,35 @@ export class StorageLockError extends Error {
 export class StorageLock {
 	readonly #fileSystem: StorageLockFileSystem;
 	readonly #lockPath: string;
-	readonly #ownerToken: string;
-	readonly #quarantineDirectory: string;
-	readonly #quarantineToken: () => string;
+	readonly #ownerPath: string;
 	#released = false;
 
 	constructor(input: {
 		readonly fileSystem: StorageLockFileSystem;
 		readonly lockPath: string;
-		readonly ownerToken: string;
-		readonly quarantineDirectory: string;
-		readonly quarantineToken: () => string;
+		readonly ownerPath: string;
 	}) {
 		this.#fileSystem = input.fileSystem;
 		this.#lockPath = input.lockPath;
-		this.#ownerToken = input.ownerToken;
-		this.#quarantineDirectory = input.quarantineDirectory;
-		this.#quarantineToken = input.quarantineToken;
+		this.#ownerPath = input.ownerPath;
 	}
 
 	async release(): Promise<void> {
 		if (this.#released) return;
-		const observed = await observeIfPresent(this.#fileSystem, this.#lockPath);
-		if (!observed) {
-			this.#released = true;
-			return;
+		try {
+			await this.#fileSystem.unlink(this.#ownerPath);
+		} catch (cause) {
+			if (hasCode(cause, "ENOENT")) throw ownershipLost(this.#lockPath);
+			throw cause;
 		}
-		if (observed.owner?.ownerToken !== this.#ownerToken) {
-			throw ownershipLost(this.#lockPath);
+		try {
+			await this.#fileSystem.removeDirectory(this.#lockPath);
+		} catch (cause) {
+			if (hasCode(cause, "ENOENT") || hasCode(cause, "ENOTEMPTY")) {
+				throw ownershipLost(this.#lockPath);
+			}
+			throw cause;
 		}
-		const removed = await quarantineObservedLock(
-			this.#fileSystem,
-			this.#lockPath,
-			this.#quarantineDirectory,
-			observed,
-			this.#quarantineToken(),
-		);
-		if (!removed) throw ownershipLost(this.#lockPath);
 		this.#released = true;
 	}
 }
@@ -109,13 +102,10 @@ export async function acquireStorageLock(
 	options: StorageLockOptions = {},
 ): Promise<StorageLock> {
 	const fileSystem = options.fileSystem ?? nodeStorageLockFileSystem;
-	const lockQuarantineDirectory = resolve(paths.trash, "locks");
-	await fileSystem.mkdir(paths.root, { recursive: true });
-	await fileSystem.mkdir(lockQuarantineDirectory, { recursive: true });
+	await fileSystem.ensureDirectory(paths.root);
 	const now = options.now ?? (() => new Date());
 	const isProcessAlive = options.isProcessAlive ?? nodeProcessIsAlive;
 	const ownerToken = options.ownerToken?.() ?? randomUUID();
-	const quarantineToken = options.quarantineToken ?? randomUUID;
 	assertSafeToken(ownerToken, "ownerToken");
 	const owner: LockOwner = {
 		acquiredAt: now().toISOString(),
@@ -123,66 +113,93 @@ export async function acquireStorageLock(
 		pid: process.pid,
 		schemaVersion: LOCK_SCHEMA_VERSION,
 	};
+	const ownerPath = resolve(paths.lock, ownerToken);
 
 	for (let attempt = 0; attempt < 4; attempt += 1) {
 		try {
-			await createLockFile(fileSystem, paths.lock, owner);
-			return new StorageLock({
-				fileSystem,
-				lockPath: paths.lock,
-				ownerToken,
-				quarantineDirectory: lockQuarantineDirectory,
-				quarantineToken,
-			});
+			await fileSystem.createDirectory(paths.lock);
 		} catch (cause) {
 			if (!hasCode(cause, "EEXIST")) throw cause;
-		}
-		const observed = await observeIfPresent(fileSystem, paths.lock);
-		if (!observed) continue;
-		if (!observed.owner) {
-			if (now().getTime() - observed.modifiedAtMs < INCOMPLETE_LOCK_GRACE_MS) {
+			const observed = await observeLockOwner(fileSystem, paths.lock);
+			if (!observed) continue;
+			if (observed.kind === "corrupt") {
+				throw corruptLock(paths.lock, observed.reason);
+			}
+			if (await isProcessAlive(observed.owner.pid)) {
 				throw new StorageLockError(
-					"LOCK_CORRUPT",
-					`Storage lock ${paths.lock} is incomplete; retry after its initialization grace period.`,
+					"LOCKED",
+					`Storage root is already locked by process ${observed.owner.pid} since ${observed.owner.acquiredAt}.`,
+					{ acquiredAt: observed.owner.acquiredAt, pid: observed.owner.pid },
 				);
 			}
-			await quarantineObservedLock(
-				fileSystem,
-				paths.lock,
-				lockQuarantineDirectory,
-				observed,
-				quarantineToken(),
-			);
-			continue;
+			throw new StorageLockError("LOCK_STALE", staleLockMessage(paths.lock, observed.owner), {
+				acquiredAt: observed.owner.acquiredAt,
+				pid: observed.owner.pid,
+			});
 		}
-		if (await isProcessAlive(observed.owner.pid)) {
-			throw new StorageLockError(
-				"LOCKED",
-				`Storage root is already locked by process ${observed.owner.pid} since ${observed.owner.acquiredAt}.`,
-				{ acquiredAt: observed.owner.acquiredAt, pid: observed.owner.pid },
-			);
+
+		try {
+			await createOwnerFile(fileSystem, ownerPath, owner);
+		} catch (cause) {
+			await fileSystem.removeDirectory(paths.lock).catch(() => undefined);
+			throw cause;
 		}
-		await quarantineObservedLock(
-			fileSystem,
-			paths.lock,
-			lockQuarantineDirectory,
-			observed,
-			quarantineToken(),
-		);
+		return new StorageLock({ fileSystem, lockPath: paths.lock, ownerPath });
 	}
+
 	throw new StorageLockError(
 		"LOCKED",
 		`Storage lock ${paths.lock} changed repeatedly while acquiring it; retry the command.`,
 	);
 }
 
-async function observeIfPresent(
+type LockObservation =
+	| Readonly<{ kind: "corrupt"; reason: string }>
+	| Readonly<{ kind: "owned"; owner: LockOwner }>;
+
+async function observeLockOwner(
 	fileSystem: StorageLockFileSystem,
 	lockPath: string,
-): Promise<ObservedLock | undefined> {
+): Promise<LockObservation | undefined> {
+	let entries: readonly string[];
+	try {
+		entries = await fileSystem.readDirectory(lockPath);
+	} catch (cause) {
+		if (hasCode(cause, "ENOENT")) return undefined;
+		if (hasCode(cause, "ENOTDIR")) {
+			return { kind: "corrupt", reason: "it uses the obsolete lock-file format" };
+		}
+		throw cause;
+	}
+	if (entries.length !== 1) {
+		return {
+			kind: "corrupt",
+			reason:
+				entries.length === 0 ? "its owner record is missing" : "it contains multiple owner records",
+		};
+	}
+	const ownerToken = entries[0];
+	if (!ownerToken || !OWNER_TOKEN_PATTERN.test(ownerToken)) {
+		return { kind: "corrupt", reason: "its owner record name is invalid" };
+	}
+	const owner = await readOwnerFile(fileSystem, resolve(lockPath, ownerToken));
+	if (owner === undefined) return undefined;
+	if (owner === null) {
+		return { kind: "corrupt", reason: "its owner record metadata is invalid" };
+	}
+	if (owner.ownerToken !== ownerToken) {
+		return { kind: "corrupt", reason: "its owner record identity does not match its name" };
+	}
+	return { kind: "owned", owner };
+}
+
+async function readOwnerFile(
+	fileSystem: StorageLockFileSystem,
+	ownerPath: string,
+): Promise<LockOwner | null | undefined> {
 	let handle: FileHandle;
 	try {
-		handle = await fileSystem.open(lockPath, constants.O_RDONLY);
+		handle = await fileSystem.open(ownerPath, constants.O_RDONLY);
 	} catch (cause) {
 		if (hasCode(cause, "ENOENT")) return undefined;
 		throw cause;
@@ -199,67 +216,13 @@ async function observeIfPresent(
 		) {
 			return undefined;
 		}
-		const owner = parseLockOwner(bytes);
-		return {
-			bytes,
-			identity: { device: after.dev, inode: after.ino },
-			modifiedAtMs: after.mtimeMs,
-			...(owner ? { owner } : {}),
-		};
+		return parseLockOwner(bytes) ?? null;
 	} finally {
 		await handle.close();
 	}
 }
 
-async function quarantineObservedLock(
-	fileSystem: StorageLockFileSystem,
-	lockPath: string,
-	quarantineDirectory: string,
-	observed: ObservedLock,
-	quarantineToken: string,
-): Promise<boolean> {
-	assertSafeToken(quarantineToken, "quarantineToken");
-	const identity = observed.owner?.ownerToken ?? hashBytes(observed.bytes);
-	const quarantinePath = resolve(
-		quarantineDirectory,
-		`${basename(lockPath)}-${identity}-${quarantineToken}`,
-	);
-	try {
-		await fileSystem.link(lockPath, quarantinePath);
-	} catch (cause) {
-		if (hasCode(cause, "ENOENT")) return false;
-		throw cause;
-	}
-	const linked = await observeIfPresent(fileSystem, quarantinePath);
-	if (!linked || !sameObservedLock(observed, linked)) {
-		await removeKnownLink(fileSystem, quarantinePath);
-		return false;
-	}
-	const current = await observeIfPresent(fileSystem, lockPath);
-	if (!current || !sameObservedLock(observed, current)) return false;
-	await fileSystem.unlink(lockPath);
-	return true;
-}
-
-function sameObservedLock(left: ObservedLock, right: ObservedLock): boolean {
-	return (
-		left.identity.device === right.identity.device &&
-		left.identity.inode === right.identity.inode &&
-		left.bytes === right.bytes &&
-		left.owner?.ownerToken === right.owner?.ownerToken
-	);
-}
-
-async function removeKnownLink(
-	fileSystem: StorageLockFileSystem,
-	quarantinePath: string,
-): Promise<void> {
-	await fileSystem.unlink(quarantinePath).catch((cause: unknown) => {
-		if (!hasCode(cause, "ENOENT")) throw cause;
-	});
-}
-
-async function createLockFile(
+async function createOwnerFile(
 	fileSystem: StorageLockFileSystem,
 	path: string,
 	owner: LockOwner,
@@ -318,8 +281,15 @@ function assertSafeToken(value: string, label: string): void {
 	}
 }
 
-function hashBytes(bytes: string): string {
-	return createHash("sha256").update(bytes).digest("hex");
+function corruptLock(lockPath: string, reason: string): StorageLockError {
+	return new StorageLockError(
+		"LOCK_CORRUPT",
+		`Storage lock ${lockPath} is incomplete or damaged because ${reason}. Retry if another runtime is starting. If the error persists, confirm that no runtime uses this storage root, remove that exact lock path explicitly, and retry.`,
+	);
+}
+
+function staleLockMessage(lockPath: string, owner: LockOwner): string {
+	return `Storage lock ${lockPath} belongs to stopped process ${owner.pid} (acquired ${owner.acquiredAt}). Automatic takeover is disabled because replacing a lock path cannot be made conditional with the Node filesystem API. Confirm that no runtime uses this storage root, remove that exact lock path explicitly, and retry.`;
 }
 
 function ownershipLost(lockPath: string): StorageLockError {
