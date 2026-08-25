@@ -32,6 +32,11 @@ export interface AdmittedMutationOptions extends LifecycleMutationOptions {
 	readonly runtimeSignal: AbortSignal;
 }
 
+type ResetCompletion = Readonly<{
+	failures: readonly unknown[];
+	kind: "finalized" | "pending";
+}>;
+
 export class InstanceCreationError extends AggregateError {
 	constructor(causes: readonly unknown[]) {
 		super(causes, "Instance creation failed; its partial storage was quarantined.");
@@ -249,20 +254,8 @@ export class DurableInstanceMutations {
 			committedSummary = summary;
 			this.#registry.replace(previous, startedReplacement);
 			const completionFailures: unknown[] = readyWarning ? [readyWarning] : [];
-			let transitionCommitted = false;
-			try {
-				await this.#storage.commitTransition(transition);
-				transitionCommitted = true;
-			} catch (cause) {
-				completionFailures.push(cause);
-				transitionCommitted = isCommittedWrite(cause, "commit_transition");
-			}
-			if (transitionCommitted && !scope.signal.aborted) {
-				await this.#finalizePendingReset(startedReplacement, scope).catch((cause: unknown) => {
-					completionFailures.push(cause);
-				});
-			}
-			if (scope.signal.aborted) completionFailures.push(scope.signal.reason);
+			const completion = await this.#completePendingReset(startedReplacement, scope);
+			completionFailures.push(...completion.failures);
 			if (completionFailures.length > 0) {
 				throw new InstanceMutationCommittedError("reset", completionFailures, summary);
 			}
@@ -418,28 +411,53 @@ export class DurableInstanceMutations {
 	}
 
 	async #finalizePendingReset(active: ActiveInstance, scope: MutationScope): Promise<void> {
+		const completion = await this.#completePendingReset(active, scope);
+		if (completion.failures.length === 0) return;
+		throw new AggregateError(
+			completion.failures,
+			completion.kind === "finalized"
+				? `Reset finalization for instance "${active.id.value}" committed with durability warnings.`
+				: `Reset finalization for instance "${active.id.value}" remains pending.`,
+		);
+	}
+
+	async #completePendingReset(
+		active: ActiveInstance,
+		scope: MutationScope,
+	): Promise<ResetCompletion> {
 		const transitionId = active.manifest.transition?.id;
-		if (!transitionId) return;
+		if (!transitionId) return Object.freeze({ failures: Object.freeze([]), kind: "finalized" });
 		const pending = active.pendingResetTransition;
 		if (!pending || pending.transitionId !== transitionId) {
 			throw new TypeError(`Active instance "${active.id.value}" has incomplete reset metadata.`);
 		}
+		const failures: unknown[] = [];
 		scope.checkpoint();
 		try {
 			await this.#storage.commitTransition(pending);
 		} catch (cause) {
-			if (!isCommittedWrite(cause, "commit_transition")) throw cause;
+			failures.push(cause);
+			if (!isCommittedWrite(cause, "commit_transition")) {
+				return resetCompletion("pending", failures);
+			}
 		}
-		if (scope.signal.aborted) throw scope.signal.reason;
+		if (scope.signal.aborted) {
+			failures.push(scope.signal.reason);
+			return resetCompletion("pending", failures);
+		}
 		const finalized = this.#manifests.clearTransition(active.manifest);
 		try {
 			await this.#storage.writeInstance(active.id, finalized);
 		} catch (cause) {
-			if (!isCommittedWrite(cause, "write_instance")) throw cause;
+			failures.push(cause);
+			if (!isCommittedWrite(cause, "write_instance")) {
+				return resetCompletion("pending", failures);
+			}
 		}
 		active.manifest = finalized;
 		delete active.pendingResetTransition;
 		this.#trash.schedule(transitionId);
+		return resetCompletion("finalized", failures);
 	}
 
 	#factoryOptions(scope: MutationScope): Readonly<{
@@ -456,6 +474,13 @@ export class DurableInstanceMutations {
 			timeoutMs: options.timeoutMs,
 		});
 	}
+}
+
+function resetCompletion(
+	kind: ResetCompletion["kind"],
+	failures: readonly unknown[],
+): ResetCompletion {
+	return Object.freeze({ failures: Object.freeze([...failures]), kind });
 }
 
 function isCommittedWrite(

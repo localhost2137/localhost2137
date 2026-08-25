@@ -55,6 +55,7 @@ describe("committed instance mutations", () => {
 				status: "ready",
 				transition: { kind: "reset" },
 			});
+			expect(fixture.storage.transitionCommitCount).toBe(1);
 
 			if (nextMutation === "reset") {
 				await expect(
@@ -143,6 +144,11 @@ describe("committed instance mutations", () => {
 class FaultInjectingStorage extends NodeInstanceStorage {
 	#failResetFinalization = false;
 	#failSeededManifestSync = false;
+	#transitionCommitCount = 0;
+
+	get transitionCommitCount(): number {
+		return this.#transitionCommitCount;
+	}
 
 	failNextResetFinalization(): void {
 		this.#failResetFinalization = true;
@@ -171,6 +177,13 @@ class FaultInjectingStorage extends NodeInstanceStorage {
 			);
 		}
 		await super.writeInstance(instanceId, manifest);
+	}
+
+	override async commitTransition(
+		transition: Parameters<NodeInstanceStorage["commitTransition"]>[0],
+	): Promise<void> {
+		this.#transitionCommitCount += 1;
+		await super.commitTransition(transition);
 	}
 }
 
