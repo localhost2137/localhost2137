@@ -1,7 +1,7 @@
 # localhost2137 implementation plan
 
-Status: implementation-ready proposal  
-Prepared from: `concept.md` and `design/*`  
+Status: implementation-ready proposal
+Prepared from: `concept.md` and `design/*`
 Date: 2026-08-25
 
 ## 1. Outcome and implementation strategy
@@ -239,7 +239,12 @@ The following shapes describe responsibilities, not final syntax. Exact types sh
 ### 5.1 Operation
 
 ```ts
-defineOperation({
+type SlackState = { users: UserRepository };
+type SlackConfig = z.output<typeof configSchema>;
+
+const defineSlackOperation = defineOperation<SlackState, SlackConfig>();
+
+const createUser = defineSlackOperation({
   description: "Create a user in the workspace",
   input: z.object({
     name: z.string().meta({ description: "Display name" }),
@@ -255,6 +260,12 @@ defineOperation({
   },
 });
 ```
+
+The state/config binding happens once per plugin module. Operations remain
+standalone descriptor values, and `definePlugin` rejects an operation bound to
+a different plugin context. This is intentionally more explicit than trying to
+infer an earlier callback context backwards from a later plugin object, while
+avoiding per-operation generics or a plugin builder DSL.
 
 Rules:
 
@@ -302,6 +313,10 @@ const slack = definePlugin({
 ```
 
 `definePlugin()` should return a typed factory. Calling that factory with `{ config, seed?, exportEnv? }` produces a side-effect-free configured service descriptor. `exportEnv` defaults to `true`; setting it to `false` keeps typed connection values but excludes that mount from the merged dotenv projection. Importing or configuring a plugin must not open a database, read environment variables, start a server, or write files.
+
+Seed support is a type-level pair: declaring `seedSchema` requires
+`lifecycle.seed`, while omitting `seedSchema` forbids both the hook and `seed`
+in configured service envelopes.
 
 Required invariants checked at config resolution:
 
@@ -374,6 +389,10 @@ Semantics:
 - no later hook for an instance starts after an earlier service hook fails;
 - shutdown attempts all stops and reports aggregate failures.
 
+For a seed request, lifecycle ordering is `create/update -> start -> seed`.
+Plugin seed hooks then execute sequentially in configuration order and the
+top-level scenario runs last.
+
 Lifecycle mutation obtains an exclusive instance lease. Public API requests and operations obtain shared running leases. Reset, destroy, stop, seed, and time advancement wait for active leases and tracked tasks, subject to a bounded timeout and cancellation.
 
 Seeding has a persisted `unseeded | seeding | seeded | seed_failed` status. A successful seed cannot be repeated until reset. A failure moves the instance to `seed_failed`, retains diagnostics, and requires reset because cross-plugin state cannot be rolled back transactionally. `instance create --seed` is atomic from the caller's perspective: on seed failure the new instance is stopped and removed. A top-level scenario seed receives an operation facade scoped to the already-held exclusive lease; it still uses `OperationExecutor` validation/logging but does not reacquire the lease and deadlock.
@@ -406,11 +425,24 @@ instance.env.SLACK_API_URL;
 
 The runtime writes the merged `dev` environment atomically to `.localhost2137/.env`. It owns that file completely and places a generated-file header in it. It never appends to or edits the user's `.env`. `localhost env --instance <id> --format json|dotenv` renders other instances.
 
+The privileged bearer token is stored separately at
+`.localhost2137/control-token` (mode 0600 where supported). Agents and curl
+scripts read that file explicitly and send its value in `Authorization`; the
+token is never added to app connection env or injected by `localhost run`.
+
 An env collision is a boot-time configuration error that names both owners and suggests setting `exportEnv: false` on one or both mounts. Disabling export does not remove typed `connection` values, public routes, or operations; the application wires those mounts explicitly.
 
 ### 5.6 Top-level scenario seed
 
-`defineConfig` may include `async seed(instance)`. The `instance` parameter is fully inferred from the configured service keys and exposes only operations and connection values, not lifecycle/storage internals. The runtime invokes it after all declarative plugin seeds succeed. Calls pass through `OperationExecutor` inside the seed's existing exclusive execution scope, so validation, output checking, logging, and task tracking remain identical without reacquiring the instance lease.
+`defineConfig` may include `async seed(scenario)`. The parameter is a fully
+inferred `ScenarioFacade` exposing only configured service operations and
+connection values. It is deliberately distinct from the external
+`InstanceHandle`: lifecycle methods, `idle()`, clock mutation, and merged env do
+not exist on the scenario facade and therefore cannot re-enter the already-held
+exclusive seed lease. The runtime invokes it after all declarative plugin seeds
+succeed. Calls pass through `OperationExecutor` inside the seed's existing
+exclusive execution scope, so validation, output checking, logging, and task
+tracking remain identical without reacquiring the instance lease.
 
 ## 6. Runtime internals
 
@@ -698,7 +730,11 @@ try {
 
 The test runtime binds one OS-assigned port and all its instances remain path-isolated on that server. It owns a temporary root and removes it after a successful close. Failed cleanup reports the retained path for diagnosis.
 
-The typed instance handle is generated through mapped types from the supplied config. Each service exposes operation methods plus typed `connection`; runtime capabilities (`idle`, `seed`, `reset`, `destroy`, `clock`, `env`) live at the instance root.
+The external `InstanceHandle` is generated through mapped types from the
+supplied config. Each service exposes operation methods plus typed `connection`;
+runtime capabilities (`idle`, `seed`, `reset`, `destroy`, `clock`, `env`) live
+at the instance root. It is a wider API than the lease-scoped `ScenarioFacade`
+used by top-level seed.
 
 ### 8.2 Remote client
 
@@ -723,7 +759,7 @@ Every plugin must be able to run the same contract suite:
 
 - importing and configuring has no side effects;
 - invalid config and seed fail with paths;
-- create/start/stop/update ordering;
+- create/update/start/seed/stop ordering;
 - create and update failure recovery;
 - two instances have no state leakage;
 - public Hono routes receive the correct context;

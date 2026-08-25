@@ -77,7 +77,7 @@ Each of these is debatable — see chat discussion.
    app is a route table, not a server; the runtime mounts the same table
    under every instance and injects per-instance context via Hono variables
    (`c.get("lh")`; `PluginEnv<S, C>` exists purely as a typing helper).
-   Lifecycle: `create → (update) → seed? → start/stop`, where `create` runs
+   Lifecycle: `create → update? → start → seed? → stop`, where `create` runs
    once on empty storage, `update({ from, to })` fires when the plugin's
    integer state version changed on an existing instance, and `seed` only runs
    when asked.
@@ -176,3 +176,12 @@ are designed.
 - Tests explicitly own a `createTestRuntime()` and its instances.
 - Snapshot and fork sketches moved to `future.snapshots-and-forks.md`; they are
   not part of v0.1 or v0.2 types or examples.
+- A plugin binds operation context once with
+  `defineOperation<State, Config>()`; the resulting helper produces standalone
+  operation descriptors and `definePlugin` rejects descriptors bound to a
+  different state/config pair.
+- `seedSchema` and `lifecycle.seed` are an inseparable pair. Omitting the
+  schema forbids both the hook and `seed` in configured service envelopes.
+- Top-level scenario seed receives only service operations and connection
+  values. Instance lifecycle methods belong to external instance handles and
+  cannot re-enter the seed's exclusive lease.

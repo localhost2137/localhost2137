@@ -38,9 +38,9 @@ export default defineConfig({
 
 	// ── Virtual time ────────────────────────────────────────────────────
 	clock: {
-		mode: "real", // follow the wall clock…
-		// mode: "pinned",           // …or freeze at startAt until advanced
-		startAt: "2026-01-01T00:00:00.000Z", // deterministic tests want "pinned"
+		mode: "pinned",
+		startAt: "2026-01-01T00:00:00.000Z",
+		// Use `{ mode: "real" }` to follow wall time; real mode has no startAt.
 	},
 
 	// ── Services ────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ export default defineConfig({
 });
 
 /*
- * Lifecycle for a fresh instance:  create (each plugin) → start
- * Seeding is explicit:             localhost seed → plugin seeds → top-level scenario
+ * Lifecycle for a fresh instance:  create/update → start
+ * Seeding is explicit:             running plugin seeds → top-level scenario
  * Plugin state upgrades:          update({ from, to }) before start
  */

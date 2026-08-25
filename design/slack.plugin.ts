@@ -14,7 +14,7 @@
  *   violations cheaply, since one table serves all instances.)
  * - `PluginEnv<…>` is ONLY a type helper for the c.get("lh") variable —
  *   the app itself is ordinary Hono, no wrapper, no dialect.
- * - Lifecycle: create -> (update) -> start/stop, plus manual seed.
+ * - Lifecycle: create -> update? -> start -> seed? -> stop.
  *   No migrate hook: how a plugin manages its own storage is its business;
  *   the runtime only tells it WHEN things happen.
  */
@@ -62,6 +62,10 @@ type Config = z.infer<typeof configSchema>;
 type Seed = z.infer<typeof seedSchema>;
 type State = { db: Database };
 
+// Bind runtime context once for this plugin. Every operation below remains a
+// standalone descriptor value without repeating State/Config generics.
+const defineSlackOperation = defineOperation<State, Config>();
+
 // ── Public emulated API (plain Hono route table) ───────────────────────
 // Mounted at /{instance}/slack/* e.g. http://127.0.0.1:2137/dev/slack/api/…
 // PluginEnv<…> only types the injected "lh" variable — otherwise this is
@@ -93,7 +97,7 @@ api.get("/api/users.list", async (c) => {
 // ── Control-plane operations ───────────────────────────────────────────
 // Privileged verbs for devs/tests/agents. Do NOT mirror real Slack endpoints.
 // Source of truth for CLI, TS API, /_/v1 control HTTP, docs, MCP adapters.
-const createUser = defineOperation({
+const createUser = defineSlackOperation({
 	description: "Create a user in the workspace",
 	input: z.object({
 		name: z.string().describe("Display name"),
@@ -110,7 +114,7 @@ const createUser = defineOperation({
 	},
 });
 
-const sendMessage = defineOperation({
+const sendMessage = defineSlackOperation({
 	description: "Send a message as if a user typed it (drives Events delivery)",
 	input: z.object({
 		channel: z.string(),
@@ -138,7 +142,7 @@ const sendMessage = defineOperation({
 	},
 });
 
-const listMessages = defineOperation({
+const listMessages = defineSlackOperation({
 	description: "Inspect messages in a channel",
 	input: z.object({ channel: z.string() }),
 	output: z.array(z.object({ id: z.string(), userId: z.string(), text: z.string() })),

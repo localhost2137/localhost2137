@@ -36,6 +36,9 @@ $ localhost describe slack --json | jq '.operations.createUser.input'
 
 # Same discovery over plain HTTP (curl-only agents, Playwright, CI).
 # Runtime API lives under the reserved /_/ namespace:
+$ export LOCALHOST_CONTROL_TOKEN="$(< .localhost2137/control-token)"
+# The token is read explicitly by control clients. It is never written to the
+# app-facing .localhost2137/.env or injected by `localhost run`.
 $ curl -s localhost:2137/_/v1/instances/dev/services \
     -H "authorization: Bearer $LOCALHOST_CONTROL_TOKEN" | jq -r '.data[]|.name'
 slack
@@ -120,8 +123,8 @@ now=2026-09-24T14:02:11Z  emitted: stripe.invoice.paid, slack.subscription.renew
 $ localhost seed            # plugin declarative seeds → top-level scenario seed
 seeded slack, stripe, then scenario
 
-$ localhost reset           # wipe state → create → start (world is empty)
-$ localhost reset --seed    # wipe, then run seeding right after
+$ localhost instance reset dev           # wipe → create/update → start (empty)
+$ localhost instance reset dev --seed    # then run plugin + scenario seeding
 
 # ── 8. Machine-readable env export (for sourcing in scripts/CI) ─────────────
 $ localhost env --format dotenv >> .env.local

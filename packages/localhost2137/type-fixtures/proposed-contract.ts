@@ -28,9 +28,9 @@ interface PluginLogger {
 	info(message: string, attributes?: Readonly<Record<string, unknown>>): void;
 }
 
-interface BasePluginContext<ConfigSchema extends Schema> {
+interface BasePluginContext<Config> {
 	readonly clock: PluginClock;
-	readonly config: Readonly<z.output<ConfigSchema>>;
+	readonly config: Readonly<Config>;
 	readonly instanceId: string;
 	readonly log: PluginLogger;
 	readonly serviceKey: string;
@@ -38,18 +38,33 @@ interface BasePluginContext<ConfigSchema extends Schema> {
 	readonly storage: PluginStorage;
 }
 
-interface RunningPluginContext<State, ConfigSchema extends Schema>
-	extends BasePluginContext<ConfigSchema> {
+interface RunningPluginContext<State, Config> extends BasePluginContext<Config> {
 	readonly state: State;
 	readonly tasks: TaskTracker;
 	fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }
 
-export type PluginEnv<State, ConfigSchema extends Schema> = {
-	Variables: { lh: RunningPluginContext<State, ConfigSchema> };
+export type PluginEnv<State, Config> = {
+	Variables: { lh: RunningPluginContext<State, Config> };
 };
 
-export interface OperationDefinition<
+declare const operationContextType: unique symbol;
+
+interface OperationShape {
+	readonly input: ObjectSchema;
+	readonly output: Schema;
+}
+
+interface BoundOperationShape<State, Config> extends OperationShape {
+	readonly [operationContextType]: (
+		state: State,
+		config: Config,
+	) => readonly [state: State, config: Config];
+}
+
+interface OperationDefinitionInput<
+	State,
+	Config,
 	InputSchema extends ObjectSchema,
 	OutputSchema extends Schema,
 > {
@@ -57,73 +72,100 @@ export interface OperationDefinition<
 	readonly input: InputSchema;
 	readonly output: OutputSchema;
 	run(
-		context: RunningPluginContext<unknown, Schema>,
+		context: RunningPluginContext<State, Config>,
 		input: z.output<InputSchema>,
 	): Promise<z.input<OutputSchema>> | z.input<OutputSchema>;
 }
 
-export declare function defineOperation<
+type OperationDefinition<
+	State,
+	Config,
+	InputSchema extends ObjectSchema,
+	OutputSchema extends Schema,
+> = OperationDefinitionInput<State, Config, InputSchema, OutputSchema> &
+	BoundOperationShape<State, Config>;
+
+type BoundOperationDefinition<State, Config> = <
 	const InputSchema extends ObjectSchema,
 	const OutputSchema extends Schema,
 >(
-	definition: OperationDefinition<InputSchema, OutputSchema>,
-): OperationDefinition<InputSchema, OutputSchema>;
+	definition: OperationDefinitionInput<State, Config, InputSchema, OutputSchema>,
+) => OperationDefinition<State, Config, InputSchema, OutputSchema>;
 
-interface OperationShape {
-	readonly input: ObjectSchema;
-	readonly output: Schema;
-}
+/** Create one context-bound operation helper per plugin module. */
+export declare function defineOperation<State, Config>(): BoundOperationDefinition<State, Config>;
 
-type OperationRecord = Readonly<Record<string, OperationShape>>;
+type OperationRecord<State, Config> = Readonly<Record<string, BoundOperationShape<State, Config>>>;
 
-export interface ConnectionMetadata {
+interface ConnectionMetadata {
 	readonly env: Readonly<Record<string, string>>;
 	readonly values: Readonly<Record<string, unknown>>;
 }
 
-interface ConnectionContext<ConfigSchema extends Schema> {
+interface ConnectionContext<Config> {
 	readonly baseUrl: string;
-	readonly config: Readonly<z.output<ConfigSchema>>;
+	readonly config: Readonly<Config>;
 	readonly instanceId: string;
 	readonly serviceKey: string;
 }
 
-interface PluginDefinition<
+interface Lifecycle<State, Config> {
+	readonly create: (context: BasePluginContext<Config>) => Promise<void> | void;
+	readonly start: (context: BasePluginContext<Config>) => State | Promise<State>;
+	readonly stop?: (context: RunningPluginContext<State, Config>) => Promise<void> | void;
+	readonly update?: (
+		context: BasePluginContext<Config>,
+		version: Readonly<{ from: number; to: number }>,
+	) => Promise<void> | void;
+}
+
+interface PluginDefinitionBase<
 	ConfigSchema extends Schema,
-	SeedSchema extends Schema | undefined,
-	Operations extends OperationRecord,
 	State,
+	Operations extends OperationRecord<State, z.output<ConfigSchema>>,
 	Connection extends ConnectionMetadata,
 > {
-	readonly api: Hono<PluginEnv<State, ConfigSchema>>;
+	readonly api: Hono<PluginEnv<State, z.output<ConfigSchema>>>;
 	readonly configSchema: ConfigSchema;
-	readonly connection: (context: ConnectionContext<ConfigSchema>) => Connection;
+	readonly connection: (context: ConnectionContext<z.output<ConfigSchema>>) => Connection;
 	readonly description: string;
 	readonly id: string;
-	readonly lifecycle: {
-		readonly create: (context: BasePluginContext<ConfigSchema>) => Promise<void> | void;
-		readonly seed?: (
-			context: RunningPluginContext<State, ConfigSchema>,
-			seed: SeedSchema extends Schema ? z.output<SeedSchema> : never,
-		) => Promise<void> | void;
-		readonly start: (context: BasePluginContext<ConfigSchema>) => State | Promise<State>;
-		readonly stop?: (context: RunningPluginContext<State, ConfigSchema>) => Promise<void> | void;
-		readonly update?: (
-			context: BasePluginContext<ConfigSchema>,
-			version: Readonly<{ from: number; to: number }>,
-		) => Promise<void> | void;
-	};
 	readonly operations: Operations;
-	readonly seedSchema?: SeedSchema;
 	readonly stateVersion: number;
 }
+
+type SeededPluginDefinition<
+	ConfigSchema extends Schema,
+	SeedSchema extends Schema,
+	State,
+	Operations extends OperationRecord<State, z.output<ConfigSchema>>,
+	Connection extends ConnectionMetadata,
+> = PluginDefinitionBase<ConfigSchema, State, Operations, Connection> & {
+	readonly lifecycle: Lifecycle<State, z.output<ConfigSchema>> & {
+		readonly seed: (
+			context: RunningPluginContext<State, z.output<ConfigSchema>>,
+			seed: z.output<SeedSchema>,
+		) => Promise<void> | void;
+	};
+	readonly seedSchema: SeedSchema;
+};
+
+type UnseededPluginDefinition<
+	ConfigSchema extends Schema,
+	State,
+	Operations extends OperationRecord<State, z.output<ConfigSchema>>,
+	Connection extends ConnectionMetadata,
+> = PluginDefinitionBase<ConfigSchema, State, Operations, Connection> & {
+	readonly lifecycle: Lifecycle<State, z.output<ConfigSchema>> & { readonly seed?: never };
+	readonly seedSchema?: never;
+};
 
 declare const configuredServiceType: unique symbol;
 
 interface ConfiguredService<
 	ConfigSchema extends Schema,
 	SeedSchema extends Schema | undefined,
-	Operations extends OperationRecord,
+	Operations,
 	Connection extends ConnectionMetadata,
 > {
 	readonly [configuredServiceType]: {
@@ -141,10 +183,10 @@ type ServiceEnvelope<ConfigSchema extends Schema, SeedSchema extends Schema | un
 	? { readonly seed?: z.input<SeedSchema> }
 	: { readonly seed?: never });
 
-export type PluginFactory<
+type PluginFactory<
 	ConfigSchema extends Schema,
 	SeedSchema extends Schema | undefined,
-	Operations extends OperationRecord,
+	Operations,
 	Connection extends ConnectionMetadata,
 > = (
 	envelope: ServiceEnvelope<ConfigSchema, SeedSchema>,
@@ -152,16 +194,25 @@ export type PluginFactory<
 
 export declare function definePlugin<
 	const ConfigSchema extends Schema,
-	const SeedSchema extends Schema | undefined,
-	const Operations extends OperationRecord,
+	const SeedSchema extends Schema,
 	const State,
+	const Operations extends OperationRecord<State, z.output<ConfigSchema>>,
 	const Connection extends ConnectionMetadata,
 >(
-	definition: PluginDefinition<ConfigSchema, SeedSchema, Operations, State, Connection>,
+	definition: SeededPluginDefinition<ConfigSchema, SeedSchema, State, Operations, Connection>,
 ): PluginFactory<ConfigSchema, SeedSchema, Operations, Connection>;
 
+export declare function definePlugin<
+	const ConfigSchema extends Schema,
+	const State,
+	const Operations extends OperationRecord<State, z.output<ConfigSchema>>,
+	const Connection extends ConnectionMetadata,
+>(
+	definition: UnseededPluginDefinition<ConfigSchema, State, Operations, Connection>,
+): PluginFactory<ConfigSchema, undefined, Operations, Connection>;
+
 type ServiceRecord = Readonly<
-	Record<string, ConfiguredService<Schema, Schema | undefined, OperationRecord, ConnectionMetadata>>
+	Record<string, ConfiguredService<Schema, Schema | undefined, unknown, ConnectionMetadata>>
 >;
 
 type ServiceType<Service> =
@@ -185,7 +236,10 @@ type OperationMethod<Operation extends OperationShape> = (
 
 type ServiceFacade<Service> =
 	ServiceType<Service> extends infer Type
-		? Type extends { readonly connection: ConnectionMetadata; readonly operations: OperationRecord }
+		? Type extends {
+				readonly connection: ConnectionMetadata;
+				readonly operations: Readonly<Record<string, OperationShape>>;
+			}
 			? {
 					readonly connection: Type["connection"]["values"];
 				} & {
@@ -194,9 +248,13 @@ type ServiceFacade<Service> =
 			: never
 		: never;
 
-export type InstanceFacade<Services extends ServiceRecord> = {
+/** Facade used while an exclusive seed lease is already held. */
+export type ScenarioFacade<Services extends ServiceRecord> = {
 	readonly [ServiceKey in keyof Services]: ServiceFacade<Services[ServiceKey]>;
-} & {
+};
+
+/** External testing/client handle; unlike ScenarioFacade, it may manage the instance. */
+export type InstanceHandle<Services extends ServiceRecord> = ScenarioFacade<Services> & {
 	readonly env: Readonly<Record<string, string>>;
 	idle(): Promise<void>;
 };
@@ -205,7 +263,7 @@ export interface RuntimeConfig<Services extends ServiceRecord> {
 	readonly clock?: Readonly<{ mode: "real" }> | Readonly<{ mode: "pinned"; startAt: string }>;
 	readonly host?: string;
 	readonly port?: number;
-	readonly seed?: (instance: InstanceFacade<Services>) => Promise<void> | void;
+	readonly seed?: (scenario: ScenarioFacade<Services>) => Promise<void> | void;
 	readonly services: Services;
 	readonly storage?: Readonly<{ dir: string }>;
 }

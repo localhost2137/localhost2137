@@ -13,6 +13,11 @@ URL composition, and connection property names.
 
 - Plugins expose a plain Hono route table. The runtime later creates an
   instance-specific wrapper that injects the running `lh` context.
+- Each plugin binds one operation-definition helper with
+  `defineOperation<State, Config>()`. It produces standalone operation values
+  with typed state/config context; `definePlugin` rejects operations bound to a
+  different context. This explicit once-per-plugin binding avoids repeated
+  generics without introducing a plugin builder DSL.
 - `definePlugin()` returns a typed, side-effect-free factory. A keyed service
   entry is an envelope containing `config`, optional `seed`, and optional
   `exportEnv` (default `true`).
@@ -22,6 +27,8 @@ URL composition, and connection property names.
 - Fresh instances are empty. Seeding is explicit and may succeed only once per
   reset. Plugin seeds run sequentially in configuration order, then the
   top-level scenario seed runs.
+- `seedSchema` and `lifecycle.seed` either both exist or are both absent. An
+  unseeded plugin's configured-service envelope cannot contain `seed`.
 - Each plugin owns an explicit callback setting such as `eventsUrl`. There is
   no top-level `app.baseUrl` in v0.1.
 - A plugin connection returns `{ values, env }`. A service handle exposes typed
@@ -29,6 +36,9 @@ URL composition, and connection property names.
   `instance.env`. `exportEnv: false` suppresses only the merged projection.
 - Environment-variable collisions between exported services are configuration
   errors.
+- Top-level seed receives a narrow `ScenarioFacade`: service operations and
+  connection values only. External `InstanceHandle` lifecycle/env methods are
+  excluded because scenario execution already owns the exclusive seed lease.
 
 ## Consequences
 

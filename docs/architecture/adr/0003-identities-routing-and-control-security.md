@@ -23,6 +23,10 @@ localhost endpoints also require protection despite binding to loopback.
 - During v0.x the server binds only to loopback and all control endpoints except
   health require a per-runtime bearer token. Mutation requires JSON, browser
   origins are rejected, and CORS is disabled.
+- The daemon stores that token in `.localhost2137/control-token` with mode 0600
+  where supported. Humans and agents may read it explicitly for curl or custom
+  control clients. It is never included in generated app connection env or
+  injected by `localhost run`.
 
 ## Consequences
 

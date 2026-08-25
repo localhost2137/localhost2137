@@ -19,6 +19,9 @@ version, and dynamic config replacement greatly complicates failure recovery.
 - Lifecycle is `create`, optional `update`, `start`, `stop`, and optional
   explicit `seed`. `update` receives `{ from, to }` while stopped. Storage from
   a newer state version is rejected.
+- When seeding is requested, services complete `create`/`update`, then `start`,
+  before plugin seed hooks run in configuration order. The top-level scenario
+  runs only after every plugin seed succeeds.
 - `create`/`update` contexts cannot access running state; `start` returns it;
   public routes, operations, `seed`, and `stop` receive phase-appropriate
   running contexts.
