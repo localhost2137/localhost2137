@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -285,6 +285,25 @@ void packedPlugin({ config: { token: "fixture" } });
 					`Installed workspace package ${packageName} did not resolve from its generated tarball`,
 				);
 			}
+		}
+		const installedHostManifest = await readJson(
+			join(consumerDirectory, "node_modules/localhost2137/package.json"),
+		);
+		if (installedHostManifest.bin?.localhost !== "./dist/bin.js") {
+			throw new Error("Packed localhost2137 package does not declare the localhost binary");
+		}
+		const installedBinPath = join(consumerDirectory, "node_modules/localhost2137/dist/bin.js");
+		const installedBin = await readFile(installedBinPath, "utf8");
+		if (!installedBin.startsWith("#!/usr/bin/env node\n")) {
+			throw new Error("Packed localhost binary is missing its Node shebang");
+		}
+		const binaryHelp = runPnpm(["exec", "localhost", "--help"], consumerDirectory, [
+			"ignore",
+			"pipe",
+			"pipe",
+		]);
+		if (!binaryHelp.stdout.toString().includes("Usage: localhost")) {
+			throw new Error("Installed localhost binary did not render CLI help");
 		}
 		runPnpm(["smoke"], consumerDirectory);
 		runPnpm(["typecheck"], consumerDirectory);

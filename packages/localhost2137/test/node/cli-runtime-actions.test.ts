@@ -124,6 +124,11 @@ describe("Node CLI runtime actions", () => {
 			name: "fixture",
 			operationMetadata: {},
 		});
+		await expect(actions.describe("dev", "fixture")).resolves.toEqual({
+			description: "Fixture service",
+			name: "fixture",
+			operations: {},
+		});
 		const operationInput: Record<string, unknown> = {};
 		Object.defineProperty(operationInput, "value", { enumerable: true, get: vi.fn() });
 		await expect(

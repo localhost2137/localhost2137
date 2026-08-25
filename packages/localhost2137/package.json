@@ -6,6 +6,9 @@
 	"engines": {
 		"node": ">=24"
 	},
+	"bin": {
+		"localhost": "./dist/bin.js"
+	},
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",

@@ -69,10 +69,10 @@ export function createNodeCliActions(
 			return await runtime.client.createInstance({ id, persistence: "persistent", seed });
 		},
 		describe: (instanceId, serviceKey) =>
-			forTarget(instanceId, ({ client }) =>
+			forTarget(instanceId, async ({ client }) =>
 				serviceKey === undefined
-					? client.listServices(instanceId)
-					: client.describeService(instanceId, serviceKey),
+					? await client.listServices(instanceId)
+					: describeForCli(await client.describeService(instanceId, serviceKey)),
 			),
 		describeService: (instanceId, serviceKey) =>
 			forTarget(instanceId, async ({ client }) =>
@@ -120,6 +120,15 @@ export function createNodeCliActions(
 		},
 	};
 	return Object.freeze(actions);
+}
+
+function describeForCli(value: ControlJsonValue): unknown {
+	const service = ownCliServiceDescription(value);
+	return Object.freeze({
+		description: service.description,
+		name: service.name,
+		operations: service.operationMetadata,
+	});
 }
 
 async function loadRuntimeSession(
