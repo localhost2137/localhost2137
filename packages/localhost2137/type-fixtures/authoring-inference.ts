@@ -4,8 +4,11 @@ import {
 	defineConfig,
 	defineOperation,
 	definePlugin,
+	type InstanceClockStatus,
 	type InstanceHandle,
 	type PluginEnv,
+	type ReservedOperationKey,
+	type ReservedServiceKey,
 	type ScenarioFacade,
 } from "./proposed-contract.js";
 
@@ -34,9 +37,9 @@ api.get("/health", (context) => {
 	return context.json({ started: state.started, workspace: config.workspaceName });
 });
 
-// One context binding per plugin; every resulting operation remains a plain,
-// standalone descriptor value with no operation-specific generic arguments.
-const defineSlackOperation = defineOperation<SlackState, SlackConfig>();
+// One identity/context binding per plugin; every resulting operation remains a
+// plain descriptor value with no operation-specific generic arguments.
+const defineSlackOperation = defineOperation<"slack", SlackState, SlackConfig>();
 
 const createUser = defineSlackOperation({
 	description: "Create a user in the workspace",
@@ -114,6 +117,8 @@ const config = defineConfig({
 
 		// @ts-expect-error scenario seeding already owns the exclusive lease
 		await scenario.idle();
+		// @ts-expect-error scenario seeding cannot access external clock capabilities
+		await scenario.clock.status();
 		// @ts-expect-error scenario seed cannot destroy its owning instance
 		await scenario.destroy();
 		// @ts-expect-error connection env belongs to an external instance handle
@@ -126,18 +131,27 @@ declare const scenario: ScenarioFacade<typeof config.services>;
 declare const instance: InstanceHandle<typeof config.services>;
 const alice = instance.slack.createUser({ name: "Alice" });
 const instanceEnvironment: Readonly<Record<string, string>> = instance.env;
+const clockStatus: Promise<InstanceClockStatus> = instance.clock.status();
 const destroyResult: Promise<void> = instance.destroy();
 const idleResult: Promise<void> = instance.idle();
 const resetResult: Promise<void> = instance.reset({ seed: true });
 void instanceEnvironment;
+void clockStatus;
 void destroyResult;
 void idleResult;
 void resetResult;
 void scenario.slack.connection.apiUrl;
 
+// @ts-expect-error clock advancement is intentionally absent until v0.2
+instance.clock.advance("1h");
+
 type _ConfigOutput = Expect<Equal<SlackConfig["eventsUrl"], string | null>>;
 type _OperationOutput = Expect<
 	Equal<Awaited<typeof alice>, { admin: boolean; id: string; name: string }>
+>;
+type _ReservedOperationKey = Expect<Equal<ReservedOperationKey, "connection">>;
+type _ReservedServiceKey = Expect<
+	Equal<ReservedServiceKey, "_" | "clock" | "destroy" | "env" | "idle" | "reset" | "seed">
 >;
 // @ts-expect-error required plugin configuration remains required in the envelope
 slack({ config: { botToken: "xoxb-local-acme" } });
@@ -151,7 +165,7 @@ const unseededSlack = definePlugin({
 	configSchema,
 	connection: () => ({ env: {}, values: {} }),
 	description: "Unseeded fixture",
-	id: "unseeded-slack",
+	id: "slack",
 	lifecycle: {
 		create: () => undefined,
 		start: (): SlackState => ({ started: true }),
@@ -165,6 +179,7 @@ unseededSlack({
 });
 
 const defineForeignOperation = defineOperation<
+	"invalid-context",
 	{ readonly customers: readonly string[] },
 	{ readonly apiKey: string }
 >();
@@ -190,6 +205,51 @@ definePlugin({
 	stateVersion: 1,
 });
 
+const defineOtherSlackOperation = defineOperation<"other-slack", SlackState, SlackConfig>();
+const sameShapeForeignOperation = defineOtherSlackOperation({
+	description: "Same context shape owned by another plugin",
+	input: z.object({}),
+	output: z.object({ ok: z.literal(true) }),
+	run: (): { readonly ok: true } => ({ ok: true }),
+});
+
+definePlugin({
+	api: unseededApi,
+	configSchema,
+	connection: () => ({ env: {}, values: {} }),
+	description: "Invalid operation ownership fixture",
+	id: "slack",
+	lifecycle: {
+		create: () => undefined,
+		start: (): SlackState => ({ started: true }),
+	},
+	// @ts-expect-error matching State/Config shapes cannot cross literal plugin IDs
+	operations: { sameShapeForeignOperation },
+	stateVersion: 1,
+});
+
+const reservedConnectionOperation = defineSlackOperation({
+	description: "Reserved facade collision fixture",
+	input: z.object({}),
+	output: z.object({ ok: z.literal(true) }),
+	run: (): { readonly ok: true } => ({ ok: true }),
+});
+
+definePlugin({
+	api: unseededApi,
+	configSchema,
+	connection: () => ({ env: {}, values: {} }),
+	description: "Invalid operation key fixture",
+	id: "slack",
+	lifecycle: {
+		create: () => undefined,
+		start: (): SlackState => ({ started: true }),
+	},
+	// @ts-expect-error connection is reserved for generated connection metadata
+	operations: { connection: reservedConnectionOperation },
+	stateVersion: 1,
+});
+
 unseededSlack({
 	config: { botToken: "xoxb-local", workspaceName: "Unseeded" },
 	// @ts-expect-error an unseeded plugin envelope cannot accept seed data
@@ -202,7 +262,7 @@ definePlugin({
 	configSchema,
 	connection: () => ({ env: {}, values: {} }),
 	description: "Invalid seeded fixture",
-	id: "invalid-seeded",
+	id: "slack",
 	lifecycle: {
 		create: () => undefined,
 		start: (): SlackState => ({ started: true }),
@@ -218,7 +278,7 @@ definePlugin({
 	configSchema,
 	connection: () => ({ env: {}, values: {} }),
 	description: "Invalid unseeded fixture",
-	id: "invalid-unseeded",
+	id: "slack",
 	lifecycle: {
 		create: () => undefined,
 		seed: (_context, _seed) => undefined,
@@ -235,4 +295,11 @@ defineConfig({
 		startAt: "2026-01-01T00:00:00.000Z",
 	},
 	services: { slack: unseededSlack({ config: { botToken: "xoxb-local", workspaceName: "Real" } }) },
+});
+
+defineConfig({
+	services: {
+		// @ts-expect-error clock is reserved for the instance clock capability
+		clock: unseededSlack({ config: { botToken: "xoxb-local", workspaceName: "Reserved" } }),
+	},
 });

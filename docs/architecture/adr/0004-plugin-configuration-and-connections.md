@@ -13,11 +13,11 @@ URL composition, and connection property names.
 
 - Plugins expose a plain Hono route table. The runtime later creates an
   instance-specific wrapper that injects the running `lh` context.
-- Each plugin binds one operation-definition helper with
-  `defineOperation<State, Config>()`. It produces standalone operation values
-  with typed state/config context; `definePlugin` rejects operations bound to a
-  different context. This explicit once-per-plugin binding avoids repeated
-  generics without introducing a plugin builder DSL.
+- Each plugin binds one operation-definition helper with its literal ID and
+  context: `defineOperation<"slack", State, Config>()`. It produces standalone
+  operation values; `definePlugin` rejects operations bound to a different ID
+  or state/config context. This explicit once-per-plugin binding avoids
+  repeated generics without introducing a plugin builder DSL.
 - `definePlugin()` returns a typed, side-effect-free factory. A keyed service
   entry is an envelope containing `config`, optional `seed`, and optional
   `exportEnv` (default `true`).
@@ -34,6 +34,11 @@ URL composition, and connection property names.
 - A plugin connection returns `{ values, env }`. A service handle exposes typed
   values as `instance.slack.connection`; merged variables are in
   `instance.env`. `exportEnv: false` suppresses only the merged projection.
+- `connection` is reserved as an operation key. `_`, `clock`, `destroy`, `env`,
+  `idle`, `reset`, and `seed` are reserved as service keys so generated facade
+  members cannot collide. Authoring types reject these names; Phase 1 config
+  resolution and operation registration must enforce the identical sets at
+  runtime.
 - Environment-variable collisions between exported services are configuration
   errors.
 - Top-level seed receives a narrow `ScenarioFacade`: service operations and

@@ -13,8 +13,10 @@ would freeze contracts before two real plugins validate them.
 
 - Clock state belongs to each instance and is durable. It is either real with a
   persisted offset or pinned to a persisted instant.
-- v0.1 exposes clock reads. Clock advancement and durable plugin notifications
-  are finalized only with the Stripe v0.2 vertical slice.
+- v0.1 exposes plugin clock reads and asynchronous client
+  `instance.clock.status()` returning `{ mode, now }`, where `now` is RFC 3339.
+  The scenario facade has no clock capability. Clock advancement and durable
+  plugin notifications are finalized only with the Stripe v0.2 vertical slice.
 - IDs remain plugin-owned in v0.1; first-party plugins use deterministic
   sequences. Runtime randomness and identifier capabilities need a later ADR.
 - Canonical tests explicitly create and close a `createTestRuntime()`, then

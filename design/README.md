@@ -176,12 +176,18 @@ are designed.
 - Tests explicitly own a `createTestRuntime()` and its instances.
 - Snapshot and fork sketches moved to `future.snapshots-and-forks.md`; they are
   not part of v0.1 or v0.2 types or examples.
-- A plugin binds operation context once with
-  `defineOperation<State, Config>()`; the resulting helper produces standalone
-  operation descriptors and `definePlugin` rejects descriptors bound to a
-  different state/config pair.
+- A plugin binds its literal ID and operation context once with
+  `defineOperation<"slack", State, Config>()`; the resulting helper produces
+  standalone operation descriptors and `definePlugin` rejects descriptors
+  bound to a different plugin ID or state/config pair.
 - `seedSchema` and `lifecycle.seed` are an inseparable pair. Omitting the
   schema forbids both the hook and `seed` in configured service envelopes.
 - Top-level scenario seed receives only service operations and connection
   values. Instance lifecycle methods belong to external instance handles and
   cannot re-enter the seed's exclusive lease.
+- `connection` is reserved as an operation key. `_`, `clock`, `destroy`, `env`,
+  `idle`, `reset`, and `seed` are reserved as service keys. Phase 1 validates
+  the same sets at runtime as the authoring types.
+- The v0.1 external instance clock is read-only:
+  `await instance.clock.status()` returns `{ mode, now }`; scenario seeds have
+  no clock capability and `advance` remains absent until v0.2.

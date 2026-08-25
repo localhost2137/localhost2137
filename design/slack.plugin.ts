@@ -62,9 +62,9 @@ type Config = z.infer<typeof configSchema>;
 type Seed = z.infer<typeof seedSchema>;
 type State = { db: Database };
 
-// Bind runtime context once for this plugin. Every operation below remains a
-// standalone descriptor value without repeating State/Config generics.
-const defineSlackOperation = defineOperation<State, Config>();
+// Bind plugin identity and runtime context once. Every operation below remains
+// a standalone descriptor value without repeating State/Config generics.
+const defineSlackOperation = defineOperation<"slack", State, Config>();
 
 // ── Public emulated API (plain Hono route table) ───────────────────────
 // Mounted at /{instance}/slack/* e.g. http://127.0.0.1:2137/dev/slack/api/…
