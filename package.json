@@ -11,11 +11,12 @@
 		"boundaries": "depcruise packages plugins --config .dependency-cruiser.cjs",
 		"build": "tsc -b",
 		"changeset": "changeset",
-		"check": "pnpm format:check && pnpm lint && pnpm boundaries && pnpm typecheck && pnpm test && pnpm knip",
+		"check": "pnpm format:check && pnpm lint && pnpm boundaries && pnpm typecheck && pnpm test && pnpm knip && pnpm pack:check",
 		"format": "biome format --write .",
 		"format:check": "biome format .",
 		"knip": "knip",
 		"lint": "biome lint . && eslint .",
+		"pack:check": "pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
 		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
 		"typecheck": "tsc -b --pretty false && pnpm --filter localhost2137 typecheck:fixtures"

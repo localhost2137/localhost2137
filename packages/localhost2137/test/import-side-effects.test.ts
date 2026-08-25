@@ -9,8 +9,8 @@ afterEach(() => {
 	process.chdir(originalWorkingDirectory);
 });
 
-describe("sample plugin import", () => {
-	it("only constructs inspectable definitions", async () => {
+describe("static plugin-definition import baseline", () => {
+	it("does not mutate process or filesystem state", async () => {
 		const workingDirectory = await mkdtemp(join(tmpdir(), "localhost2137-import-"));
 		const environmentBeforeImport = { ...process.env };
 		const signalListenersBeforeImport = {
@@ -20,7 +20,7 @@ describe("sample plugin import", () => {
 
 		try {
 			process.chdir(workingDirectory);
-			const { samplePlugin } = await import("./fixtures/sample-plugin.js");
+			const { samplePlugin } = await import("./fixtures/plugin-under-import.js");
 
 			expect(samplePlugin.id).toBe("sample");
 			expect(process.env).toEqual(environmentBeforeImport);

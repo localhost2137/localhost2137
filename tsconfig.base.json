@@ -2,7 +2,6 @@
 	"compilerOptions": {
 		"composite": true,
 		"declaration": true,
-		"declarationMap": true,
 		"exactOptionalPropertyTypes": true,
 		"isolatedDeclarations": true,
 		"lib": ["ES2024", "DOM", "DOM.Iterable"],
@@ -13,7 +12,6 @@
 		"noImplicitOverride": true,
 		"noUncheckedIndexedAccess": true,
 		"skipLibCheck": true,
-		"sourceMap": true,
 		"strict": true,
 		"target": "ES2024",
 		"useUnknownInCatchVariables": true,

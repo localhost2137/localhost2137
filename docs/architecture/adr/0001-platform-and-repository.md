@@ -24,6 +24,12 @@ are consumers that need those boundaries.
   it only during development.
 - Repository tooling uses exact versions. Published runtime dependency ranges
   will be chosen only when a compatibility policy exists.
+- TypeScript incremental metadata is stored outside publishable `dist`
+  directories. Source and declaration maps are omitted until packages also
+  ship the sources needed to make those maps useful.
+- Changesets uses public access for the intended unscoped runtime and scoped
+  public plugin packages once their temporary Phase 0 `private` flags are
+  deliberately removed.
 
 ## Consequences
 

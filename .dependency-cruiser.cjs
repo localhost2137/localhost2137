@@ -8,6 +8,12 @@ module.exports = {
 			to: { circular: true },
 		},
 		{
+			name: "public-root-exports-authoring-only",
+			severity: "error",
+			from: { path: "^packages/localhost2137/src/index\\.ts$" },
+			to: { path: "^packages/localhost2137/src/(?!authoring(?:/|$))" },
+		},
+		{
 			name: "authoring-does-not-depend-on-runtime",
 			severity: "error",
 			from: { path: "^packages/localhost2137/src/authoring" },
@@ -20,10 +26,18 @@ module.exports = {
 			to: { path: "^packages/localhost2137/src/(config|node|control|cli|testing)" },
 		},
 		{
-			name: "plugins-do-not-import-runtime-internals",
+			name: "plugins-use-public-root-only",
 			severity: "error",
-			from: { path: "^(plugins|packages/plugin-testkit)/" },
-			to: { path: "^packages/localhost2137/src/(config|kernel|node|control|cli|testing)" },
+			from: { path: "^plugins/" },
+			to: { path: "^packages/localhost2137/src/(?!index\\.ts$)" },
+		},
+		{
+			name: "plugin-testkit-uses-public-entry-points-only",
+			severity: "error",
+			from: { path: "^packages/plugin-testkit/" },
+			to: {
+				path: "^packages/localhost2137/src/(?!index\\.ts$|testing/index\\.ts$)",
+			},
 		},
 	],
 	options: {

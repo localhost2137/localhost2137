@@ -5,8 +5,9 @@ const api = new Hono();
 const configSchema = z.object({ greeting: z.string() });
 
 /**
- * A Phase 0 fixture, not an implementation of the authoring API. It models the
- * only work a plugin module may perform during import: construct definitions.
+ * Phase 0 baseline only: importing static Hono/Zod definitions must be inert.
+ * Phase 1 replaces this object with a plugin authored through imports from the
+ * real public `localhost2137` root; the surrounding smoke test stays unchanged.
  */
 export const samplePlugin = Object.freeze({
 	api,

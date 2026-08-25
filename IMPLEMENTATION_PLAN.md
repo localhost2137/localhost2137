@@ -144,10 +144,10 @@ filesystem/config ---> runtime kernel <--- clock/task/log ports
 
 Dependency rules:
 
-1. Authoring contracts are pure definitions and types. They perform no filesystem, server, environment, or process work.
+1. Authoring contracts are pure definitions and types. They perform no filesystem, server, environment, or process work. The public package root re-exports only authoring modules; authoring code cannot import `node:*` or directly use ambient side-effect capabilities.
 2. The kernel depends on interfaces for storage, clock persistence, logging, HTTP delivery, and process-independent configuration.
 3. Node filesystem, Hono server, CLI, config loader, and child-process support are adapters that depend inward on the kernel.
-4. Plugins depend only on the public authoring contract plus their chosen ecosystem libraries.
+4. Plugins depend only on the public root authoring contract plus their chosen ecosystem libraries. The plugin test kit may additionally use the explicit public `localhost2137/testing` entry point, never repository source internals.
 5. The Slack and Stripe plugins never import runtime internals.
 6. CLI and control HTTP handlers never invoke plugin functions directly; they use the application service/client and operation executor.
 7. Internal folders have no catch-all `utils.ts` or broad internal barrel exports. Shared code must have a specific domain name and a clear owner.

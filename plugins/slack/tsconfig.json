@@ -3,7 +3,7 @@
 	"compilerOptions": {
 		"outDir": "dist",
 		"rootDir": "src",
-		"tsBuildInfoFile": "dist/.tsbuildinfo"
+		"tsBuildInfoFile": "../../node_modules/.cache/typescript/plugin-slack.tsbuildinfo"
 	},
 	"include": ["src/**/*.ts"],
 	"references": [{ "path": "../../packages/localhost2137" }]

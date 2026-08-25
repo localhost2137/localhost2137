@@ -256,7 +256,10 @@ export type ScenarioFacade<Services extends ServiceRecord> = {
 /** External testing/client handle; unlike ScenarioFacade, it may manage the instance. */
 export type InstanceHandle<Services extends ServiceRecord> = ScenarioFacade<Services> & {
 	readonly env: Readonly<Record<string, string>>;
+	destroy(): Promise<void>;
 	idle(): Promise<void>;
+	reset(options?: Readonly<{ seed?: boolean }>): Promise<void>;
+	seed(): Promise<void>;
 };
 
 export interface RuntimeConfig<Services extends ServiceRecord> {

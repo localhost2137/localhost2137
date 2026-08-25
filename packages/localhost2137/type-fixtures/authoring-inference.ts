@@ -114,6 +114,8 @@ const config = defineConfig({
 
 		// @ts-expect-error scenario seeding already owns the exclusive lease
 		await scenario.idle();
+		// @ts-expect-error scenario seed cannot destroy its owning instance
+		await scenario.destroy();
 		// @ts-expect-error connection env belongs to an external instance handle
 		scenario.env;
 	},
@@ -124,9 +126,13 @@ declare const scenario: ScenarioFacade<typeof config.services>;
 declare const instance: InstanceHandle<typeof config.services>;
 const alice = instance.slack.createUser({ name: "Alice" });
 const instanceEnvironment: Readonly<Record<string, string>> = instance.env;
+const destroyResult: Promise<void> = instance.destroy();
 const idleResult: Promise<void> = instance.idle();
+const resetResult: Promise<void> = instance.reset({ seed: true });
 void instanceEnvironment;
+void destroyResult;
 void idleResult;
+void resetResult;
 void scenario.slack.connection.apiUrl;
 
 type _ConfigOutput = Expect<Equal<SlackConfig["eventsUrl"], string | null>>;
