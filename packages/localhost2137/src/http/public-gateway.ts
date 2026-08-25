@@ -121,7 +121,7 @@ class PublicGateway {
 								: { responseBytes: responseSize(response) }),
 							responseStatus: response.status,
 						}),
-							correlationId: requestCorrelationId,
+						correlationId: requestCorrelationId,
 						durationMs: elapsed(this.#monotonicClock.nowMilliseconds(), startedAt),
 						instanceId,
 						kind: "request",
