@@ -1,3 +1,4 @@
+import type { RunningPluginContext } from "../authoring/context.js";
 import {
 	type ActiveInstanceDependencies,
 	ActiveInstanceFactory,
@@ -18,10 +19,16 @@ import type { InstanceTemplate } from "./instance-template.js";
 import { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { PersistedInstanceRuntime } from "./persisted-instance-runtime.js";
 import type { AnyServiceLifecycle } from "./service-lifecycle.js";
-import type { StructuredLogSnapshot } from "./structured-log.js";
+import type { StructuredLogRing, StructuredLogSnapshot } from "./structured-log.js";
 
 export interface InstanceManagerDependencies extends ActiveInstanceDependencies {
 	readonly token: () => string;
+}
+
+export interface RunningServiceLease {
+	readonly context: RunningPluginContext<unknown, unknown>;
+	readonly logs: StructuredLogRing;
+	release(): void;
 }
 
 class ServiceNotFoundError extends Error {
@@ -104,6 +111,41 @@ export class InstanceManager {
 				);
 			let released = false;
 			return Object.freeze({
+				release: () => {
+					if (released) return;
+					released = true;
+					lease.release();
+					admission.release();
+				},
+			});
+		} catch (cause) {
+			admission.release();
+			throw cause;
+		}
+	}
+
+	async acquireService(
+		id: string,
+		key: string,
+		signal?: AbortSignal,
+	): Promise<RunningServiceLease> {
+		const admission = this.#runtime.admit();
+		try {
+			const instanceId = parseInstanceId(id);
+			const serviceKey = parseServiceKey(key);
+			const active = this.#registry.get(instanceId);
+			const service = active.services.find(
+				(candidate) => candidate.serviceKey === serviceKey.value,
+			);
+			if (!service) throw new ServiceNotFoundError(instanceId.value, serviceKey.value);
+			const operationSignal = signal
+				? AbortSignal.any([signal, admission.signal])
+				: admission.signal;
+			const lease = await active.leases.acquireShared(operationSignal);
+			let released = false;
+			return Object.freeze({
+				context: service.runningContext(operationSignal),
+				logs: active.logs,
 				release: () => {
 					if (released) return;
 					released = true;

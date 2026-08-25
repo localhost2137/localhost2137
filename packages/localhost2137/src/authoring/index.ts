@@ -1,3 +1,11 @@
+export {
+	defineConfig,
+	type InstanceClockStatus,
+	type InstanceHandle,
+	type ReservedServiceKey,
+	type RuntimeConfig,
+	type ScenarioFacade,
+} from "./config.js";
 export type {
 	BasePluginContext,
 	PluginClock,
@@ -8,23 +16,20 @@ export type {
 	TaskTracker,
 } from "./context.js";
 export {
-	defineConfig,
-	type InstanceClockStatus,
-	type InstanceHandle,
-	type ReservedServiceKey,
-	type RuntimeConfig,
-	type ScenarioFacade,
-} from "./config.js";
+	LocalhostError,
+	type LocalhostErrorOptions,
+	type RuntimeErrorCode,
+} from "./localhost-error.js";
 export {
-	defineOperation,
 	type BoundOperationDefinition,
+	defineOperation,
 	type OperationDefinition,
 	type OperationDefinitionInput,
 } from "./operation.js";
 export {
-	definePlugin,
 	type ConnectionContext,
 	type ConnectionMetadata,
+	definePlugin,
 	type Lifecycle,
 	type PluginFactory,
 	type ReservedOperationKey,

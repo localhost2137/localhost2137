@@ -1,5 +1,5 @@
-import { type InstanceId, parseServiceKey } from "./identifiers.js";
 import { ActiveInstanceGeneration } from "./active-instance-generation.js";
+import { type InstanceId, parseServiceKey } from "./identifiers.js";
 import { ReadonlyInstanceClock } from "./instance-clock.js";
 import { InstanceLeaseCoordinator, type MonotonicClock } from "./instance-leases.js";
 import { InstanceLifecycle, type ScenarioSeedPort } from "./instance-lifecycle.js";
@@ -57,10 +57,16 @@ export interface ActiveInstanceDependencies {
 	readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 	readonly logLimits: StructuredLogLimits;
 	readonly monotonicClock: MonotonicClock;
-	readonly scenarioSeed?: (instanceId: string) => ScenarioSeedPort | undefined;
+	readonly scenarioSeed?: (input: ScenarioSeedFactoryInput) => ScenarioSeedPort | undefined;
 	readonly scheduler: TaskScheduler;
 	readonly storage: InstanceStoragePort;
 	readonly time: RuntimeTime;
+}
+
+export interface ScenarioSeedFactoryInput {
+	readonly instanceId: string;
+	readonly logs: StructuredLogRing;
+	readonly services: readonly AnyServiceLifecycle[];
 }
 
 export class ActiveInstanceFactory {
@@ -87,7 +93,11 @@ export class ActiveInstanceFactory {
 			this.#service(instanceId, template, clock, tasks, logs, generation.signal, hooks),
 		);
 		const holder = { manifest };
-		const scenarioSeed = this.#dependencies.scenarioSeed?.(instanceId.value);
+		const scenarioSeed = this.#dependencies.scenarioSeed?.({
+			instanceId: instanceId.value,
+			logs,
+			services,
+		});
 		const lifecycle = new InstanceLifecycle({
 			hooks,
 			now: () => this.#dependencies.time.nowTimestamp(),
