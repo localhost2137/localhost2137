@@ -14,6 +14,7 @@ import {
 	InstanceResetError,
 } from "../../src/kernel/instance-manager.js";
 import type { InstanceTemplate } from "../../src/kernel/instance-template.js";
+import { MutationTimeoutError } from "../../src/kernel/mutation-scope.js";
 import { InstanceRuntimeClosedError } from "../../src/kernel/persisted-instance-runtime.js";
 import type { RuntimeTime } from "../../src/kernel/runtime-time.js";
 import {
@@ -316,6 +317,30 @@ describe("InstanceManager with durable Node storage", () => {
 		await expect(
 			fixture.manager.create({ id: "too-late", persistence: "persistent", seed: false }),
 		).rejects.toBeInstanceOf(InstanceRuntimeClosedError);
+	});
+
+	it("starts the create deadline before storage initialization", async () => {
+		const time = new ManualTime();
+		const initialization = deferred<void>();
+		const fixture = await managerFixture(instanceTemplate(), undefined, {
+			monotonicClock: time,
+			scheduler: time,
+		});
+		vi.spyOn(fixture.storage, "initialize").mockImplementationOnce(() => initialization.promise);
+		const creating = fixture.manager.create({
+			id: "delayed",
+			persistence: "persistent",
+			seed: false,
+			timeoutMs: 10,
+		});
+
+		time.advance(10);
+
+		await expect(creating).rejects.toBeInstanceOf(MutationTimeoutError);
+		initialization.resolve(undefined);
+		await Promise.resolve();
+		expect(await fixture.storage.readInstance(parseInstanceId("delayed"))).toBeUndefined();
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 	});
 
 	it("shutdown drains an admitted persisted startup without publishing a partial instance", async () => {

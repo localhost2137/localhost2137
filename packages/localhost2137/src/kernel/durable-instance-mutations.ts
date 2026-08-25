@@ -109,6 +109,7 @@ export class DurableInstanceMutations {
 		});
 		const releaseReservation = this.#registry.reserve(instanceId);
 		try {
+			await scope.wait(() => this.#storage.initialize());
 			if (await scope.wait(() => this.#storage.readInstance(instanceId))) {
 				throw new InstanceAlreadyExistsError(instanceId.value);
 			}

@@ -72,7 +72,6 @@ export class InstanceManager {
 		const instanceId = parseInstanceId(options.id);
 		const admission = this.#runtime.admit();
 		try {
-			await this.#runtime.initialize();
 			return await this.#mutations.create(instanceId, {
 				...options,
 				runtimeSignal: admission.signal,
