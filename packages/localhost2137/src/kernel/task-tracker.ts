@@ -69,6 +69,7 @@ export class InstanceTaskTracker implements TaskTracker {
 	readonly #tasks = new Map<number, string>();
 	readonly #waiters = new Set<() => void>();
 	#accepting = true;
+	#closePromise: Promise<TaskCloseReport> | undefined;
 	#nextTaskId = 1;
 
 	constructor(scheduler: TaskScheduler) {
@@ -81,15 +82,22 @@ export class InstanceTaskTracker implements TaskTracker {
 		const taskId = this.#nextTaskId;
 		this.#nextTaskId += 1;
 		this.#tasks.set(taskId, label);
-		return task
-			.catch((cause: unknown) => {
+		const tracked = task.then(
+			(value) => {
+				this.#finishTask(taskId);
+				return value;
+			},
+			(cause: unknown) => {
 				this.#failures.push(Object.freeze({ cause, label }));
+				this.#finishTask(taskId);
 				throw cause;
-			})
-			.finally(() => {
-				this.#tasks.delete(taskId);
-				this.#notifyWaiters();
-			});
+			},
+		);
+		// Tracking owns the background rejection even when a caller intentionally
+		// ignores the returned promise. The original rejecting promise remains
+		// awaitable and its failure is still surfaced by idle()/close().
+		void tracked.catch(() => undefined);
+		return tracked;
 	}
 
 	async idle(options: WaitOptions = {}): Promise<void> {
@@ -98,10 +106,16 @@ export class InstanceTaskTracker implements TaskTracker {
 		if (failures.length > 0) throw new TrackedTaskFailuresError(failures);
 	}
 
-	async close(
+	close(options: Readonly<{ graceMs: number; signal?: AbortSignal }>): Promise<TaskCloseReport> {
+		if (this.#closePromise) return this.#closePromise;
+		this.#accepting = false;
+		this.#closePromise = this.#finishClose(options);
+		return this.#closePromise;
+	}
+
+	async #finishClose(
 		options: Readonly<{ graceMs: number; signal?: AbortSignal }>,
 	): Promise<TaskCloseReport> {
-		this.#accepting = false;
 		try {
 			await this.#drain({
 				...(options.signal ? { signal: options.signal } : {}),
@@ -116,6 +130,11 @@ export class InstanceTaskTracker implements TaskTracker {
 			failures: Object.freeze(this.#takeFailures()),
 			unfinishedLabels: Object.freeze([...this.#tasks.values()]),
 		});
+	}
+
+	#finishTask(taskId: number): void {
+		this.#tasks.delete(taskId);
+		this.#notifyWaiters();
 	}
 
 	unfinishedLabels(): readonly string[] {

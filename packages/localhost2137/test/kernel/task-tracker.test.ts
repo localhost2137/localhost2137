@@ -57,6 +57,24 @@ describe("InstanceTaskTracker", () => {
 		await expect(tracker.idle()).resolves.toBeUndefined();
 	});
 
+	it("owns ignored background rejections while keeping them idle-visible", async () => {
+		const tracker = new InstanceTaskTracker(new ManualScheduler());
+		const unhandled: unknown[] = [];
+		const onUnhandled = (cause: unknown) => unhandled.push(cause);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			tracker.track("background-delivery", Promise.reject(new Error("background failed")));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(unhandled).toEqual([]);
+			await expect(tracker.idle()).rejects.toMatchObject({
+				failures: [{ label: "background-delivery" }],
+			});
+		} finally {
+			process.removeListener("unhandledRejection", onUnhandled);
+		}
+	});
+
 	it("times out with the labels that remain unfinished", async () => {
 		const scheduler = new ManualScheduler();
 		const tracker = new InstanceTaskTracker(scheduler);
@@ -96,6 +114,28 @@ describe("InstanceTaskTracker", () => {
 
 		await expect(close).resolves.toEqual({ failures: [], unfinishedLabels: ["shutdown-work"] });
 		expect(() => tracker.track("late", Promise.resolve())).toThrow(TaskTrackerClosedError);
+		pending.resolve();
+		await tracked;
+	});
+
+	it("memoizes concurrent and subsequent close calls with one stable report", async () => {
+		const scheduler = new ManualScheduler();
+		const tracker = new InstanceTaskTracker(scheduler);
+		const pending = deferred<void>();
+		const tracked = tracker.track("shutdown-work", pending.promise);
+		const first = tracker.close({ graceMs: 25 });
+		const concurrent = tracker.close({ graceMs: 999 });
+		expect(concurrent).toBe(first);
+		scheduler.fire();
+
+		const firstReport = await first;
+		const concurrentReport = await concurrent;
+		const subsequent = tracker.close({ graceMs: 0 });
+		expect(subsequent).toBe(first);
+		expect(concurrentReport).toBe(firstReport);
+		expect(await subsequent).toBe(firstReport);
+		expect(firstReport).toEqual({ failures: [], unfinishedLabels: ["shutdown-work"] });
+
 		pending.resolve();
 		await tracked;
 	});

@@ -64,6 +64,42 @@ describe("InstanceLeaseCoordinator", () => {
 		secondShared.release();
 	});
 
+	it("preserves FIFO order while batching only adjacent shared waiters", async () => {
+		const time = new ManualTime();
+		const tracker = new InstanceTaskTracker(time);
+		const leases = new InstanceLeaseCoordinator(tracker, time, time);
+		const firstExclusive = await leases.acquireExclusive({ timeoutMs: 100 });
+		const grants: string[] = [];
+		const firstSharedPromise = leases.acquireShared().then((lease) => {
+			grants.push("shared:first");
+			return lease;
+		});
+		const secondSharedPromise = leases.acquireShared().then((lease) => {
+			grants.push("shared:second");
+			return lease;
+		});
+		const nextExclusivePromise = leases.acquireExclusive({ timeoutMs: 100 }).then((lease) => {
+			grants.push("exclusive:next");
+			return lease;
+		});
+		const trailingSharedPromise = leases.acquireShared().then((lease) => {
+			grants.push("shared:trailing");
+			return lease;
+		});
+
+		firstExclusive.release();
+		const firstShared = await firstSharedPromise;
+		const secondShared = await secondSharedPromise;
+		expect(grants).toEqual(["shared:first", "shared:second"]);
+		firstShared.release();
+		secondShared.release();
+		const nextExclusive = await nextExclusivePromise;
+		expect(grants).toEqual(["shared:first", "shared:second", "exclusive:next"]);
+		nextExclusive.release();
+		(await trailingSharedPromise).release();
+		expect(grants).toEqual(["shared:first", "shared:second", "exclusive:next", "shared:trailing"]);
+	});
+
 	it("holds exclusivity until tracked tasks finish", async () => {
 		const time = new ManualTime();
 		const tracker = new InstanceTaskTracker(time);
@@ -99,6 +135,27 @@ describe("InstanceLeaseCoordinator", () => {
 		const anotherShared = await leases.acquireShared();
 		anotherShared.release();
 		shared.release();
+	});
+
+	it("reports every actual blocker when an exclusive request times out", async () => {
+		const time = new ManualTime();
+		const tracker = new InstanceTaskTracker(time);
+		const leases = new InstanceLeaseCoordinator(tracker, time, time);
+		const activeExclusive = await leases.acquireExclusive({ timeoutMs: 100 });
+		const queuedShared = leases.acquireShared();
+		const timedOutExclusive = leases.acquireExclusive({ timeoutMs: 10 });
+		time.advanceAndFire(10);
+
+		await expect(timedOutExclusive).rejects.toMatchObject({
+			activeExclusiveLease: true,
+			activeSharedLeases: 0,
+			queuedRequestsAhead: 1,
+		});
+		await expect(timedOutExclusive).rejects.toThrow(
+			"active exclusive: yes; active shared: 0; queued ahead: 1",
+		);
+		activeExclusive.release();
+		(await queuedShared).release();
 	});
 
 	it("releases its internal exclusive lease when tracked-task draining times out", async () => {

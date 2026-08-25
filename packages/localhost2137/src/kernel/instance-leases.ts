@@ -18,12 +18,24 @@ export interface ExclusiveLeaseOptions {
 }
 
 export class LeaseTimeoutError extends Error {
+	readonly activeExclusiveLease: boolean;
 	readonly activeSharedLeases: number;
+	readonly queuedRequestsAhead: number;
 
-	constructor(activeSharedLeases: number) {
-		super(`Timed out waiting for ${activeSharedLeases} shared instance lease(s) to finish.`);
+	constructor(input: {
+		readonly activeExclusiveLease: boolean;
+		readonly activeSharedLeases: number;
+		readonly queuedRequestsAhead: number;
+	}) {
+		super(
+			"Timed out waiting for an exclusive instance lease " +
+				`(active exclusive: ${input.activeExclusiveLease ? "yes" : "no"}; ` +
+				`active shared: ${input.activeSharedLeases}; queued ahead: ${input.queuedRequestsAhead}).`,
+		);
 		this.name = "LeaseTimeoutError";
-		this.activeSharedLeases = activeSharedLeases;
+		this.activeExclusiveLease = input.activeExclusiveLease;
+		this.activeSharedLeases = input.activeSharedLeases;
+		this.queuedRequestsAhead = input.queuedRequestsAhead;
 	}
 }
 
@@ -47,13 +59,13 @@ export class LeaseRetiredError extends Error {
 interface QueuedWaiter {
 	readonly cancel: (cause: Error) => void;
 	readonly grant: () => void;
+	readonly kind: "exclusive" | "shared";
 }
 
 export class InstanceLeaseCoordinator {
 	readonly #clock: MonotonicClock;
-	readonly #exclusiveQueue: QueuedWaiter[] = [];
+	readonly #queue: QueuedWaiter[] = [];
 	readonly #scheduler: TaskScheduler;
-	readonly #sharedQueue: QueuedWaiter[] = [];
 	readonly #tasks: TrackedTaskDrain;
 	#activeExclusive = false;
 	#activeShared = 0;
@@ -68,7 +80,7 @@ export class InstanceLeaseCoordinator {
 	acquireShared(signal?: AbortSignal): Promise<InstanceLease> {
 		if (this.#retired) return Promise.reject(new LeaseRetiredError());
 		if (signal?.aborted) return Promise.reject(new LeaseAbortedError(signal.reason));
-		if (!this.#activeExclusive && this.#exclusiveQueue.length === 0) {
+		if (!this.#activeExclusive && this.#queue.length === 0) {
 			return Promise.resolve(this.#grantSharedLease());
 		}
 		return new Promise((resolve, reject) => {
@@ -76,9 +88,10 @@ export class InstanceLeaseCoordinator {
 			const cancel = (cause: Error) => {
 				if (settled) return;
 				settled = true;
-				removeWaiter(this.#sharedQueue, waiter);
+				removeWaiter(this.#queue, waiter);
 				signal?.removeEventListener("abort", abort);
 				reject(cause);
+				this.#pump();
 			};
 			const abort = () => cancel(new LeaseAbortedError(signal?.reason));
 			const grant = () => {
@@ -87,8 +100,8 @@ export class InstanceLeaseCoordinator {
 				signal?.removeEventListener("abort", abort);
 				resolve(this.#grantSharedLease());
 			};
-			const waiter: QueuedWaiter = { cancel, grant };
-			this.#sharedQueue.push(waiter);
+			const waiter: QueuedWaiter = { cancel, grant, kind: "shared" };
+			this.#queue.push(waiter);
 			signal?.addEventListener("abort", abort, { once: true });
 			if (signal?.aborted) abort();
 		});
@@ -116,8 +129,7 @@ export class InstanceLeaseCoordinator {
 		if (this.#retired) return;
 		this.#retired = true;
 		const cause = new LeaseRetiredError();
-		for (const waiter of [...this.#exclusiveQueue]) waiter.cancel(cause);
-		for (const waiter of [...this.#sharedQueue]) waiter.cancel(cause);
+		for (const waiter of [...this.#queue]) waiter.cancel(cause);
 	}
 
 	#waitForExclusive(options: ExclusiveLeaseOptions): Promise<InstanceLease> {
@@ -131,7 +143,7 @@ export class InstanceLeaseCoordinator {
 			const cancel = (cause: Error) => {
 				if (settled) return;
 				settled = true;
-				removeWaiter(this.#exclusiveQueue, waiter);
+				removeWaiter(this.#queue, waiter);
 				cleanup();
 				reject(cause);
 				this.#pump();
@@ -144,11 +156,17 @@ export class InstanceLeaseCoordinator {
 				this.#activeExclusive = true;
 				resolve(this.#exclusiveLease());
 			};
-			const waiter: QueuedWaiter = { cancel, grant };
-			this.#exclusiveQueue.push(waiter);
+			const waiter: QueuedWaiter = { cancel, grant, kind: "exclusive" };
+			this.#queue.push(waiter);
 			options.signal?.addEventListener("abort", abort, { once: true });
 			timeout = this.#scheduler.schedule(options.timeoutMs, () => {
-				cancel(new LeaseTimeoutError(this.#activeShared));
+				cancel(
+					new LeaseTimeoutError({
+						activeExclusiveLease: this.#activeExclusive,
+						activeSharedLeases: this.#activeShared,
+						queuedRequestsAhead: Math.max(0, this.#queue.indexOf(waiter)),
+					}),
+				);
 			});
 			if (options.signal?.aborted) abort();
 			this.#pump();
@@ -182,13 +200,15 @@ export class InstanceLeaseCoordinator {
 
 	#pump(): void {
 		if (this.#retired) return;
-		if (this.#activeExclusive || this.#activeShared > 0) return;
-		const exclusive = this.#exclusiveQueue.shift();
-		if (exclusive) {
-			exclusive.grant();
+		if (this.#activeExclusive) return;
+		const first = this.#queue[0];
+		if (!first) return;
+		if (this.#activeShared > 0 && first.kind === "exclusive") return;
+		if (first.kind === "exclusive") {
+			this.#queue.shift()?.grant();
 			return;
 		}
-		for (const shared of this.#sharedQueue.splice(0)) shared.grant();
+		while (this.#queue[0]?.kind === "shared") this.#queue.shift()?.grant();
 	}
 }
 
