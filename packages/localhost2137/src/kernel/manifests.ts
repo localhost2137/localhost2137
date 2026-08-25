@@ -4,7 +4,7 @@ const INSTANCE_MANIFEST_SCHEMA_VERSION = 1;
 const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 const TRANSITION_MANIFEST_SCHEMA_VERSION = 1;
 
-type InstanceClockState =
+export type InstanceClockState =
 	| Readonly<{ mode: "real"; offsetMs: number }>
 	| Readonly<{ instantMs: number; mode: "pinned" }>;
 

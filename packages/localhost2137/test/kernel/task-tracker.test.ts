@@ -1,0 +1,116 @@
+import { describe, expect, it } from "vitest";
+import {
+	InstanceTaskTracker,
+	type ScheduledTask,
+	TaskIdleAbortedError,
+	TaskIdleTimeoutError,
+	type TaskScheduler,
+	TaskTrackerClosedError,
+	TrackedTaskFailuresError,
+} from "../../src/kernel/task-tracker.js";
+
+class ManualScheduler implements TaskScheduler {
+	readonly callbacks = new Set<() => void>();
+
+	schedule(_delayMs: number, callback: () => void): ScheduledTask {
+		this.callbacks.add(callback);
+		return { cancel: () => this.callbacks.delete(callback) };
+	}
+
+	fire(): void {
+		for (const callback of [...this.callbacks]) callback();
+	}
+}
+
+describe("InstanceTaskTracker", () => {
+	it("waits for tasks nested by a completing task and decrements in finally", async () => {
+		const tracker = new InstanceTaskTracker(new ManualScheduler());
+		const parent = deferred<void>();
+		const child = deferred<void>();
+		let trackedChild: Promise<void> | undefined;
+		const trackedParent = tracker.track(
+			"parent",
+			parent.promise.then(() => {
+				trackedChild = tracker.track("child", child.promise);
+			}),
+		);
+		const idle = tracker.idle();
+		parent.resolve();
+		await trackedParent;
+		expect(tracker.unfinishedLabels()).toEqual(["child"]);
+		child.resolve();
+		await trackedChild;
+		await idle;
+		expect(tracker.unfinishedLabels()).toEqual([]);
+	});
+
+	it("retains task failures until idle surfaces them", async () => {
+		const tracker = new InstanceTaskTracker(new ManualScheduler());
+		const failure = new Error("delivery failed");
+		await expect(tracker.track("delivery", Promise.reject(failure))).rejects.toBe(failure);
+
+		const idle = tracker.idle();
+		await expect(idle).rejects.toBeInstanceOf(TrackedTaskFailuresError);
+		await expect(idle).rejects.toMatchObject({
+			failures: [{ cause: failure, label: "delivery" }],
+		});
+		await expect(tracker.idle()).resolves.toBeUndefined();
+	});
+
+	it("times out with the labels that remain unfinished", async () => {
+		const scheduler = new ManualScheduler();
+		const tracker = new InstanceTaskTracker(scheduler);
+		const pending = deferred<void>();
+		const tracked = tracker.track("never-finishes", pending.promise);
+		const idle = tracker.idle({ timeoutMs: 10 });
+		scheduler.fire();
+
+		await expect(idle).rejects.toBeInstanceOf(TaskIdleTimeoutError);
+		await expect(idle).rejects.toMatchObject({
+			unfinishedLabels: ["never-finishes"],
+		});
+		pending.resolve();
+		await tracked;
+	});
+
+	it("observes caller cancellation", async () => {
+		const tracker = new InstanceTaskTracker(new ManualScheduler());
+		const pending = deferred<void>();
+		const tracked = tracker.track("cancelled-wait", pending.promise);
+		const controller = new AbortController();
+		const idle = tracker.idle({ signal: controller.signal });
+		controller.abort("stop");
+
+		await expect(idle).rejects.toBeInstanceOf(TaskIdleAbortedError);
+		pending.resolve();
+		await tracked;
+	});
+
+	it("closes admission and reports unfinished labels after its grace period", async () => {
+		const scheduler = new ManualScheduler();
+		const tracker = new InstanceTaskTracker(scheduler);
+		const pending = deferred<void>();
+		const tracked = tracker.track("shutdown-work", pending.promise);
+		const close = tracker.close({ graceMs: 25 });
+		scheduler.fire();
+
+		await expect(close).resolves.toEqual({ failures: [], unfinishedLabels: ["shutdown-work"] });
+		expect(() => tracker.track("late", Promise.resolve())).toThrow(TaskTrackerClosedError);
+		pending.resolve();
+		await tracked;
+	});
+});
+
+function deferred<T>(): Readonly<{
+	promise: Promise<T>;
+	reject: (cause?: unknown) => void;
+	resolve: (value: T | PromiseLike<T>) => void;
+}> {
+	let resolvePromise: (value: T | PromiseLike<T>) => void = () => undefined;
+	let rejectPromise: (cause?: unknown) => void = () => undefined;
+	const promise = new Promise<T>((resolve, reject) => {
+		resolvePromise = resolve;
+		rejectPromise = reject;
+	});
+	return { promise, reject: rejectPromise, resolve: resolvePromise };
+}
