@@ -156,4 +156,45 @@ describe("operation schema metadata", () => {
 			}),
 		);
 	});
+
+	it("retains recursive object introspection and selects JSON CLI input", () => {
+		const recursive = z.object({
+			children: z.array(z.lazy(() => recursive)).optional(),
+			name: z.string(),
+		});
+		const metadata = createOperationMetadata(
+			operation({
+				description: "Create a recursive tree",
+				input: recursive,
+				output: z.object({ ok: z.boolean() }),
+				run: () => ({ ok: true }),
+			}),
+		);
+
+		expect(metadata.input.properties).toMatchObject({
+			children: { items: { $ref: "#" }, type: "array" },
+		});
+		expect(metadata.cli).toEqual({
+			kind: "json",
+			reason: 'Array field "children" does not have scalar items.',
+		});
+	});
+
+	it("freezes JSON metadata through arbitrarily nested arrays", () => {
+		const metadata = createSchemaMetadata(
+			z.string().meta({ examples: [[[{ label: "deep" }]]] }),
+			"config",
+			"input",
+		);
+		const examples = metadata.examples;
+		expect(Array.isArray(examples)).toBe(true);
+		if (!Array.isArray(examples)) return;
+		const first = examples[0];
+		const second = Array.isArray(first) ? first[0] : undefined;
+		const third = Array.isArray(second) ? second[0] : undefined;
+		expect(Object.isFrozen(examples)).toBe(true);
+		expect(Object.isFrozen(first)).toBe(true);
+		expect(Object.isFrozen(second)).toBe(true);
+		expect(Object.isFrozen(third)).toBe(true);
+	});
 });

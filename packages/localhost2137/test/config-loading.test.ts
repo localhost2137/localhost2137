@@ -43,6 +43,8 @@ describe("config discovery and TypeScript import", () => {
 
 		expect(config.clock).toEqual({ mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" });
 		expect(config.services.primary?.seed).toEqual({ names: ["Alice"] });
+		expect(config.services.primary?.configSchema.required).toEqual(["label", "token"]);
+		expect(config.services.primary?.seedSchema?.required).toBeUndefined();
 		expect(config.services.primary?.operations.createThing?.cli.kind).toBe("flags");
 		expect(config.services.secondary?.exportEnv).toBe(false);
 		expect(config.storage.dir).toBe(join(fixtureDirectory, "full/state/local"));

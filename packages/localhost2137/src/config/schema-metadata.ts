@@ -66,7 +66,7 @@ export function createSchemaMetadata(
 			target: "draft-2020-12",
 			unrepresentable: "throw",
 		});
-		const normalized = normalizeJsonValue(jsonSchema);
+		const normalized = normalizeJsonValue(jsonSchema, new WeakSet());
 		if (!isJsonObject(normalized)) {
 			throw new TypeError("Zod returned a non-object JSON Schema.");
 		}
@@ -265,7 +265,7 @@ export function toCliName(value: string): string {
 		.toLowerCase();
 }
 
-function normalizeJsonValue(value: unknown): JsonValue {
+function normalizeJsonValue(value: unknown, ancestors: WeakSet<object>): JsonValue {
 	if (value === null || typeof value === "boolean" || typeof value === "string") {
 		return value;
 	}
@@ -273,18 +273,28 @@ function normalizeJsonValue(value: unknown): JsonValue {
 		return value;
 	}
 	if (Array.isArray(value)) {
-		return value.map(normalizeJsonValue);
+		assertJsonTreeAcyclic(value, ancestors);
+		const normalized = value.map((entry) => normalizeJsonValue(entry, ancestors));
+		ancestors.delete(value);
+		return normalized;
 	}
 	if (isUnknownRecord(value)) {
+		assertJsonTreeAcyclic(value, ancestors);
 		const result: Record<string, JsonValue> = {};
 		for (const [key, entry] of Object.entries(value)) {
 			if (entry !== undefined) {
-				result[key] = normalizeJsonValue(entry);
+				result[key] = normalizeJsonValue(entry, ancestors);
 			}
 		}
+		ancestors.delete(value);
 		return result;
 	}
 	throw new TypeError("Value is not JSON-compatible.");
+}
+
+function assertJsonTreeAcyclic(value: object, ancestors: WeakSet<object>): void {
+	if (ancestors.has(value)) throw new TypeError("JSON Schema metadata contains an object cycle.");
+	ancestors.add(value);
 }
 
 function isUnknownRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -296,15 +306,25 @@ function isJsonObject(value: JsonValue | undefined): value is JsonObject {
 }
 
 function freezeJsonObject(value: JsonObject): JsonObject {
-	for (const entry of Object.values(value)) freezeJsonValue(entry);
-	return Object.freeze(value);
+	freezeJsonValue(value, new WeakSet());
+	return value;
 }
 
-function freezeJsonValue(value: JsonValue): void {
+function freezeJsonObjectEntry(value: JsonObject, visited: WeakSet<object>): void {
+	if (visited.has(value)) return;
+	visited.add(value);
+	for (const entry of Object.values(value)) freezeJsonValue(entry, visited);
+	Object.freeze(value);
+}
+
+function freezeJsonValue(value: JsonValue, visited: WeakSet<object>): void {
 	if (Array.isArray(value)) {
-		for (const entry of value) freezeJsonValue(entry);
+		if (visited.has(value)) return;
+		visited.add(value);
+		for (const entry of value) freezeJsonValue(entry, visited);
 		Object.freeze(value);
 	} else if (isJsonObject(value)) {
-		freezeJsonObject(value);
+		freezeJsonObjectEntry(value, visited);
 	}
+	return;
 }
