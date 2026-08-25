@@ -33,7 +33,7 @@ export interface RunningServiceLease {
 	release(): void;
 }
 
-class ServiceNotFoundError extends Error {
+export class ServiceNotFoundError extends Error {
 	constructor(instanceId: string, serviceKey: string) {
 		super(`Service "${serviceKey}" is not configured for instance "${instanceId}".`);
 		this.name = "ServiceNotFoundError";
