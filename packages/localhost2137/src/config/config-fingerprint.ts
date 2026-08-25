@@ -1,49 +1,57 @@
 import { createHash } from "node:crypto";
 
+/**
+ * Fingerprints accept only normalized JSON data. Type-tagged canonical
+ * encoding makes object keys distinct from values and avoids sentinel-shaped
+ * user data colliding with special runtime representations.
+ */
 export function createConfigFingerprint(value: unknown): string {
-	return `sha256:${createHash("sha256").update(stableSerialize(value)).digest("hex")}`;
+	return `sha256:${createHash("sha256").update(encode(value, new WeakSet())).digest("hex")}`;
 }
 
-function stableSerialize(value: unknown): string {
-	return JSON.stringify(canonicalize(value, new WeakSet()));
-}
-
-function canonicalize(value: unknown, seen: WeakSet<object>): unknown {
-	if (
-		value === null ||
-		typeof value === "boolean" ||
-		typeof value === "number" ||
-		typeof value === "string"
-	) {
-		return value;
+function encode(value: unknown, ancestors: WeakSet<object>): string {
+	if (value === null) return "null;";
+	if (typeof value === "boolean") return value ? "bool:1;" : "bool:0;";
+	if (typeof value === "string") return `str:${JSON.stringify(value)};`;
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw unsupported(value);
+		return `num:${Object.is(value, -0) ? "-0" : String(value)};`;
 	}
-	if (value === undefined) {
-		return { $undefined: true };
-	}
-	if (typeof value === "bigint") {
-		return { $bigint: value.toString() };
-	}
-	if (typeof value === "function" || typeof value === "symbol") {
-		return { $type: typeof value };
-	}
-	if (seen.has(value)) {
-		throw new TypeError("Cannot fingerprint a cyclic configuration value.");
-	}
-	seen.add(value);
-
 	if (Array.isArray(value)) {
-		const result = value.map((entry) => canonicalize(entry, seen));
-		seen.delete(value);
-		return result;
+		assertAcyclic(value, ancestors);
+		const encoded = `array:${value.length}:[${value.map((entry) => encode(entry, ancestors)).join("")}]`;
+		ancestors.delete(value);
+		return encoded;
 	}
-	if (value instanceof Date) {
-		seen.delete(value);
-		return { $date: value.toISOString() };
+	if (isPlainRecord(value)) {
+		assertAcyclic(value, ancestors);
+		const keys = Object.keys(value).sort(codeUnitOrder);
+		const encoded = `object:${keys.length}:{${keys
+			.map((key) => `${encode(key, ancestors)}${encode(value[key], ancestors)}`)
+			.join("")}}`;
+		ancestors.delete(value);
+		return encoded;
 	}
-	const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-	const result = Object.fromEntries(
-		entries.map(([key, entry]) => [key, canonicalize(entry, seen)]),
+	throw unsupported(value);
+}
+
+function codeUnitOrder(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function assertAcyclic(value: object, ancestors: WeakSet<object>): void {
+	if (ancestors.has(value)) throw new TypeError("Cannot fingerprint cyclic config data.");
+	ancestors.add(value);
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+}
+
+function unsupported(value: unknown): TypeError {
+	return new TypeError(
+		`Cannot fingerprint non-JSON config data (${value === undefined ? "undefined" : typeof value}).`,
 	);
-	seen.delete(value);
-	return result;
 }

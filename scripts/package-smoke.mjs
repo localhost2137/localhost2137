@@ -140,6 +140,82 @@ async function main() {
 			(name, index) => `import * as package${index} from ${JSON.stringify(name)};`,
 		);
 		const bindings = packageNames.map((_, index) => `package${index}`).join(", ");
+		if (!packageNames.includes("localhost2137")) {
+			throw new Error("Package smoke requires the localhost2137 host package");
+		}
+		const runtimeAuthoringSmoke = `
+import { Hono } from "hono";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { defineOperation, definePlugin } from "localhost2137";
+import { z } from "zod";
+
+const bindPackedOperation = defineOperation();
+const packedOperation = bindPackedOperation({
+	description: "Verify packed peer identity",
+	input: z.object({ name: z.string() }),
+	output: z.object({ ok: z.boolean() }),
+	run: () => ({ ok: true }),
+});
+const packedPlugin = definePlugin({
+	api: new Hono(),
+	configSchema: z.object({ token: z.string() }),
+	connection: ({ config }) => ({ env: {}, values: { token: config.token } }),
+	description: "Packed consumer fixture",
+	id: "packed-consumer",
+	lifecycle: {
+		create: () => undefined,
+		start: () => ({ ready: true }),
+	},
+	operations: { verifyPeer: packedOperation },
+	stateVersion: 1,
+});
+const hostEntryPath = fileURLToPath(import.meta.resolve("localhost2137"));
+const resolverUrl = pathToFileURL(
+	join(dirname(hostEntryPath), "config/config-resolution.js"),
+).href;
+const { resolveConfig } = await import(resolverUrl);
+const resolved = resolveConfig(
+	{ services: { packed: packedPlugin({ config: { token: "fixture" } }) } },
+	join(process.cwd(), "localhost.config.ts"),
+);
+if (resolved.services.packed.operations.verifyPeer.cli.kind !== "flags") {
+	throw new Error("Packed consumer ZodObject did not retain host constructor identity");
+}
+`;
+		const typedAuthoringSmoke = `
+import { Hono } from "hono";
+import {
+	defineOperation,
+	definePlugin,
+	type PluginEnv,
+} from "localhost2137";
+import { z } from "zod";
+
+type PackedConfig = { readonly token: string };
+type PackedState = { readonly ready: true };
+const bindPackedOperation = defineOperation<"packed-consumer", PackedState, PackedConfig>();
+const packedOperation = bindPackedOperation({
+	description: "Verify packed declarations",
+	input: z.object({ name: z.string() }),
+	output: z.object({ ok: z.boolean() }),
+	run: () => ({ ok: true }),
+});
+const packedPlugin = definePlugin({
+	api: new Hono<PluginEnv<PackedState, PackedConfig>>(),
+	configSchema: z.object({ token: z.string() }),
+	connection: ({ config }) => ({ env: {}, values: { token: config.token } }),
+	description: "Packed declaration fixture",
+	id: "packed-consumer",
+	lifecycle: {
+		create: () => undefined,
+		start: (): PackedState => ({ ready: true }),
+	},
+	operations: { verifyPeer: packedOperation },
+	stateVersion: 1,
+});
+void packedPlugin({ config: { token: "fixture" } });
+`;
 
 		await writeFile(
 			join(consumerDirectory, "package.json"),
@@ -161,11 +237,11 @@ async function main() {
 		);
 		await writeFile(
 			join(consumerDirectory, "smoke.mjs"),
-			`${imports.join("\n")}\n\nfor (const module of [${bindings}]) {\n\tif (typeof module !== "object") throw new Error("Package import did not return a module namespace");\n}\n`,
+			`${imports.join("\n")}\n${runtimeAuthoringSmoke}\nfor (const module of [${bindings}]) {\n\tif (typeof module !== "object") throw new Error("Package import did not return a module namespace");\n}\n`,
 		);
 		await writeFile(
 			join(consumerDirectory, "consumer.ts"),
-			`${imports.join("\n")}\n\nconst modules: readonly object[] = [${bindings}];\nvoid modules;\n`,
+			`${imports.join("\n")}\n${typedAuthoringSmoke}\nconst modules: readonly object[] = [${bindings}];\nvoid modules;\n`,
 		);
 		await writeFile(
 			join(consumerDirectory, "tsconfig.json"),

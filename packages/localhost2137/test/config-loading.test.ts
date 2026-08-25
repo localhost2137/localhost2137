@@ -90,6 +90,16 @@ describe("config discovery and TypeScript import", () => {
 		expect(config.port).toBe(42_137);
 	});
 
+	it.each([
+		["localhost.config.cts", "export default { port: 52137, services: {} };\n", 52_137],
+		["localhost.config.cjs", "module.exports = { port: 62137, services: {} };\n", 62_137],
+	])("loads a direct %s default export", async (fileName, source, port) => {
+		const project = await temporaryProject();
+		await writeFile(join(project, fileName), source);
+		const config = await loadResolvedConfig({ cwd: project });
+		expect(config.port).toBe(port);
+	});
+
 	it("retains a throwing module as the cause of an import error without serializing it", async () => {
 		const project = await temporaryProject();
 		const configPath = join(project, "localhost.config.ts");

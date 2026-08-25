@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineOperation, definePlugin, type PluginEnv } from "../src/authoring/index.js";
 import { ConfigError } from "../src/config/config-error.js";
+import { createConfigFingerprint } from "../src/config/config-fingerprint.js";
 import { resolveConfig } from "../src/config/config-resolution.js";
 import { redact } from "../src/config/redaction.js";
+import { SchemaIntrospectionError } from "../src/config/schema-metadata.js";
 import { untypedConfiguredService } from "./fixtures/untyped-service.js";
 
 interface FixtureOptions {
@@ -279,6 +281,21 @@ describe("config resolution", () => {
 		expect(first.fingerprint).not.toContain("local-first");
 	});
 
+	it("fingerprints Unicode keys with locale-independent ordering", () => {
+		const first = createConfigFingerprint({ z: 1, ä: 2, å: 3 });
+		const reordered = createConfigFingerprint({ å: 3, z: 1, ä: 2 });
+		expect(first).toBe(reordered);
+	});
+
+	it("does not confuse sentinel-shaped user objects with unsupported values", () => {
+		const sentinelShape = createConfigFingerprint({ $undefined: true });
+		const ordinary = createConfigFingerprint({ value: null });
+		expect(sentinelShape).not.toBe(ordinary);
+		expect(() => createConfigFingerprint({ value: undefined })).toThrow(
+			"Cannot fingerprint non-JSON config data (undefined).",
+		);
+	});
+
 	it("returns exact schema paths without leaking secret values", () => {
 		const plugin = fixturePlugin();
 		let error: ConfigError | undefined;
@@ -369,6 +386,58 @@ describe("config resolution", () => {
 		);
 	});
 
+	it("retains connection failures as non-serialized internal causes", () => {
+		const privateFailure = new Error("private-token-value");
+		const descriptor = untypedConfiguredService({
+			connection: () => {
+				throw privateFailure;
+			},
+		});
+		let error: ConfigError | undefined;
+		try {
+			resolveConfig({ services: { untyped: descriptor } }, configPath);
+		} catch (cause) {
+			if (cause instanceof ConfigError) error = cause;
+		}
+
+		expect(error?.cause).toBeInstanceOf(AggregateError);
+		expect(error?.cause).toEqual(
+			expect.objectContaining({ errors: expect.arrayContaining([privateFailure]) }),
+		);
+		expect(Object.keys(error ?? {})).not.toContain("cause");
+		expect(JSON.stringify(error)).not.toContain("private-token-value");
+	});
+
+	it("retains schema parser failures as non-serialized internal causes", () => {
+		const privateFailure = new Error("private-parser-detail");
+		const descriptor = untypedConfiguredService({
+			configSchema: {
+				safeParse: () => {
+					throw privateFailure;
+				},
+			},
+		});
+		let error: ConfigError | undefined;
+		try {
+			resolveConfig({ services: { untyped: descriptor } }, configPath);
+		} catch (cause) {
+			if (cause instanceof ConfigError) error = cause;
+		}
+
+		expect(error?.details.issues).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "invalid_schema",
+					path: "$.services.untyped.config",
+				}),
+			]),
+		);
+		expect(error?.cause).toEqual(
+			expect.objectContaining({ errors: expect.arrayContaining([privateFailure]) }),
+		);
+		expect(JSON.stringify(error)).not.toContain("private-parser-detail");
+	});
+
 	it("allows an intentional environment collision when one mount disables export", () => {
 		const plugin = fixturePlugin();
 		const config = resolveConfig(
@@ -429,12 +498,17 @@ describe("config resolution", () => {
 			stateVersion: 1,
 		});
 
-		expect(() =>
+		let error: ConfigError | undefined;
+		try {
 			resolveConfig(
 				{ services: { dates: plugin({ config: new Date("2026-01-01T00:00:00.000Z") }) } },
 				configPath,
-			),
-		).toThrowError(
+			);
+		} catch (cause) {
+			if (cause instanceof ConfigError) error = cause;
+		}
+
+		expect(error).toEqual(
 			expect.objectContaining<Partial<ConfigError>>({
 				details: expect.objectContaining({
 					issues: expect.arrayContaining([
@@ -448,6 +522,11 @@ describe("config resolution", () => {
 						}),
 					]),
 				}),
+			}),
+		);
+		expect(error?.cause).toEqual(
+			expect.objectContaining({
+				errors: expect.arrayContaining([expect.any(SchemaIntrospectionError)]),
 			}),
 		);
 	});
