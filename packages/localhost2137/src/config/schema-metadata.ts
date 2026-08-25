@@ -7,6 +7,11 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 
 type CliScalarType = "boolean" | "integer" | "number" | "string";
 
+interface GeneratedSchemaAtPath {
+	readonly path: readonly (number | string)[];
+	readonly schema: object;
+}
+
 interface CliOption {
 	readonly default?: JsonPrimitive | readonly JsonPrimitive[];
 	readonly description?: string;
@@ -59,17 +64,28 @@ export function createSchemaMetadata(
 	io: "input" | "output" = "output",
 ): JsonObject {
 	try {
+		const generatedSchemasByPath = new Map<string, GeneratedSchemaAtPath>();
 		const propertySchemasByObjectPath = new Map<string, Map<string, object>>();
 		const jsonSchema: unknown = z.toJSONSchema(schema, {
 			cycles: "ref",
 			io,
 			override: ({ jsonSchema: generatedSchema, path }) => {
-				preserveGeneratedObjectProperties(propertySchemasByObjectPath, generatedSchema, path);
+				captureGeneratedSchema(
+					generatedSchemasByPath,
+					propertySchemasByObjectPath,
+					generatedSchema,
+					path,
+				);
 			},
 			reused: "inline",
 			target: "draft-2020-12",
 			unrepresentable: "throw",
 		});
+		reconcileGeneratedObjectProperties(
+			jsonSchema,
+			generatedSchemasByPath,
+			propertySchemasByObjectPath,
+		);
 		const normalized = normalizeJsonValue(jsonSchema, new WeakSet());
 		if (!isJsonObject(normalized)) {
 			throw new TypeError("Zod returned a non-object JSON Schema.");
@@ -83,11 +99,16 @@ export function createSchemaMetadata(
 	}
 }
 
-function preserveGeneratedObjectProperties(
+function captureGeneratedSchema(
+	generatedSchemasByPath: Map<string, GeneratedSchemaAtPath>,
 	propertiesByObjectPath: Map<string, Map<string, object>>,
 	generatedSchema: object,
 	path: readonly (number | string)[],
 ): void {
+	generatedSchemasByPath.set(JSON.stringify(path), {
+		path: Object.freeze([...path]),
+		schema: generatedSchema,
+	});
 	const propertyName = path.at(-1);
 	if (path.at(-2) === "properties" && typeof propertyName === "string") {
 		const parentPath = JSON.stringify(path.slice(0, -2));
@@ -95,19 +116,78 @@ function preserveGeneratedObjectProperties(
 		properties.set(propertyName, generatedSchema);
 		propertiesByObjectPath.set(parentPath, properties);
 	}
+}
 
-	const generatedProperties = Reflect.get(generatedSchema, "properties");
-	const properties = propertiesByObjectPath.get(JSON.stringify(path));
-	if (!properties || !isUnknownRecord(generatedProperties)) return;
-	for (const [name, propertySchema] of properties) {
-		if (Object.hasOwn(generatedProperties, name)) continue;
-		Object.defineProperty(generatedProperties, name, {
-			configurable: true,
-			enumerable: true,
-			value: propertySchema,
-			writable: true,
-		});
+function reconcileGeneratedObjectProperties(
+	finalSchema: unknown,
+	generatedSchemasByPath: Map<string, GeneratedSchemaAtPath>,
+	propertiesByObjectPath: ReadonlyMap<string, ReadonlyMap<string, object>>,
+): void {
+	const generatedRoot = generatedSchemasByPath.get("[]")?.schema;
+	if (generatedRoot) {
+		indexGeneratedSchemaGraph(generatedRoot, [], generatedSchemasByPath, new WeakSet());
 	}
+
+	const propertiesByGeneratedSchema = new WeakMap<object, ReadonlyMap<string, object>>();
+	for (const [parentPath, properties] of propertiesByObjectPath) {
+		const generatedSchema = generatedSchemasByPath.get(parentPath)?.schema;
+		if (generatedSchema) propertiesByGeneratedSchema.set(generatedSchema, properties);
+	}
+
+	const generatedSchemas = [...generatedSchemasByPath.values()].sort(
+		(left, right) => left.path.length - right.path.length,
+	);
+	for (const { path, schema } of generatedSchemas) {
+		const properties = propertiesByGeneratedSchema.get(schema);
+		if (!properties) continue;
+		const finalParent = valueAtPath(finalSchema, path);
+		if (!isUnknownRecord(finalParent)) continue;
+		const finalProperties = Reflect.get(finalParent, "properties");
+		if (!isUnknownRecord(finalProperties)) continue;
+		for (const [name, propertySchema] of properties) {
+			if (Object.hasOwn(finalProperties, name)) continue;
+			Object.defineProperty(finalProperties, name, {
+				configurable: true,
+				enumerable: true,
+				value: propertySchema,
+				writable: true,
+			});
+		}
+	}
+}
+
+function indexGeneratedSchemaGraph(
+	value: unknown,
+	path: readonly (number | string)[],
+	generatedSchemasByPath: Map<string, GeneratedSchemaAtPath>,
+	ancestors: WeakSet<object>,
+): void {
+	if (typeof value !== "object" || value === null) return;
+	generatedSchemasByPath.set(JSON.stringify(path), {
+		path: Object.freeze([...path]),
+		schema: value,
+	});
+	if (ancestors.has(value)) return;
+	ancestors.add(value);
+	if (Array.isArray(value)) {
+		for (const [index, entry] of value.entries()) {
+			indexGeneratedSchemaGraph(entry, [...path, index], generatedSchemasByPath, ancestors);
+		}
+	} else {
+		for (const [key, entry] of Object.entries(value)) {
+			indexGeneratedSchemaGraph(entry, [...path, key], generatedSchemasByPath, ancestors);
+		}
+	}
+	ancestors.delete(value);
+}
+
+function valueAtPath(value: unknown, path: readonly (number | string)[]): unknown {
+	let current = value;
+	for (const segment of path) {
+		if (typeof current !== "object" || current === null) return undefined;
+		current = Reflect.get(current, segment);
+	}
+	return current;
 }
 
 function compileCliInputSchema(schema: JsonObject): CliInputSchema {

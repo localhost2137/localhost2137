@@ -28,7 +28,15 @@ function redactValue(value: unknown, sensitiveKey: RegExp, seen: WeakSet<object>
 
 	const redacted: Record<string, unknown> = {};
 	for (const [key, entry] of Object.entries(value)) {
-		redacted[key] = sensitiveKey.test(key) ? REDACTED : redactValue(entry, sensitiveKey, seen);
+		const redactedValue = sensitiveKey.test(key)
+			? REDACTED
+			: redactValue(entry, sensitiveKey, seen);
+		Object.defineProperty(redacted, key, {
+			configurable: true,
+			enumerable: true,
+			value: redactedValue,
+			writable: true,
+		});
 		sensitiveKey.lastIndex = 0;
 	}
 	return redacted;

@@ -639,6 +639,19 @@ describe("config resolution", () => {
 			visible: "safe",
 		});
 	});
+
+	it("redacts an own __proto__ key without changing prototypes or source data", () => {
+		const source = { ["__proto__"]: "private-value", visible: "safe" };
+		const result = redact(source, { sensitiveKey: /^__proto__$/ });
+
+		expect(isRecord(result)).toBe(true);
+		if (!isRecord(result)) return;
+		expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+		expect(Object.hasOwn(result, "__proto__")).toBe(true);
+		expect(Reflect.get(result, "__proto__")).toBe("[REDACTED]");
+		expect(Reflect.get(source, "__proto__")).toBe("private-value");
+		expect(Object.getPrototypeOf(source)).toBe(Object.prototype);
+	});
 });
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

@@ -166,11 +166,15 @@ describe("operation schema metadata", () => {
 		},
 	);
 
-	it("preserves a computed __proto__ field and uses safe JSON input", () => {
+	it("preserves a computed __proto__ field on a recursive root", () => {
+		const recursive = z.object({
+			["__proto__"]: z.string(),
+			children: z.array(z.lazy(() => recursive)).optional(),
+		});
 		const metadata = createOperationMetadata(
 			operation({
 				description: "Prototype-shaped property fixture",
-				input: z.object({ ["__proto__"]: z.string() }),
+				input: recursive,
 				output: z.object({ ok: z.boolean() }),
 				run: () => ({ ok: true }),
 			}),
@@ -178,13 +182,36 @@ describe("operation schema metadata", () => {
 		const properties = metadata.input.properties;
 
 		expect(Object.hasOwn(properties ?? {}, "__proto__")).toBe(true);
-		expect(Object.keys(properties ?? {})).toEqual(["__proto__"]);
 		expect(Reflect.get(properties ?? {}, "__proto__")).toEqual({ type: "string" });
 		expect(metadata.input.required).toEqual(["__proto__"]);
-		expect(metadata.cli).toEqual({
-			kind: "json",
-			reason: 'Field "__proto__" cannot map to a safe CLI flag.',
+		expect(Reflect.get(properties ?? {}, "children")).toMatchObject({
+			items: { $ref: "#" },
+			type: "array",
 		});
+		expect(metadata.cli.kind).toBe("json");
+	});
+
+	it("preserves prototype-shaped fields through nested arrays and reused nodes", () => {
+		const leaf = z.object({ ["__proto__"]: z.boolean() });
+		const metadata = createSchemaMetadata(
+			z.object({ groups: z.array(leaf), reused: leaf }),
+			"input",
+			"input",
+		);
+		const rootProperties = metadata.properties;
+		const arrayProperties = readProperty(
+			readProperty(readProperty(rootProperties, "groups"), "items"),
+			"properties",
+		);
+		const reusedProperties = readProperty(readProperty(rootProperties, "reused"), "properties");
+
+		expect(isObject(arrayProperties)).toBe(true);
+		expect(isObject(reusedProperties)).toBe(true);
+		if (!isObject(arrayProperties) || !isObject(reusedProperties)) return;
+		expect(Object.hasOwn(arrayProperties, "__proto__")).toBe(true);
+		expect(Object.hasOwn(reusedProperties, "__proto__")).toBe(true);
+		expect(Reflect.get(arrayProperties, "__proto__")).toEqual({ type: "boolean" });
+		expect(Reflect.get(reusedProperties, "__proto__")).toEqual({ type: "boolean" });
 	});
 
 	it("reports supported-API conversion failures with the schema role", () => {
@@ -237,3 +264,11 @@ describe("operation schema metadata", () => {
 		expect(Object.isFrozen(third)).toBe(true);
 	});
 });
+
+function readProperty(value: unknown, key: string): unknown {
+	return isObject(value) ? Reflect.get(value, key) : undefined;
+}
+
+function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
+	return typeof value === "object" && value !== null;
+}
