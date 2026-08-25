@@ -10,7 +10,7 @@ import {
 	type ReservedOperationKey,
 	type ReservedServiceKey,
 	type ScenarioFacade,
-} from "./proposed-contract.js";
+} from "localhost2137";
 
 type Equal<Left, Right> =
 	(<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

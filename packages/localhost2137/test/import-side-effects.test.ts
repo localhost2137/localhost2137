@@ -22,7 +22,7 @@ describe("static plugin-definition import baseline", () => {
 			process.chdir(workingDirectory);
 			const { samplePlugin } = await import("./fixtures/plugin-under-import.js");
 
-			expect(samplePlugin.id).toBe("sample");
+			expect(typeof samplePlugin).toBe("function");
 			expect(process.env).toEqual(environmentBeforeImport);
 			expect(process.listenerCount("SIGINT")).toBe(signalListenersBeforeImport.SIGINT);
 			expect(process.listenerCount("SIGTERM")).toBe(signalListenersBeforeImport.SIGTERM);
