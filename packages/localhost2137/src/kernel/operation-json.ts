@@ -1,11 +1,11 @@
-export type OperationJsonPrimitive = boolean | number | string | null;
-export interface OperationJsonArray extends ReadonlyArray<OperationJsonValue> {}
+type OperationJsonPrimitive = boolean | number | string | null;
+interface OperationJsonArray extends ReadonlyArray<OperationJsonValue> {}
 export interface OperationJsonObject {
 	readonly [key: string]: OperationJsonValue;
 }
 export type OperationJsonValue = OperationJsonPrimitive | OperationJsonArray | OperationJsonObject;
 
-export class OperationJsonError extends TypeError {
+class OperationJsonError extends TypeError {
 	readonly path: string;
 
 	constructor(path: string, message: string) {

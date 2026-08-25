@@ -9,7 +9,7 @@ export interface OperationDescriptorResolver {
 	resolve(serviceKey: string, operationKey: string): RuntimeOperationDefinition | undefined;
 }
 
-export interface OperationServiceLease {
+interface OperationServiceLease {
 	readonly context: RunningPluginContext<unknown, unknown>;
 	readonly generation: object;
 	readonly logs: StructuredLogRing;
