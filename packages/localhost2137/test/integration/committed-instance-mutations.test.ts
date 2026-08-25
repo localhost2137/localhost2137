@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BasePluginContext } from "../../src/authoring/context.js";
 import { type InstanceId, parseInstanceId } from "../../src/kernel/identifiers.js";
+import { LeaseRetiredError } from "../../src/kernel/instance-leases.js";
 import { SeedNotAllowedError } from "../../src/kernel/instance-lifecycle.js";
 import {
 	InstanceManager,
@@ -12,7 +13,7 @@ import {
 } from "../../src/kernel/instance-manager.js";
 import { StorageWriteCommittedError } from "../../src/kernel/instance-storage.js";
 import type { InstanceTemplate } from "../../src/kernel/instance-template.js";
-import type { InstanceManifest } from "../../src/kernel/manifests.js";
+import type { InstanceManifest, StorageTransitionManifest } from "../../src/kernel/manifests.js";
 import type { RuntimeTime } from "../../src/kernel/runtime-time.js";
 import type { ServiceLifecycleHooks } from "../../src/kernel/service-lifecycle.js";
 import { NodeInstanceStorage } from "../../src/node/instance-storage.js";
@@ -104,6 +105,40 @@ describe("committed instance mutations", () => {
 		await restarted.manager.stopAll({ timeoutMs: 1_000 });
 	});
 
+	it("publishes a reset generation only after its transition finalization settles", async () => {
+		const fixture = await managerFixture(instanceTemplate());
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const previousService = fixture.manager.service("dev", "fixture");
+		const finalization = fixture.storage.blockNextTransitionCommit();
+
+		const firstReset = fixture.manager.reset("dev", { seed: false, timeoutMs: 1_000 });
+		const firstTransitionId = await finalization.entered;
+		const overlappingReset = fixture.manager.reset("dev", { seed: false, timeoutMs: 1_000 });
+		const overlappingShared = fixture.manager.acquireShared("dev");
+
+		await expect(overlappingReset).rejects.toBeInstanceOf(LeaseRetiredError);
+		await expect(overlappingShared).rejects.toBeInstanceOf(LeaseRetiredError);
+		expect(fixture.storage.transitionStageIds).toEqual([firstTransitionId]);
+		expect(fixture.storage.transitionCommitIds).toEqual([firstTransitionId]);
+		expect(fixture.manager.service("dev", "fixture")).toBe(previousService);
+
+		finalization.release();
+		await expect(firstReset).resolves.toMatchObject({ id: "dev", status: "running" });
+		expect(fixture.manager.service("dev", "fixture")).not.toBe(previousService);
+		expect(await runningValue(fixture.manager)).toBe("dev:2");
+
+		await expect(
+			fixture.manager.reset("dev", { seed: false, timeoutMs: 1_000 }),
+		).resolves.toMatchObject({ id: "dev", status: "running" });
+		expect(fixture.storage.transitionStageIds).toHaveLength(2);
+		expect(fixture.storage.transitionCommitIds).toHaveLength(2);
+		expect(new Set(fixture.storage.transitionCommitIds)).toEqual(
+			new Set(fixture.storage.transitionStageIds),
+		);
+		expect(await runningValue(fixture.manager)).toBe("dev:3");
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
 	it("keeps a committed final seed non-repeatable in memory and on disk", async () => {
 		const fixture = await managerFixture(instanceTemplate("fixture-seed"));
 		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
@@ -142,12 +177,40 @@ describe("committed instance mutations", () => {
 });
 
 class FaultInjectingStorage extends NodeInstanceStorage {
+	#blockedTransitionCommit:
+		| Readonly<{ entered: (transitionId: string) => void; release: Promise<void> }>
+		| undefined;
 	#failResetFinalization = false;
 	#failSeededManifestSync = false;
-	#transitionCommitCount = 0;
+	readonly #transitionCommitIds: string[] = [];
+	readonly #transitionStageIds: string[] = [];
 
 	get transitionCommitCount(): number {
-		return this.#transitionCommitCount;
+		return this.#transitionCommitIds.length;
+	}
+
+	get transitionCommitIds(): readonly string[] {
+		return Object.freeze([...this.#transitionCommitIds]);
+	}
+
+	get transitionStageIds(): readonly string[] {
+		return Object.freeze([...this.#transitionStageIds]);
+	}
+
+	blockNextTransitionCommit(): Readonly<{ entered: Promise<string>; release: () => void }> {
+		if (this.#blockedTransitionCommit) {
+			throw new TypeError("A transition commit is already blocked.");
+		}
+		const entered = deferred<string>();
+		const release = deferred<void>();
+		this.#blockedTransitionCommit = Object.freeze({
+			entered: entered.resolve,
+			release: release.promise,
+		});
+		return Object.freeze({
+			entered: entered.promise,
+			release: () => release.resolve(undefined),
+		});
 	}
 
 	failNextResetFinalization(): void {
@@ -182,8 +245,22 @@ class FaultInjectingStorage extends NodeInstanceStorage {
 	override async commitTransition(
 		transition: Parameters<NodeInstanceStorage["commitTransition"]>[0],
 	): Promise<void> {
-		this.#transitionCommitCount += 1;
+		this.#transitionCommitIds.push(transition.transitionId);
+		const blocked = this.#blockedTransitionCommit;
+		if (blocked) {
+			this.#blockedTransitionCommit = undefined;
+			blocked.entered(transition.transitionId);
+			await blocked.release;
+		}
 		await super.commitTransition(transition);
+	}
+
+	override async stageInstance(
+		instanceId: InstanceId,
+		transition: StorageTransitionManifest,
+	): Promise<void> {
+		this.#transitionStageIds.push(transition.transitionId);
+		await super.stageInstance(instanceId, transition);
 	}
 }
 
@@ -258,4 +335,15 @@ function instanceId(value: string): InstanceId {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return typeof value === "object" && value !== null;
+}
+
+function deferred<Value>(): Readonly<{
+	promise: Promise<Value>;
+	resolve: (value: Value | PromiseLike<Value>) => void;
+}> {
+	let resolvePromise: (value: Value | PromiseLike<Value>) => void = () => undefined;
+	const promise = new Promise<Value>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return Object.freeze({ promise, resolve: resolvePromise });
 }

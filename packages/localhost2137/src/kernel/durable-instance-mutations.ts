@@ -279,10 +279,14 @@ export class DurableInstanceMutations {
 			const readyWarning = await this.#writeReady(startedReplacement, scope);
 			committed = true;
 			committedSummary = summary;
-			this.#registry.replace(previous, startedReplacement);
 			const completionFailures: unknown[] = readyWarning ? [readyWarning] : [];
-			const completion = await this.#completePendingReset(startedReplacement, scope);
-			completionFailures.push(...completion.failures);
+			try {
+				const completion = await this.#completePendingReset(startedReplacement, scope);
+				completionFailures.push(...completion.failures);
+			} catch (cause) {
+				completionFailures.push(cause);
+			}
+			this.#registry.replace(previous, startedReplacement);
 			if (completionFailures.length > 0) {
 				throw new InstanceMutationCommittedError("reset", completionFailures, summary);
 			}
