@@ -1,9 +1,5 @@
 import { z } from "zod";
-import type {
-	ConfiguredServiceRuntime,
-	RuntimeOperationDefinition,
-	RuntimePluginDefinition,
-} from "../authoring/plugin.js";
+import type { ConfiguredServiceRuntime, RuntimePluginDefinition } from "../authoring/plugin.js";
 import { type ConfigIssue, issuePath, receivedType } from "./config-error.js";
 import { toCliName } from "./schema-metadata.js";
 
@@ -93,7 +89,15 @@ export function validatePluginDefinition(
 	}
 
 	validateLifecycle(serviceKey, definition, issues);
-	validateOperations(serviceKey, definition.operations, issues);
+}
+
+/** Returns whether operation metadata can be inspected without touching malformed entries. */
+export function validateOperationDefinitions(
+	serviceKey: string,
+	operations: unknown,
+	issues: ConfigIssue[],
+): boolean {
+	return validateOperations(serviceKey, operations, issues);
 }
 
 export function validateEnvelopeKeys(
@@ -172,12 +176,38 @@ function lifecycleHookIssue(
 
 function validateOperations(
 	serviceKey: string,
-	operations: Readonly<Record<string, RuntimeOperationDefinition>>,
+	operations: unknown,
 	issues: ConfigIssue[],
-): void {
+): boolean {
+	const operationsPath = ["services", serviceKey, "$plugin", "operations"] as const;
+	if (!isPlainRecord(operations)) {
+		issues.push({
+			code: "invalid_operations",
+			expected: "an object mapping operation names to operation definitions",
+			message: `Service "${serviceKey}" operations must be an object record.`,
+			path: issuePath(operationsPath),
+			received: receivedType(operations),
+			serviceKey,
+		});
+		return false;
+	}
+
 	const cliOwners = new Map<string, string>();
+	let structurallyValid = true;
 	for (const [operationKey, operation] of Object.entries(operations)) {
-		const path = ["services", serviceKey, "$plugin", "operations", operationKey] as const;
+		const path = [...operationsPath, operationKey] as const;
+		if (!isPlainRecord(operation)) {
+			structurallyValid = false;
+			issues.push({
+				code: "invalid_operation_definition",
+				expected: "an operation definition object",
+				message: `Operation "${operationKey}" must be an operation definition object.`,
+				path: issuePath(path),
+				received: receivedType(operation),
+				serviceKey,
+			});
+			continue;
+		}
 		if (RESERVED_OPERATION_KEYS.has(operationKey)) {
 			issues.push({
 				code: "reserved_operation_key",
@@ -245,6 +275,7 @@ function validateOperations(
 			});
 		}
 	}
+	return structurallyValid;
 }
 
 function hasOwn(value: unknown, key: PropertyKey): boolean {
@@ -261,4 +292,10 @@ function readProperty(value: unknown, key: PropertyKey): unknown {
 
 function isRecordOrFunction(value: unknown): value is Readonly<Record<PropertyKey, unknown>> {
 	return (typeof value === "object" || typeof value === "function") && value !== null;
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
 }

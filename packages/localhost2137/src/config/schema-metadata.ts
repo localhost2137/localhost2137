@@ -105,11 +105,15 @@ function compileCliInputSchema(schema: JsonObject): CliInputSchema {
 	const flags = new Set<string>();
 	const options: CliOption[] = [];
 	for (const [name, property] of Object.entries(schema.properties)) {
+		const flag = propertyFlag(name);
+		if (!flag) {
+			return jsonFallback(`Field ${JSON.stringify(name)} cannot map to a safe CLI flag.`);
+		}
 		if (!isJsonObject(property) || hasComposition(property)) {
 			return jsonFallback(`Field "${name}" requires nested, referenced, or union JSON input.`);
 		}
 
-		const compiled = compileProperty(name, property, required.has(name));
+		const compiled = compileProperty(name, flag, property, required.has(name));
 		if (typeof compiled === "string") {
 			return jsonFallback(compiled);
 		}
@@ -123,7 +127,12 @@ function compileCliInputSchema(schema: JsonObject): CliInputSchema {
 	return Object.freeze({ kind: "flags", options: Object.freeze(options) });
 }
 
-function compileProperty(name: string, schema: JsonObject, required: boolean): CliOption | string {
+function compileProperty(
+	name: string,
+	flag: `--${string}`,
+	schema: JsonObject,
+	required: boolean,
+): CliOption | string {
 	if (schema.type === "array") {
 		if (!isJsonObject(schema.items) || hasComposition(schema.items)) {
 			return `Array field "${name}" does not have scalar items.`;
@@ -136,7 +145,7 @@ function compileProperty(name: string, schema: JsonObject, required: boolean): C
 		if (schema.default !== undefined && !defaultValue) {
 			return `Array field "${name}" has a non-scalar default.`;
 		}
-		return option(name, schema, scalar, required, true, defaultValue);
+		return option(name, flag, schema, scalar, required, true, defaultValue);
 	}
 
 	const scalar = compileScalar(schema);
@@ -147,7 +156,7 @@ function compileProperty(name: string, schema: JsonObject, required: boolean): C
 	if (schema.default !== undefined && defaultValue === undefined) {
 		return `Field "${name}" has a non-scalar default.`;
 	}
-	return option(name, schema, scalar, required, false, defaultValue);
+	return option(name, flag, schema, scalar, required, false, defaultValue);
 }
 
 interface CompiledScalar {
@@ -174,6 +183,7 @@ function compileScalar(schema: JsonObject): CompiledScalar | string {
 
 function option(
 	name: string,
+	flag: `--${string}`,
 	schema: JsonObject,
 	scalar: CompiledScalar,
 	required: boolean,
@@ -187,7 +197,7 @@ function option(
 		...(description === undefined ? {} : { description }),
 		...(scalar.enum === undefined ? {} : { enum: scalar.enum }),
 		...(examples === undefined ? {} : { examples: Object.freeze(examples) }),
-		flag: `--${toCliName(name)}`,
+		flag,
 		name,
 		repeated,
 		required,
@@ -263,6 +273,11 @@ export function toCliName(value: string): string {
 		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
 		.replace(/[_\s]+/g, "-")
 		.toLowerCase();
+}
+
+function propertyFlag(name: string): `--${string}` | undefined {
+	const cliName = toCliName(name);
+	return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(cliName) ? `--${cliName}` : undefined;
 }
 
 function normalizeJsonValue(value: unknown, ancestors: WeakSet<object>): JsonValue {

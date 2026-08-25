@@ -6,7 +6,11 @@ import {
 	ImmutableConfigDataError,
 	ownImmutableConfigData,
 } from "./immutable-config-data.js";
-import { validateEnvelopeKeys, validatePluginDefinition } from "./plugin-definition-validation.js";
+import {
+	validateEnvelopeKeys,
+	validateOperationDefinitions,
+	validatePluginDefinition,
+} from "./plugin-definition-validation.js";
 import {
 	resolveServiceSchemaMetadata,
 	type ServiceSchemaMetadata,
@@ -44,6 +48,11 @@ export function resolveConfiguredService(
 	const issueCountBefore = input.issues.length;
 	validateEnvelopeKeys(input.serviceKey, envelope, input.issues);
 	validatePluginDefinition(input.serviceKey, definition, input.issues);
+	const operationsAreStructurallyValid = validateOperationDefinitions(
+		input.serviceKey,
+		definition.operations,
+		input.issues,
+	);
 
 	const parsedConfig = parsePluginSchema(definition.configSchema, envelope.config);
 	if (!parsedConfig.success) {
@@ -67,12 +76,9 @@ export function resolveConfiguredService(
 	}
 
 	const seed = resolveSeed(input, definition, envelope);
-	const metadata = resolveServiceSchemaMetadata(
-		input.serviceKey,
-		definition,
-		input.issues,
-		input.causes,
-	);
+	const metadata = operationsAreStructurallyValid
+		? resolveServiceSchemaMetadata(input.serviceKey, definition, input.issues, input.causes)
+		: undefined;
 	const connection =
 		ownedConfig !== undefined && typeof definition.connection === "function"
 			? resolveConnection({

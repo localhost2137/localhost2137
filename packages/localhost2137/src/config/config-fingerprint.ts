@@ -19,7 +19,14 @@ function encode(value: unknown, ancestors: WeakSet<object>): string {
 	}
 	if (Array.isArray(value)) {
 		assertAcyclic(value, ancestors);
-		const encoded = `array:${value.length}:[${value.map((entry) => encode(entry, ancestors)).join("")}]`;
+		const entries: string[] = [];
+		for (let index = 0; index < value.length; index += 1) {
+			if (!Object.hasOwn(value, index)) {
+				throw new TypeError(`Cannot fingerprint sparse config data (missing index ${index}).`);
+			}
+			entries.push(encode(value[index], ancestors));
+		}
+		const encoded = `array:${value.length}:[${entries.join("")}]`;
 		ancestors.delete(value);
 		return encoded;
 	}

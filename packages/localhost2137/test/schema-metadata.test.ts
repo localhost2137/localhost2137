@@ -148,6 +148,24 @@ describe("operation schema metadata", () => {
 		expect(metadata.cli).toEqual({ kind: "json", reason });
 	});
 
+	it.each(["", "--bad", " leading ", "invalid/name"])(
+		"uses JSON input for a property name that cannot form a safe flag: %j",
+		(propertyName) => {
+			const metadata = createOperationMetadata(
+				operation({
+					description: "Unsafe flag fixture",
+					input: z.object({ [propertyName]: z.string() }),
+					output: z.object({ ok: z.boolean() }),
+					run: () => ({ ok: true }),
+				}),
+			);
+			expect(metadata.cli).toEqual({
+				kind: "json",
+				reason: `Field ${JSON.stringify(propertyName)} cannot map to a safe CLI flag.`,
+			});
+		},
+	);
+
 	it("reports supported-API conversion failures with the schema role", () => {
 		expect(() => createSchemaMetadata(z.date(), "config")).toThrowError(
 			expect.objectContaining<Partial<SchemaIntrospectionError>>({

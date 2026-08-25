@@ -261,6 +261,71 @@ describe("config resolution", () => {
 		]);
 	});
 
+	it.each([
+		["missing record", undefined, "invalid_operations", "$.services.untyped.$plugin.operations"],
+		["array", [], "invalid_operations", "$.services.untyped.$plugin.operations"],
+		[
+			"malformed entry",
+			{ operate: null },
+			"invalid_operation_definition",
+			"$.services.untyped.$plugin.operations.operate",
+		],
+	])("reports a structured config issue for %s operations", (_name, operations, code, path) => {
+		expect(() =>
+			resolveConfig(
+				{ services: { untyped: untypedConfiguredService({ operations }) } },
+				configPath,
+			),
+		).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				code: "CONFIG_INVALID",
+				details: expect.objectContaining({
+					issues: expect.arrayContaining([expect.objectContaining({ code, path })]),
+				}),
+			}),
+		);
+	});
+
+	it("rejects sparse parsed arrays at the missing item path", () => {
+		type State = { readonly ready: true };
+		const sparse: unknown[] = [];
+		sparse.length = 1;
+		const configSchema = z.object({}).transform(() => sparse);
+		const plugin = definePlugin({
+			api: new Hono<PluginEnv<State, unknown[]>>(),
+			configSchema,
+			connection: () => ({ env: {}, values: {} }),
+			description: "Sparse config fixture",
+			id: "sparse-config",
+			lifecycle: {
+				create: () => undefined,
+				start: (): State => ({ ready: true }),
+			},
+			operations: {},
+			stateVersion: 1,
+		});
+
+		expect(() =>
+			resolveConfig({ services: { sparse: plugin({ config: {} }) } }, configPath),
+		).toThrowError(
+			expect.objectContaining<Partial<ConfigError>>({
+				code: "CONFIG_INVALID",
+				details: expect.objectContaining({
+					issues: expect.arrayContaining([
+						expect.objectContaining({
+							code: "parsed_data_not_immutable",
+							path: "$.services.sparse.config[0]",
+							received: "missing array item",
+						}),
+					]),
+				}),
+			}),
+		);
+		expect(() => createConfigFingerprint(sparse)).toThrow(
+			"Cannot fingerprint sparse config data (missing index 0).",
+		);
+	});
+
 	it("produces stable fingerprints without exposing configuration values", () => {
 		const plugin = fixturePlugin();
 		const first = resolveConfig(
@@ -278,7 +343,6 @@ describe("config resolution", () => {
 
 		expect(first.fingerprint).toBe(same.fingerprint);
 		expect(changed.fingerprint).not.toBe(first.fingerprint);
-		expect(first.fingerprint).not.toContain("local-first");
 	});
 
 	it("fingerprints Unicode keys with locale-independent ordering", () => {

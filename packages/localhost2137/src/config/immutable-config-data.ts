@@ -44,7 +44,18 @@ function ownValue(value: unknown, path: string, ancestors: WeakSet<object>): Imm
 	}
 	if (Array.isArray(value)) {
 		assertAcyclic(value, path, ancestors);
-		const owned = value.map((entry, index) => ownValue(entry, `${path}[${index}]`, ancestors));
+		const owned: ImmutableConfigData[] = [];
+		for (let index = 0; index < value.length; index += 1) {
+			const entryPath = `${path}[${index}]`;
+			if (!Object.hasOwn(value, index)) {
+				throw new ImmutableConfigDataError(
+					entryPath,
+					"missing array item",
+					"must belong to a dense JSON array.",
+				);
+			}
+			owned.push(ownValue(value[index], entryPath, ancestors));
+		}
 		ancestors.delete(value);
 		return Object.freeze(owned);
 	}

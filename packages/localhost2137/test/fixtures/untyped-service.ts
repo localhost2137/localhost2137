@@ -8,6 +8,7 @@ export interface UntypedServiceOptions {
 	readonly connection?: unknown;
 	readonly input?: unknown;
 	readonly lifecycle?: Readonly<Record<string, unknown>>;
+	readonly operations?: unknown;
 	readonly seedSchema?: unknown;
 }
 
@@ -30,7 +31,7 @@ export function untypedConfiguredService(options: UntypedServiceOptions = {}): o
 			start: () => ({ ready: true }),
 			...options.lifecycle,
 		},
-		operations: { operate: operation },
+		operations: Object.hasOwn(options, "operations") ? options.operations : { operate: operation },
 		...(options.seedSchema === undefined ? {} : { seedSchema: options.seedSchema }),
 		stateVersion: 1,
 	};
