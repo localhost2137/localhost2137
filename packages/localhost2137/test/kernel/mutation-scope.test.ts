@@ -65,17 +65,37 @@ describe("MutationScope", () => {
 		scope.dispose();
 	});
 
-	it("interrupts a non-cooperative awaited phase at the shared deadline", async () => {
+	it("reports a deadline without abandoning owned non-cooperative work", async () => {
 		const time = new ManualTime();
 		const scope = new MutationScope(time, time, {
 			label: "closing the runtime",
 			timeoutMs: 10,
 		});
-		const wait = scope.wait(() => new Promise<never>(() => undefined));
+		let release!: () => void;
+		const owned = scope.wait(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const report = scope.report(owned);
 
 		time.advance(10);
 
-		await expect(wait).rejects.toBeInstanceOf(MutationTimeoutError);
+		await expect(report).rejects.toBeInstanceOf(MutationTimeoutError);
+		let settled = false;
+		void owned.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		release();
+		await expect(owned).rejects.toBeInstanceOf(MutationTimeoutError);
 		scope.dispose();
 	});
 

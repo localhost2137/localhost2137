@@ -19,4 +19,8 @@ export class InstanceTrashCleanup {
 	close(graceMs: number): Promise<TaskCloseReport> {
 		return this.#tasks.close({ graceMs });
 	}
+
+	settled(): Promise<TaskCloseReport> {
+		return this.#tasks.settled();
+	}
 }

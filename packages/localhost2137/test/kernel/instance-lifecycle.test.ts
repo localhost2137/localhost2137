@@ -11,12 +11,13 @@ import {
 	ServiceLifecycle,
 	type ServiceLifecycleHooks,
 } from "../../src/kernel/service-lifecycle.js";
-import { fixtureCapabilities } from "./support/lifecycle-fixtures.js";
+import { fixtureCapabilities, fixtureHookRunner } from "./support/lifecycle-fixtures.js";
 
 describe("InstanceLifecycle", () => {
 	it("restores the runtime status of a persisted seed failure after services start", async () => {
 		const service = await stoppedService("one", {});
 		const lifecycle = new InstanceLifecycle({
+			hooks: fixtureHookRunner(),
 			now: () => "2026-08-25T12:00:00.000Z",
 			seedState: {
 				attempt: 1,
@@ -203,6 +204,7 @@ function instance(
 	overrides: Partial<ConstructorParameters<typeof InstanceLifecycle>[0]> = {},
 ): InstanceLifecycle {
 	return new InstanceLifecycle({
+		hooks: fixtureHookRunner(),
 		now: () => "2026-08-25T12:00:00.000Z",
 		seedState: { attempt: 0, status: "unseeded" },
 		seedStateStore: { write: async () => undefined },
@@ -221,6 +223,7 @@ async function stoppedService(
 		capabilities: fixtureCapabilities(serviceKey),
 		...(configuredSeed === undefined ? {} : { configuredSeed }),
 		correlationId: () => `correlation-${serviceKey}`,
+		hookRunner: fixtureHookRunner(),
 		hooks: { create: () => undefined, start: () => ({ serviceKey }), ...overrides },
 		pluginId: "fixture",
 		stateVersion: 1,

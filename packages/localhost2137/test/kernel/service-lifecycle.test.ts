@@ -8,7 +8,7 @@ import {
 	ServiceStateDowngradeError,
 	ServiceUpdateRequiredError,
 } from "../../src/kernel/service-lifecycle.js";
-import { fixtureCapabilities } from "./support/lifecycle-fixtures.js";
+import { fixtureCapabilities, fixtureHookRunner } from "./support/lifecycle-fixtures.js";
 
 describe("ServiceLifecycle", () => {
 	it("returns to absent when create fails", async () => {
@@ -111,6 +111,7 @@ function fixtureService(
 		capabilities: fixtureCapabilities("service-a"),
 		...(configuredSeed === undefined ? {} : { configuredSeed }),
 		correlationId: () => "correlation-1",
+		hookRunner: fixtureHookRunner(),
 		hooks: {
 			create: () => undefined,
 			start: () => ({ ready: true }),

@@ -1,4 +1,5 @@
 import { InstanceLifecycleStateOwner, type InstanceLifecycleStatus } from "./lifecycle-state.js";
+import type { LifecycleHookRunner } from "./lifecycle-hook-runner.js";
 import type { InstanceSeedState } from "./manifests.js";
 import { type AnyServiceLifecycle, LifecycleHookError } from "./service-lifecycle.js";
 
@@ -70,6 +71,7 @@ export class InstanceSeedError extends AggregateError {
 }
 
 export class InstanceLifecycle {
+	readonly #hooks: LifecycleHookRunner;
 	readonly #now: () => string;
 	readonly #scenarioSeed: ScenarioSeedPort | undefined;
 	readonly #seedStateStore: SeedStateStore;
@@ -79,6 +81,7 @@ export class InstanceLifecycle {
 	#seedState: InstanceSeedState;
 
 	constructor(input: {
+		readonly hooks: LifecycleHookRunner;
 		readonly now: () => string;
 		readonly scenarioSeed?: ScenarioSeedPort;
 		readonly seedState: InstanceSeedState;
@@ -86,6 +89,7 @@ export class InstanceLifecycle {
 		readonly services: readonly AnyServiceLifecycle[];
 		readonly signal: AbortSignal;
 	}) {
+		this.#hooks = input.hooks;
 		this.#now = input.now;
 		this.#scenarioSeed = input.scenarioSeed;
 		this.#seedState = input.seedState;
@@ -170,7 +174,11 @@ export class InstanceLifecycle {
 				phaseSignal.throwIfAborted();
 			}
 			phaseSignal.throwIfAborted();
-			await this.#scenarioSeed?.run(phaseSignal);
+			if (this.#scenarioSeed) {
+				await this.#hooks.run("scenario:seed", phaseSignal, (hookSignal) =>
+					this.#scenarioSeed?.run(hookSignal),
+				);
+			}
 			phaseSignal.throwIfAborted();
 			const seeded: InstanceSeedState = { attempt, status: "seeded" };
 			collectCommittedWarning(await this.#seedStateStore.write(seeded), committedWarnings);

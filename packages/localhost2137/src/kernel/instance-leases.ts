@@ -125,6 +125,18 @@ export class InstanceLeaseCoordinator {
 		}
 	}
 
+	async acquireExclusiveOwned(): Promise<InstanceLease> {
+		if (this.#retired) throw new LeaseRetiredError();
+		const lease = await this.#waitForExclusive({});
+		try {
+			await this.#tasks.idle();
+			return lease;
+		} catch (cause) {
+			lease.release();
+			throw cause;
+		}
+	}
+
 	retire(): void {
 		if (this.#retired) return;
 		this.#retired = true;
@@ -132,7 +144,7 @@ export class InstanceLeaseCoordinator {
 		for (const waiter of [...this.#queue]) waiter.cancel(cause);
 	}
 
-	#waitForExclusive(options: ExclusiveLeaseOptions): Promise<InstanceLease> {
+	#waitForExclusive(options: Partial<ExclusiveLeaseOptions>): Promise<InstanceLease> {
 		return new Promise((resolve, reject) => {
 			let settled = false;
 			let timeout: ScheduledTask | undefined;
@@ -159,15 +171,17 @@ export class InstanceLeaseCoordinator {
 			const waiter: QueuedWaiter = { cancel, grant, kind: "exclusive" };
 			this.#queue.push(waiter);
 			options.signal?.addEventListener("abort", abort, { once: true });
-			timeout = this.#scheduler.schedule(options.timeoutMs, () => {
-				cancel(
-					new LeaseTimeoutError({
-						activeExclusiveLease: this.#activeExclusive,
-						activeSharedLeases: this.#activeShared,
-						queuedRequestsAhead: Math.max(0, this.#queue.indexOf(waiter)),
-					}),
-				);
-			});
+			if (options.timeoutMs !== undefined) {
+				timeout = this.#scheduler.schedule(options.timeoutMs, () => {
+					cancel(
+						new LeaseTimeoutError({
+							activeExclusiveLease: this.#activeExclusive,
+							activeSharedLeases: this.#activeShared,
+							queuedRequestsAhead: Math.max(0, this.#queue.indexOf(waiter)),
+						}),
+					);
+				});
+			}
 			if (options.signal?.aborted) abort();
 			this.#pump();
 		});

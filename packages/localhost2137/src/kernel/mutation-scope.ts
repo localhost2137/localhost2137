@@ -93,20 +93,22 @@ export class MutationScope {
 
 	async wait<Value>(work: () => Promise<Value>): Promise<Value> {
 		this.checkpoint();
-		const pending = work();
+		const value = await work();
+		this.checkpoint();
+		return value;
+	}
+
+	report<Value>(ownedWork: Promise<Value>): Promise<Value> {
+		if (this.signal.aborted) return Promise.reject(this.signal.reason);
 		let aborted: (() => void) | undefined;
 		const cancellation = new Promise<never>((_resolve, reject) => {
 			aborted = () => reject(this.signal.reason);
 			this.signal.addEventListener("abort", aborted, { once: true });
 			if (this.signal.aborted) aborted();
 		});
-		try {
-			const value = await Promise.race([pending, cancellation]);
-			this.checkpoint();
-			return value;
-		} finally {
+		return Promise.race([ownedWork, cancellation]).finally(() => {
 			if (aborted) this.signal.removeEventListener("abort", aborted);
-		}
+		});
 	}
 
 	dispose(): void {

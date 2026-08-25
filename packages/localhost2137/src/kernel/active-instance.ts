@@ -10,6 +10,7 @@ import {
 } from "./instance-storage.js";
 import type { InstanceServiceTemplate, InstanceTemplate } from "./instance-template.js";
 import type { LifecycleConfigData } from "./lifecycle-context.js";
+import { LifecycleHookRunner } from "./lifecycle-hook-runner.js";
 import type { InstanceLifecycleStatus, ServiceLifecycleStatus } from "./lifecycle-state.js";
 import type {
 	InstanceManifest,
@@ -78,15 +79,17 @@ export class ActiveInstanceFactory {
 	): Promise<ActiveInstance> {
 		const tasks = new InstanceTaskTracker(this.#dependencies.scheduler);
 		const generation = new ActiveInstanceGeneration(tasks);
+		const hooks = new LifecycleHookRunner(tasks, generation.signal);
 		const signal = AbortSignal.any([generation.signal, options.signal]);
 		const clock = new ReadonlyInstanceClock(manifest.clock, this.#dependencies.time);
 		const logs = new StructuredLogRing(this.#dependencies.logLimits);
 		const services = this.#template.services.map((template) =>
-			this.#service(instanceId, template, clock, tasks, logs, generation.signal),
+			this.#service(instanceId, template, clock, tasks, logs, generation.signal, hooks),
 		);
 		const holder = { manifest };
 		const scenarioSeed = this.#dependencies.scenarioSeed?.(instanceId.value);
 		const lifecycle = new InstanceLifecycle({
+			hooks,
 			now: () => this.#dependencies.time.nowTimestamp(),
 			...(scenarioSeed ? { scenarioSeed } : {}),
 			seedState: manifest.seed,
@@ -141,6 +144,10 @@ export class ActiveInstanceFactory {
 			if (report.failures.length > 0 || report.unfinishedLabels.length > 0) {
 				cleanupFailures.push(report);
 			}
+			const settled = await generation.settled();
+			if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
+				cleanupFailures.push(settled);
+			}
 			if (cleanupFailures.length > 0) {
 				throw new AggregateError(
 					[cause, ...cleanupFailures],
@@ -158,6 +165,7 @@ export class ActiveInstanceFactory {
 		tasks: InstanceTaskTracker,
 		logs: StructuredLogRing,
 		generationSignal: AbortSignal,
+		hookRunner: LifecycleHookRunner,
 	): AnyServiceLifecycle {
 		const serviceKey = parseServiceKey(template.serviceKey);
 		return new ServiceLifecycle<unknown, LifecycleConfigData, unknown>({
@@ -181,6 +189,7 @@ export class ActiveInstanceFactory {
 			},
 			...(template.configuredSeed === undefined ? {} : { configuredSeed: template.configuredSeed }),
 			correlationId: this.#dependencies.correlationId,
+			hookRunner,
 			hooks: template.hooks,
 			pluginId: template.pluginId,
 			stateVersion: template.stateVersion,

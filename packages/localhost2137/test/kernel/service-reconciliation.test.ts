@@ -4,7 +4,7 @@ import {
 	type ServiceLifecycleHooks,
 } from "../../src/kernel/service-lifecycle.js";
 import { reconcileServices } from "../../src/kernel/service-reconciliation.js";
-import { fixtureCapabilities } from "./support/lifecycle-fixtures.js";
+import { fixtureCapabilities, fixtureHookRunner } from "./support/lifecycle-fixtures.js";
 
 describe("service reconciliation", () => {
 	it("runs in declaration order and records versions only after successful hooks", async () => {
@@ -54,6 +54,7 @@ function service(
 	return new ServiceLifecycle({
 		capabilities: fixtureCapabilities(serviceKey),
 		correlationId: () => `correlation-${serviceKey}`,
+		hookRunner: fixtureHookRunner(),
 		hooks: { create: () => undefined, start: () => undefined, ...overrides },
 		pluginId: "fixture",
 		stateVersion: 2,

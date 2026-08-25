@@ -71,12 +71,21 @@ export class InstanceTaskTracker implements TaskTracker {
 	#accepting = true;
 	#closePromise: Promise<TaskCloseReport> | undefined;
 	#nextTaskId = 1;
+	#settledPromise: Promise<TaskCloseReport> | undefined;
 
 	constructor(scheduler: TaskScheduler) {
 		this.#scheduler = scheduler;
 	}
 
 	track<T>(label: string, task: Promise<T>): Promise<T> {
+		return this.#track(label, task, true);
+	}
+
+	own<T>(label: string, task: Promise<T>): Promise<T> {
+		return this.#track(label, task, false);
+	}
+
+	#track<T>(label: string, task: Promise<T>, recordFailure: boolean): Promise<T> {
 		if (!this.#accepting) throw new TaskTrackerClosedError();
 		if (label.trim() === "") throw new TypeError("Tracked task labels must not be empty.");
 		const taskId = this.#nextTaskId;
@@ -88,7 +97,7 @@ export class InstanceTaskTracker implements TaskTracker {
 				return value;
 			},
 			(cause: unknown) => {
-				this.#failures.push(Object.freeze({ cause, label }));
+				if (recordFailure) this.#failures.push(Object.freeze({ cause, label }));
 				this.#finishTask(taskId);
 				throw cause;
 			},
@@ -109,8 +118,16 @@ export class InstanceTaskTracker implements TaskTracker {
 	close(options: Readonly<{ graceMs: number; signal?: AbortSignal }>): Promise<TaskCloseReport> {
 		if (this.#closePromise) return this.#closePromise;
 		this.#accepting = false;
+		this.#settledPromise = this.#finishSettlement();
 		this.#closePromise = this.#finishClose(options);
 		return this.#closePromise;
+	}
+
+	settled(): Promise<TaskCloseReport> {
+		if (!this.#settledPromise) {
+			throw new TypeError("Task tracker settlement is available only after close starts.");
+		}
+		return this.#settledPromise;
 	}
 
 	async #finishClose(
@@ -129,6 +146,15 @@ export class InstanceTaskTracker implements TaskTracker {
 		return Object.freeze({
 			failures: Object.freeze(this.#takeFailures()),
 			unfinishedLabels: Object.freeze([...this.#tasks.values()]),
+		});
+	}
+
+	async #finishSettlement(): Promise<TaskCloseReport> {
+		await this.#drain({});
+		await this.#closePromise;
+		return Object.freeze({
+			failures: Object.freeze(this.#takeFailures()),
+			unfinishedLabels: Object.freeze([]),
 		});
 	}
 

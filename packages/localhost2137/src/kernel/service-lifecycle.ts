@@ -4,6 +4,7 @@ import {
 	createRunningPluginContext,
 	type LifecycleContextCapabilities,
 } from "./lifecycle-context.js";
+import type { LifecycleHookRunner } from "./lifecycle-hook-runner.js";
 import { ServiceLifecycleStateOwner, type ServiceLifecycleStatus } from "./lifecycle-state.js";
 
 export interface ServiceLifecycleHooks<State, Config, Seed> {
@@ -109,6 +110,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 	readonly #capabilities: LifecycleContextCapabilities<Config>;
 	readonly #configuredSeed: Seed | undefined;
 	readonly #correlationId: () => string;
+	readonly #hookRunner: LifecycleHookRunner;
 	readonly #hooks: ServiceLifecycleHooks<State, Config, Seed>;
 	readonly #pluginId: string;
 	readonly #state = new ServiceLifecycleStateOwner<State>();
@@ -118,6 +120,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 		readonly capabilities: LifecycleContextCapabilities<Config>;
 		readonly configuredSeed?: Seed;
 		readonly correlationId: () => string;
+		readonly hookRunner: LifecycleHookRunner;
 		readonly hooks: ServiceLifecycleHooks<State, Config, Seed>;
 		readonly pluginId: string;
 		readonly stateVersion: number;
@@ -125,6 +128,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 		this.#capabilities = input.capabilities;
 		this.#configuredSeed = input.configuredSeed;
 		this.#correlationId = input.correlationId;
+		this.#hookRunner = input.hookRunner;
 		this.#hooks = input.hooks;
 		this.#pluginId = input.pluginId;
 		this.#stateVersion = input.stateVersion;
@@ -150,11 +154,12 @@ export class ServiceLifecycle<State, Config, Seed> {
 		stored?: StoredServiceIdentity,
 		signal?: AbortSignal,
 	): Promise<ServiceReconciliation> {
-		const capabilities = this.#phaseCapabilities(signal);
 		if (!stored) {
 			this.#state.beginCreate();
 			try {
-				await this.#hooks.create(createBasePluginContext(capabilities));
+				await this.#runHook("create", signal, (capabilities) =>
+					this.#hooks.create(createBasePluginContext(capabilities)),
+				);
 				this.#state.createSucceeded();
 				return Object.freeze({ kind: "created", stateVersion: this.#stateVersion });
 			} catch (cause) {
@@ -187,10 +192,12 @@ export class ServiceLifecycle<State, Config, Seed> {
 
 		this.#state.beginUpdate();
 		try {
-			await this.#hooks.update(createBasePluginContext(capabilities), {
-				from: stored.stateVersion,
-				to: this.#stateVersion,
-			});
+			await this.#runHook("update", signal, (capabilities) =>
+				this.#hooks.update?.(createBasePluginContext(capabilities), {
+					from: stored.stateVersion,
+					to: this.#stateVersion,
+				}),
+			);
 			this.#state.updateFinished();
 			return Object.freeze({
 				from: stored.stateVersion,
@@ -206,8 +213,8 @@ export class ServiceLifecycle<State, Config, Seed> {
 	async start(signal?: AbortSignal): Promise<void> {
 		this.#state.beginStart();
 		try {
-			const state = await this.#hooks.start(
-				createBasePluginContext(this.#phaseCapabilities(signal)),
+			const state = await this.#runHook("start", signal, (capabilities) =>
+				this.#hooks.start(createBasePluginContext(capabilities)),
 			);
 			this.#state.startSucceeded(state);
 		} catch (cause) {
@@ -217,16 +224,16 @@ export class ServiceLifecycle<State, Config, Seed> {
 	}
 
 	async seed(signal?: AbortSignal): Promise<void> {
-		if (this.#configuredSeed === undefined) return;
+		const configuredSeed = this.#configuredSeed;
+		if (configuredSeed === undefined) return;
 		const hook = this.#hooks.seed;
 		if (!hook) {
 			throw new ServiceSeedContractError(this.serviceKey);
 		}
 		const state = this.#state.beginSeed();
 		try {
-			await hook(
-				createRunningPluginContext(this.#phaseCapabilities(signal), state),
-				this.#configuredSeed,
+			await this.#runHook("seed", signal, (capabilities) =>
+				hook(createRunningPluginContext(capabilities, state), configuredSeed),
 			);
 		} catch (cause) {
 			throw this.#hookError("seed", cause);
@@ -238,7 +245,9 @@ export class ServiceLifecycle<State, Config, Seed> {
 	async stop(signal?: AbortSignal): Promise<void> {
 		const state = this.#state.beginStop();
 		try {
-			await this.#hooks.stop?.(createRunningPluginContext(this.#phaseCapabilities(signal), state));
+			await this.#runHook("stop", signal, (capabilities) =>
+				this.#hooks.stop?.(createRunningPluginContext(capabilities, state)),
+			);
 			this.#state.stopFinished(true);
 		} catch (cause) {
 			this.#state.stopFinished(false);
@@ -256,6 +265,18 @@ export class ServiceLifecycle<State, Config, Seed> {
 			...this.#capabilities,
 			signal: AbortSignal.any([this.#capabilities.signal, signal]),
 		});
+	}
+
+	#runHook<Value>(
+		hook: "create" | "seed" | "start" | "stop" | "update",
+		signal: AbortSignal | undefined,
+		run: (capabilities: LifecycleContextCapabilities<Config>) => Promise<Value> | Value,
+	): Promise<Value> {
+		return this.#hookRunner.run(
+			`${this.#capabilities.instanceId}:${this.serviceKey}:${hook}`,
+			signal,
+			(phaseSignal) => run(this.#phaseCapabilities(phaseSignal)),
+		);
 	}
 
 	#hookError(
