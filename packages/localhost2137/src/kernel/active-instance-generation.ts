@@ -14,9 +14,13 @@ export class ActiveInstanceGeneration {
 		return this.#controller.signal;
 	}
 
+	abort(reason: unknown): void {
+		this.#controller.abort(reason);
+	}
+
 	close(reason: unknown, graceMs: number): Promise<TaskCloseReport> {
 		if (this.#closePromise) return this.#closePromise;
-		this.#controller.abort(reason);
+		this.abort(reason);
 		this.#closePromise = this.#tasks.close({ graceMs });
 		this.#settledPromise = this.#tasks.settled();
 		return this.#closePromise;

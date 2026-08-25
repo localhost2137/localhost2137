@@ -38,12 +38,19 @@ export class RuntimeAdmission {
 		if (this.#closing) throw new RuntimeAdmissionClosedError();
 	}
 
-	close(reason: unknown): Promise<void> {
+	activeCount(): number {
+		return this.#active;
+	}
+
+	close(): Promise<void> {
 		if (this.#closePromise) return this.#closePromise;
 		this.#closing = true;
 		this.#closePromise = this.#active === 0 ? Promise.resolve() : this.#waitForEmpty();
-		this.#controller.abort(reason);
 		return this.#closePromise;
+	}
+
+	abort(reason: unknown): void {
+		this.#controller.abort(reason);
 	}
 
 	#waitForEmpty(): Promise<void> {

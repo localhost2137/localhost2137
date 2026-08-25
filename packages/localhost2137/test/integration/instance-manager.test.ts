@@ -15,7 +15,10 @@ import {
 } from "../../src/kernel/instance-manager.js";
 import type { InstanceTemplate } from "../../src/kernel/instance-template.js";
 import { MutationAbortedError, MutationTimeoutError } from "../../src/kernel/mutation-scope.js";
-import { InstanceRuntimeClosedError } from "../../src/kernel/persisted-instance-runtime.js";
+import {
+	InstanceRuntimeClosedError,
+	InstanceRuntimeCloseTimeoutError,
+} from "../../src/kernel/persisted-instance-runtime.js";
 import type { RuntimeTime } from "../../src/kernel/runtime-time.js";
 import {
 	ServiceIdentityConflictError,
@@ -291,13 +294,14 @@ describe("InstanceManager with durable Node storage", () => {
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 	});
 
-	it("shutdown aborts an admitted create before it can become live", async () => {
+	it("shutdown lets an admitted create finish within its grace period", async () => {
 		const createEntered = deferred<BasePluginContext<unknown>>();
+		const releaseCreate = deferred<void>();
 		const fixture = await managerFixture(
 			instanceTemplate({
 				createBarrier: async (context) => {
 					createEntered.resolve(context);
-					throw await abortReason(context.signal);
+					await releaseCreate.promise;
 				},
 			}),
 		);
@@ -310,13 +314,17 @@ describe("InstanceManager with durable Node storage", () => {
 
 		const stopping = fixture.manager.stopAll({ timeoutMs: 1_000 });
 
-		await expect(creating).rejects.toBeInstanceOf(MutationAbortedError);
-		await expect(stopping).resolves.toBeUndefined();
-		expect(createContext.signal.aborted).toBe(true);
-		expect(await fixture.storage.readInstance(parseInstanceId("delayed"))).toBeUndefined();
+		expect(createContext.signal.aborted).toBe(false);
 		await expect(
 			fixture.manager.create({ id: "too-late", persistence: "persistent", seed: false }),
 		).rejects.toBeInstanceOf(InstanceRuntimeClosedError);
+		releaseCreate.resolve(undefined);
+		await expect(creating).resolves.toMatchObject({ id: "delayed", status: "running" });
+		await expect(stopping).resolves.toBeUndefined();
+		expect(createContext.signal.aborted).toBe(true);
+		expect(await fixture.storage.readInstance(parseInstanceId("delayed"))).toMatchObject({
+			status: "ready",
+		});
 	});
 
 	it("starts the create deadline before storage initialization", async () => {
@@ -398,11 +406,12 @@ describe("InstanceManager with durable Node storage", () => {
 		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 		const startEntered = deferred<BasePluginContext<unknown>>();
+		const releaseStart = deferred<void>();
 		const restarting = await managerFixture(
 			instanceTemplate({
 				startBarrier: async (context) => {
 					startEntered.resolve(context);
-					throw await abortReason(context.signal);
+					await releaseStart.promise;
 				},
 			}),
 			fixture.directory,
@@ -412,7 +421,9 @@ describe("InstanceManager with durable Node storage", () => {
 
 		const stopping = restarting.manager.stopAll({ timeoutMs: 1_000 });
 
-		await expect(starting).rejects.toBeInstanceOf(MutationAbortedError);
+		expect(startContext.signal.aborted).toBe(false);
+		releaseStart.resolve(undefined);
+		await expect(starting).resolves.toBeUndefined();
 		await expect(stopping).resolves.toBeUndefined();
 		expect(startContext.signal.aborted).toBe(true);
 		expect(await restarting.storage.readInstance(parseInstanceId("dev"))).toMatchObject({
@@ -636,7 +647,7 @@ describe("InstanceManager with durable Node storage", () => {
 
 		time.advance(10);
 
-		await expect(stopping).rejects.toBeInstanceOf(MutationTimeoutError);
+		await expect(stopping).rejects.toBeInstanceOf(InstanceRuntimeCloseTimeoutError);
 		expect(fixture.manager.stopAll({ timeoutMs: 10 })).toBe(stopping);
 		expect(context.signal.aborted).toBe(true);
 		expect(() => context.tasks.track("while stop is owned", Promise.resolve())).not.toThrow();

@@ -34,6 +34,7 @@ export class NodeHttpServer {
 	#activeRequests = 0;
 	#address: HttpServerAddress | undefined;
 	#closeReport: Promise<void> | undefined;
+	#closingServer = false;
 	#listening = false;
 	readonly #postListenFailures: unknown[] = [];
 	#server: Server | undefined;
@@ -121,10 +122,10 @@ export class NodeHttpServer {
 		try {
 			const response = await this.#app.fetch(request);
 			return responseWithFinalizer(response, () => {
-				this.#activeRequests -= 1;
+				this.#requestFinished();
 			});
 		} catch (cause) {
-			this.#activeRequests -= 1;
+			this.#requestFinished();
 			throw cause;
 		}
 	}
@@ -133,8 +134,10 @@ export class NodeHttpServer {
 		await this.#start?.catch(() => undefined);
 		const server = this.#server;
 		if (!server || !this.#address) return;
+		this.#closingServer = true;
 		const closeFailure = await new Promise<unknown>((resolve, reject) => {
 			server.close((cause) => (cause ? reject(cause) : resolve(undefined)));
+			if (this.#activeRequests === 0) server.closeIdleConnections();
 		}).catch((cause: unknown) => cause);
 		this.#listening = false;
 		const failures = [
@@ -143,6 +146,17 @@ export class NodeHttpServer {
 		];
 		if (failures.length > 0) {
 			throw new AggregateError(failures, "HTTP server failed after it started listening.");
+		}
+	}
+
+	#requestFinished(): void {
+		this.#activeRequests -= 1;
+		if (this.#closingServer && this.#activeRequests === 0) {
+			const server = this.#server;
+			server?.closeIdleConnections();
+			setImmediate(() => {
+				if (this.#closingServer && this.#activeRequests === 0) server?.closeIdleConnections();
+			});
 		}
 	}
 

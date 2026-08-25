@@ -5,7 +5,7 @@ import type { MonotonicClock } from "./instance-leases.js";
 import type { InstanceManifestPolicy } from "./instance-manifest-policy.js";
 import { type InstanceStoragePort, StorageWriteCommittedError } from "./instance-storage.js";
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
-import { MutationScope } from "./mutation-scope.js";
+import { MutationScope, MutationTimeoutError } from "./mutation-scope.js";
 import { RuntimeAdmission, type RuntimeAdmissionLease } from "./runtime-admission.js";
 import type { TaskScheduler } from "./task-tracker.js";
 
@@ -15,6 +15,32 @@ export class InstanceRuntimeClosedError extends Error {
 	constructor() {
 		super("The instance runtime is closing or already closed.");
 		this.name = "InstanceRuntimeClosedError";
+	}
+}
+
+export class InstanceRuntimeCloseTimeoutError extends Error {
+	readonly activeAdmissions: number;
+	override readonly cause: MutationTimeoutError;
+	readonly unfinishedTaskLabels: readonly string[];
+
+	constructor(
+		cause: MutationTimeoutError,
+		activeAdmissions: number,
+		unfinishedTaskLabels: readonly string[],
+	) {
+		super(
+			`Timed out closing the instance runtime with ${activeAdmissions} admitted operation${activeAdmissions === 1 ? "" : "s"} and ${unfinishedTaskLabels.length} unfinished tracked task${unfinishedTaskLabels.length === 1 ? "" : "s"}.`,
+		);
+		this.name = "InstanceRuntimeCloseTimeoutError";
+		this.activeAdmissions = activeAdmissions;
+		this.cause = cause;
+		Object.defineProperty(this, "cause", {
+			configurable: false,
+			enumerable: false,
+			value: cause,
+			writable: false,
+		});
+		this.unfinishedTaskLabels = Object.freeze([...unfinishedTaskLabels]);
 	}
 }
 
@@ -146,9 +172,22 @@ export class PersistedInstanceRuntime {
 			label: "closing the instance runtime",
 			timeoutMs,
 		});
-		const owned = this.#stopAll(scope).finally(() => scope.dispose());
+		const timeoutSnapshot: RuntimeCloseTimeoutSnapshot = {
+			activeAdmissions: 0,
+			unfinishedTaskLabels: [],
+		};
+		const owned = this.#stopAll(scope, timeoutSnapshot).finally(() => scope.dispose());
 		this.#settledPromise = owned;
-		this.#closePromise = scope.report(owned);
+		this.#closePromise = scope.report(owned).catch((cause: unknown) => {
+			if (cause instanceof MutationTimeoutError) {
+				throw new InstanceRuntimeCloseTimeoutError(
+					cause,
+					timeoutSnapshot.activeAdmissions,
+					timeoutSnapshot.unfinishedTaskLabels,
+				);
+			}
+			throw cause;
+		});
 		void owned.catch(() => undefined);
 		return this.#closePromise;
 	}
@@ -160,42 +199,69 @@ export class PersistedInstanceRuntime {
 		return this.#settledPromise;
 	}
 
-	async #stopAll(scope: MutationScope): Promise<void> {
+	async #stopAll(
+		scope: MutationScope,
+		timeoutSnapshot: RuntimeCloseTimeoutSnapshot,
+	): Promise<void> {
 		const closing = new InstanceRuntimeClosedError();
 		const failures: unknown[] = [];
-		await scope
-			.wait(() => this.#admission.close(closing))
-			.catch((cause: unknown) => failures.push(cause));
-		for (const active of [...this.#registry.all()].reverse()) {
-			let lease: { release(): void } | undefined;
-			try {
-				lease = await active.leases.acquireExclusiveOwned();
-				active.leases.retire();
-				await active.lifecycle.stopAll(scope.signal);
-			} catch (cause) {
-				failures.push(cause);
-				active.leases.retire();
-			} finally {
-				lease?.release();
+		const abortRetainedWork = () => {
+			const reason = scope.signal.reason ?? closing;
+			timeoutSnapshot.activeAdmissions = this.#admission.activeCount();
+			timeoutSnapshot.unfinishedTaskLabels = this.#registry
+				.all()
+				.flatMap((active) =>
+					active.tasks.unfinishedLabels().map((label) => `${active.id.value}:${label}`),
+				);
+			this.#admission.abort(reason);
+			for (const active of this.#registry.all()) active.generation.abort(reason);
+		};
+		scope.signal.addEventListener("abort", abortRetainedWork, { once: true });
+		if (scope.signal.aborted) abortRetainedWork();
+		try {
+			await scope
+				.wait(() => this.#admission.close())
+				.catch((cause: unknown) => failures.push(cause));
+			for (const active of [...this.#registry.all()].reverse()) {
+				let lease: { release(): void } | undefined;
+				try {
+					lease = await active.leases.acquireExclusiveOwned();
+					active.leases.retire();
+					await active.lifecycle.stopAll(scope.signal);
+				} catch (cause) {
+					failures.push(cause);
+					active.leases.retire();
+				} finally {
+					lease?.release();
+				}
+				const report = await active.generation.close(closing, scope.remainingMs());
+				if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
+				const settled = await active.generation.settled();
+				if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
+					failures.push(settled);
+				}
 			}
-			const report = await active.generation.close(closing, scope.remainingMs());
-			if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
-			const settled = await active.generation.settled();
-			if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
-				failures.push(settled);
+			const cleanup = await this.#trash.close(scope.remainingMs());
+			if (cleanup.failures.length > 0 || cleanup.unfinishedLabels.length > 0) {
+				failures.push(cleanup);
 			}
-		}
-		const cleanup = await this.#trash.close(scope.remainingMs());
-		if (cleanup.failures.length > 0 || cleanup.unfinishedLabels.length > 0) failures.push(cleanup);
-		const settledCleanup = await this.#trash.settled();
-		if (settledCleanup.failures.length > 0 || settledCleanup.unfinishedLabels.length > 0) {
-			failures.push(settledCleanup);
-		}
-		if (scope.signal.aborted) failures.push(scope.signal.reason);
-		if (failures.length > 0) {
-			throw new AggregateError(failures, "Instance runtime shutdown had failures.");
+			const settledCleanup = await this.#trash.settled();
+			if (settledCleanup.failures.length > 0 || settledCleanup.unfinishedLabels.length > 0) {
+				failures.push(settledCleanup);
+			}
+			if (scope.signal.aborted) failures.push(scope.signal.reason);
+			if (failures.length > 0) {
+				throw new AggregateError(failures, "Instance runtime shutdown had failures.");
+			}
+		} finally {
+			scope.signal.removeEventListener("abort", abortRetainedWork);
 		}
 	}
+}
+
+interface RuntimeCloseTimeoutSnapshot {
+	activeAdmissions: number;
+	unfinishedTaskLabels: string[];
 }
 
 async function writeInstanceManifest(
