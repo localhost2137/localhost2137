@@ -77,7 +77,9 @@ export class MutationScope {
 	}
 
 	remainingMs(): number {
-		return Math.max(0, this.#deadline - this.#clock.nowMilliseconds());
+		const now = this.#clock.nowMilliseconds();
+		if (!Number.isFinite(now)) throw new TypeError("Monotonic clock must be finite.");
+		return Math.max(0, this.#deadline - now);
 	}
 
 	checkpoint(): void {
@@ -91,9 +93,20 @@ export class MutationScope {
 
 	async wait<Value>(work: () => Promise<Value>): Promise<Value> {
 		this.checkpoint();
-		const value = await work();
-		this.checkpoint();
-		return value;
+		const pending = work();
+		let aborted: (() => void) | undefined;
+		const cancellation = new Promise<never>((_resolve, reject) => {
+			aborted = () => reject(this.signal.reason);
+			this.signal.addEventListener("abort", aborted, { once: true });
+			if (this.signal.aborted) aborted();
+		});
+		try {
+			const value = await Promise.race([pending, cancellation]);
+			this.checkpoint();
+			return value;
+		} finally {
+			if (aborted) this.signal.removeEventListener("abort", aborted);
+		}
 	}
 
 	dispose(): void {

@@ -1,17 +1,34 @@
-import type { ActiveInstanceFactory } from "./active-instance.js";
-import { type ActiveInstance, type InstanceSummary, summarizeInstance } from "./active-instance.js";
+import {
+	type ActiveInstance,
+	type ActiveInstanceFactory,
+	type InstanceSummary,
+	summarizeInstance,
+} from "./active-instance.js";
 import {
 	type ActiveInstanceRegistry,
 	InstanceAlreadyExistsError,
 } from "./active-instance-registry.js";
 import type { InstanceId } from "./identifiers.js";
+import type { MonotonicClock } from "./instance-leases.js";
 import type { InstanceManifestPolicy } from "./instance-manifest-policy.js";
-import { InstanceStagingError, type InstanceStoragePort } from "./instance-storage.js";
+import {
+	InstanceStagingError,
+	type InstanceStoragePort,
+	StorageWriteCommittedError,
+} from "./instance-storage.js";
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
+import { MutationScope } from "./mutation-scope.js";
+import type { TaskScheduler } from "./task-tracker.js";
+
+const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
 
 export interface LifecycleMutationOptions {
 	readonly signal?: AbortSignal;
 	readonly timeoutMs: number;
+}
+
+export interface AdmittedMutationOptions extends LifecycleMutationOptions {
+	readonly runtimeSignal: AbortSignal;
 }
 
 export class InstanceCreationError extends AggregateError {
@@ -28,164 +45,271 @@ export class InstanceResetError extends AggregateError {
 	}
 }
 
+export class InstanceMutationCommittedError extends AggregateError {
+	readonly operation: "destroy" | "reset" | "seed";
+	readonly summary?: InstanceSummary;
+
+	constructor(
+		operation: "destroy" | "reset" | "seed",
+		causes: readonly unknown[],
+		summary?: InstanceSummary,
+	) {
+		super(
+			causes,
+			`Instance ${operation} committed, but its caller deadline or finalization failed.`,
+		);
+		this.name = "InstanceMutationCommittedError";
+		this.operation = operation;
+		if (summary) this.summary = summary;
+	}
+}
+
 export class DurableInstanceMutations {
 	readonly #factory: ActiveInstanceFactory;
 	readonly #manifests: InstanceManifestPolicy;
+	readonly #monotonicClock: MonotonicClock;
 	readonly #registry: ActiveInstanceRegistry;
+	readonly #scheduler: TaskScheduler;
 	readonly #storage: InstanceStoragePort;
 	readonly #trash: InstanceTrashCleanup;
 
 	constructor(input: {
 		readonly factory: ActiveInstanceFactory;
 		readonly manifests: InstanceManifestPolicy;
+		readonly monotonicClock: MonotonicClock;
 		readonly registry: ActiveInstanceRegistry;
+		readonly scheduler: TaskScheduler;
 		readonly storage: InstanceStoragePort;
 		readonly trash: InstanceTrashCleanup;
 	}) {
 		this.#factory = input.factory;
 		this.#manifests = input.manifests;
+		this.#monotonicClock = input.monotonicClock;
 		this.#registry = input.registry;
+		this.#scheduler = input.scheduler;
 		this.#storage = input.storage;
 		this.#trash = input.trash;
 	}
 
 	async create(
 		instanceId: InstanceId,
-		options: Readonly<{ persistence: "ephemeral" | "persistent"; seed: boolean }>,
+		options: Readonly<{
+			persistence: "ephemeral" | "persistent";
+			runtimeSignal: AbortSignal;
+			seed: boolean;
+			signal?: AbortSignal;
+			timeoutMs?: number;
+		}>,
 	): Promise<InstanceSummary> {
+		const scope = this.#scope(`creating instance ${instanceId.value}`, {
+			runtimeSignal: options.runtimeSignal,
+			...(options.signal ? { signal: options.signal } : {}),
+			timeoutMs: options.timeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS,
+		});
 		const releaseReservation = this.#registry.reserve(instanceId);
 		try {
-			if (await this.#storage.readInstance(instanceId)) {
+			if (await scope.wait(() => this.#storage.readInstance(instanceId))) {
 				throw new InstanceAlreadyExistsError(instanceId.value);
 			}
-			return await this.#createReserved(instanceId, options);
+			return await this.#createReserved(instanceId, options, scope);
 		} finally {
 			releaseReservation();
+			scope.dispose();
 		}
 	}
 
-	async destroy(instanceId: InstanceId, options: LifecycleMutationOptions): Promise<void> {
+	async seed(instanceId: InstanceId, options: AdmittedMutationOptions): Promise<void> {
+		const scope = this.#scope(`seeding instance ${instanceId.value}`, options);
 		const active = this.#registry.get(instanceId);
-		const lease = await active.leases.acquireExclusive(options);
-		const transition = this.#manifests.transition(instanceId, "destroy");
+		let committed = false;
 		try {
-			await active.lifecycle.stopAll();
-			active.lifecycle.beginDestroy();
-			await this.#storage.stageInstance(instanceId, transition);
-			this.#registry.remove(active);
-			active.leases.retire();
-			this.#trash.schedule(transition.transitionId);
-		} catch (cause) {
-			const recoveryFailures: unknown[] = [];
-			if (cause instanceof InstanceStagingError && cause.staged) {
-				await this.#storage
-					.restoreStagedInstance(instanceId, transition.transitionId)
-					.catch((failure: unknown) => recoveryFailures.push(failure));
-			}
-			if (active.lifecycle.status() === "destroying") {
-				try {
-					active.lifecycle.restoreDestroyFailure();
-					await active.lifecycle.start();
-				} catch (failure) {
-					recoveryFailures.push(failure);
+			const lease = await active.leases.acquireExclusive({
+				signal: scope.signal,
+				timeoutMs: scope.remainingMs(),
+			});
+			try {
+				await this.#finalizePendingReset(active, scope);
+				const result = await active.lifecycle.seed(scope.signal);
+				committed = active.lifecycle.seedStatus() === "seeded";
+				await active.tasks.idle({ signal: scope.signal, timeoutMs: scope.remainingMs() });
+				scope.checkpoint();
+				if (result.committedWarnings.length > 0) {
+					throw new InstanceMutationCommittedError("seed", result.committedWarnings);
 				}
+			} catch (cause) {
+				if (cause instanceof InstanceMutationCommittedError) throw cause;
+				if (committed) throw new InstanceMutationCommittedError("seed", [cause]);
+				throw cause;
+			} finally {
+				lease.release();
 			}
+		} finally {
+			scope.dispose();
+		}
+	}
+
+	async destroy(instanceId: InstanceId, options: AdmittedMutationOptions): Promise<void> {
+		const scope = this.#scope(`destroying instance ${instanceId.value}`, options);
+		const previous = this.#registry.get(instanceId);
+		const lease = await previous.leases.acquireExclusive({
+			signal: scope.signal,
+			timeoutMs: scope.remainingMs(),
+		});
+		const transition = this.#manifests.transition(instanceId, "destroy");
+		let staged = false;
+		try {
+			await this.#finalizePendingReset(previous, scope);
+			const retirementFailures = await this.#retire(previous, scope, "instance destroyed");
+			if (retirementFailures.length > 0) throw new AggregateError(retirementFailures);
+			previous.lifecycle.beginDestroy();
+			scope.checkpoint();
+			try {
+				await this.#storage.stageInstance(instanceId, transition);
+				staged = true;
+			} catch (cause) {
+				if (!(cause instanceof InstanceStagingError) || !cause.staged) throw cause;
+				staged = true;
+				this.#registry.remove(previous);
+				this.#trash.schedule(transition.transitionId);
+				throw new InstanceMutationCommittedError("destroy", [cause]);
+			}
+			this.#registry.remove(previous);
+			this.#trash.schedule(transition.transitionId);
+			scope.checkpoint();
+		} catch (cause) {
+			if (cause instanceof InstanceMutationCommittedError) throw cause;
+			if (staged) throw new InstanceMutationCommittedError("destroy", [cause]);
+			const recoveryFailures = await this.#restorePrevious(previous, scope);
 			throw new AggregateError(
 				[cause, ...recoveryFailures],
-				"Instance destroy failed and was restored when possible.",
+				"Instance destroy failed and a new generation was restored when possible.",
 			);
 		} finally {
 			lease.release();
+			scope.dispose();
 		}
 	}
 
 	async reset(
 		instanceId: InstanceId,
-		options: LifecycleMutationOptions & Readonly<{ seed: boolean }>,
+		options: AdmittedMutationOptions & Readonly<{ seed: boolean }>,
 	): Promise<InstanceSummary> {
+		const scope = this.#scope(`resetting instance ${instanceId.value}`, options);
 		const previous = this.#registry.get(instanceId);
-		const lease = await previous.leases.acquireExclusive(options);
+		const lease = await previous.leases.acquireExclusive({
+			signal: scope.signal,
+			timeoutMs: scope.remainingMs(),
+		});
 		const transition = this.#manifests.transition(instanceId, "reset");
 		let replacement: ActiveInstance | undefined;
 		let staged = false;
+		let committed = false;
+		let committedSummary: InstanceSummary | undefined;
 		try {
-			await previous.lifecycle.stopAll();
+			await this.#finalizePendingReset(previous, scope);
+			const retirementFailures = await this.#retire(previous, scope, "instance reset");
+			if (retirementFailures.length > 0) throw new AggregateError(retirementFailures);
 			previous.lifecycle.beginReset();
-			await this.#storage.stageInstance(instanceId, transition);
-			staged = true;
+			scope.checkpoint();
+			try {
+				await this.#storage.stageInstance(instanceId, transition);
+				staged = true;
+			} catch (cause) {
+				if (!(cause instanceof InstanceStagingError) || !cause.staged) throw cause;
+				staged = true;
+			}
 			const manifest = this.#manifests.create(
 				instanceId,
 				previous.manifest.persistence,
 				transition.transitionId,
 			);
-			await this.#storage.createInstance(instanceId, manifest);
-			replacement = await this.#factory.start(instanceId, manifest);
-			if (options.seed) await replacement.lifecycle.seed();
-			await this.#writeReady(replacement);
-			const summary = await summarizeInstance(replacement);
-			await this.#storage.commitTransition(transition);
-			try {
-				await this.#finalizeCommittedReset(replacement, transition.transitionId);
-			} catch (cause) {
-				this.#trash.retainFailure(`reset-finalize:${transition.transitionId}`, cause);
+			await scope.wait(() => this.#storage.createInstance(instanceId, manifest));
+			const startedReplacement = await this.#factory.start(
+				instanceId,
+				manifest,
+				this.#factoryOptions(scope),
+			);
+			replacement = startedReplacement;
+			if (options.seed) {
+				const result = await startedReplacement.lifecycle.seed(scope.signal);
+				if (result.committedWarnings.length > 0) {
+					throw new AggregateError(result.committedWarnings, "Reset seed storage sync failed.");
+				}
+				await startedReplacement.tasks.idle({
+					signal: scope.signal,
+					timeoutMs: scope.remainingMs(),
+				});
 			}
-			this.#registry.replace(previous, replacement);
-			previous.leases.retire();
+			const summary = await scope.wait(() => summarizeInstance(startedReplacement));
+			startedReplacement.pendingResetTransition = transition;
+			const readyWarning = await this.#writeReady(startedReplacement, scope);
+			committed = true;
+			committedSummary = summary;
+			this.#registry.replace(previous, startedReplacement);
+			const completionFailures: unknown[] = readyWarning ? [readyWarning] : [];
+			let transitionCommitted = false;
+			try {
+				await this.#storage.commitTransition(transition);
+				transitionCommitted = true;
+			} catch (cause) {
+				completionFailures.push(cause);
+				transitionCommitted = isCommittedWrite(cause, "commit_transition");
+			}
+			if (transitionCommitted && !scope.signal.aborted) {
+				await this.#finalizePendingReset(startedReplacement, scope).catch((cause: unknown) => {
+					completionFailures.push(cause);
+				});
+			}
+			if (scope.signal.aborted) completionFailures.push(scope.signal.reason);
+			if (completionFailures.length > 0) {
+				throw new InstanceMutationCommittedError("reset", completionFailures, summary);
+			}
 			return summary;
 		} catch (cause) {
-			if (cause instanceof InstanceStagingError && cause.staged) staged = true;
-			const rollbackFailures: unknown[] = [];
-			if (replacement) {
-				await replacement.lifecycle
-					.stopAll()
-					.catch((failure: unknown) => rollbackFailures.push(failure));
+			if (cause instanceof InstanceMutationCommittedError) throw cause;
+			if (committed) {
+				throw new InstanceMutationCommittedError("reset", [cause], committedSummary);
 			}
-			if (staged) {
-				await this.#storage
-					.discardActiveReplacement(instanceId, transition.transitionId)
-					.catch((failure: unknown) => rollbackFailures.push(failure));
-				await this.#storage
-					.restoreStagedInstance(instanceId, transition.transitionId)
-					.catch((failure: unknown) => rollbackFailures.push(failure));
-				try {
-					previous.lifecycle.restoreResetFailure();
-					await previous.lifecycle.start();
-				} catch (failure) {
-					rollbackFailures.push(failure);
-				}
-			} else if (previous.lifecycle.status() === "resetting") {
-				try {
-					previous.lifecycle.restoreResetFailure();
-					await previous.lifecycle.start();
-				} catch (failure) {
-					rollbackFailures.push(failure);
-				}
-			}
+			const rollbackFailures = await this.#rollbackReset(
+				previous,
+				replacement,
+				transition.transitionId,
+				staged,
+				scope,
+			);
 			throw new InstanceResetError([cause, ...rollbackFailures]);
 		} finally {
 			lease.release();
+			scope.dispose();
 		}
 	}
 
 	async #createReserved(
 		instanceId: InstanceId,
 		options: Readonly<{ persistence: "ephemeral" | "persistent"; seed: boolean }>,
+		scope: MutationScope,
 	): Promise<InstanceSummary> {
 		let active: ActiveInstance | undefined;
 		const trashId = this.#manifests.creationTrashId(instanceId);
 		try {
 			const manifest = this.#manifests.create(instanceId, options.persistence);
-			await this.#storage.createInstance(instanceId, manifest);
-			active = await this.#factory.start(instanceId, manifest);
-			if (options.seed) await active.lifecycle.seed();
-			await this.#writeReady(active);
-			this.#registry.add(active);
-			return await summarizeInstance(active);
-		} catch (cause) {
-			const cleanupFailures: unknown[] = [];
-			if (active) {
-				await active.lifecycle.stopAll().catch((failure: unknown) => cleanupFailures.push(failure));
+			await scope.wait(() => this.#storage.createInstance(instanceId, manifest));
+			const started = await this.#factory.start(instanceId, manifest, this.#factoryOptions(scope));
+			active = started;
+			if (options.seed) {
+				const result = await started.lifecycle.seed(scope.signal);
+				if (result.committedWarnings.length > 0) {
+					throw new AggregateError(result.committedWarnings, "Create seed storage sync failed.");
+				}
+				await started.tasks.idle({ signal: scope.signal, timeoutMs: scope.remainingMs() });
 			}
+			const readyWarning = await this.#writeReady(started, scope);
+			if (readyWarning) throw readyWarning;
+			const summary = await scope.wait(() => summarizeInstance(started));
+			this.#registry.add(started);
+			return summary;
+		} catch (cause) {
+			const cleanupFailures = active ? await this.#retire(active, scope, cause) : [];
 			let hasActiveStorage = false;
 			try {
 				hasActiveStorage = (await this.#storage.readInstance(instanceId)) !== undefined;
@@ -206,16 +330,122 @@ export class DurableInstanceMutations {
 		}
 	}
 
-	async #writeReady(active: ActiveInstance): Promise<void> {
-		const ready = this.#manifests.markReady(active.manifest);
-		await this.#storage.writeInstance(active.id, ready);
-		active.manifest = ready;
+	async #rollbackReset(
+		previous: ActiveInstance,
+		replacement: ActiveInstance | undefined,
+		transitionId: string,
+		staged: boolean,
+		scope: MutationScope,
+	): Promise<unknown[]> {
+		const failures = replacement ? await this.#retire(replacement, scope, "reset rolled back") : [];
+		if (staged) {
+			await this.#storage
+				.discardActiveReplacement(previous.id, transitionId)
+				.catch((failure: unknown) => failures.push(failure));
+			await this.#storage
+				.restoreStagedInstance(previous.id, transitionId)
+				.catch((failure: unknown) => failures.push(failure));
+			this.#trash.schedule(transitionId);
+		}
+		failures.push(...(await this.#restorePrevious(previous, scope)));
+		return failures;
 	}
 
-	async #finalizeCommittedReset(active: ActiveInstance, transitionId: string): Promise<void> {
+	async #restorePrevious(previous: ActiveInstance, scope: MutationScope): Promise<unknown[]> {
+		const failures: unknown[] = [];
+		try {
+			const restored = await this.#factory.start(
+				previous.id,
+				previous.manifest,
+				this.#factoryOptions(scope),
+			);
+			this.#registry.replace(previous, restored);
+		} catch (failure) {
+			failures.push(failure);
+		}
+		return failures;
+	}
+
+	async #retire(active: ActiveInstance, scope: MutationScope, reason: unknown): Promise<unknown[]> {
+		const failures: unknown[] = [];
+		active.leases.retire();
+		try {
+			scope.checkpoint();
+			if (active.lifecycle.status() === "running" || active.lifecycle.status() === "seed_failed") {
+				await active.lifecycle.stopAll(scope.signal);
+			}
+			scope.checkpoint();
+			await active.tasks.idle({ signal: scope.signal, timeoutMs: scope.remainingMs() });
+			scope.checkpoint();
+		} catch (failure) {
+			failures.push(failure);
+		}
+		const report = await active.generation.close(reason, scope.remainingMs());
+		if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
+		return failures;
+	}
+
+	async #writeReady(
+		active: ActiveInstance,
+		scope: MutationScope,
+	): Promise<StorageWriteCommittedError | undefined> {
+		const ready = this.#manifests.markReady(active.manifest);
+		scope.checkpoint();
+		let warning: StorageWriteCommittedError | undefined;
+		try {
+			await this.#storage.writeInstance(active.id, ready);
+		} catch (cause) {
+			if (!isCommittedWrite(cause, "write_instance")) throw cause;
+			warning = cause;
+		}
+		active.manifest = ready;
+		return warning;
+	}
+
+	async #finalizePendingReset(active: ActiveInstance, scope: MutationScope): Promise<void> {
+		const transitionId = active.manifest.transition?.id;
+		if (!transitionId) return;
+		const pending = active.pendingResetTransition;
+		if (!pending || pending.transitionId !== transitionId) {
+			throw new TypeError(`Active instance "${active.id.value}" has incomplete reset metadata.`);
+		}
+		scope.checkpoint();
+		try {
+			await this.#storage.commitTransition(pending);
+		} catch (cause) {
+			if (!isCommittedWrite(cause, "commit_transition")) throw cause;
+		}
+		if (scope.signal.aborted) throw scope.signal.reason;
 		const finalized = this.#manifests.clearTransition(active.manifest);
-		await this.#storage.writeInstance(active.id, finalized);
+		try {
+			await this.#storage.writeInstance(active.id, finalized);
+		} catch (cause) {
+			if (!isCommittedWrite(cause, "write_instance")) throw cause;
+		}
 		active.manifest = finalized;
+		delete active.pendingResetTransition;
 		this.#trash.schedule(transitionId);
 	}
+
+	#factoryOptions(scope: MutationScope): Readonly<{
+		remainingMs: () => number;
+		signal: AbortSignal;
+	}> {
+		return { remainingMs: () => scope.remainingMs(), signal: scope.signal };
+	}
+
+	#scope(label: string, options: AdmittedMutationOptions): MutationScope {
+		return new MutationScope(this.#monotonicClock, this.#scheduler, {
+			label,
+			signals: [...(options.signal ? [options.signal] : []), options.runtimeSignal],
+			timeoutMs: options.timeoutMs,
+		});
+	}
+}
+
+function isCommittedWrite(
+	cause: unknown,
+	operation: "commit_transition" | "write_instance",
+): cause is StorageWriteCommittedError {
+	return cause instanceof StorageWriteCommittedError && cause.operation === operation;
 }

@@ -18,10 +18,13 @@ export async function reconcileServices(
 	signal?: AbortSignal,
 ): Promise<void> {
 	for (const service of services) {
+		signal?.throwIfAborted();
 		const stored = await store.read(service.serviceKey);
+		signal?.throwIfAborted();
 		const result = await service.reconcile(stored, signal);
 		if (result.kind !== "unchanged") {
 			await store.write({ pluginId: service.pluginId, serviceKey: service.serviceKey }, result);
 		}
+		signal?.throwIfAborted();
 	}
 }

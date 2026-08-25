@@ -7,7 +7,13 @@ export interface ScenarioSeedPort {
 }
 
 export interface SeedStateStore {
-	write(state: InstanceSeedState): Promise<void>;
+	write(state: InstanceSeedState): Promise<SeedStateWriteResult>;
+}
+
+export type SeedStateWriteResult = Readonly<{ committedWarning: unknown }> | undefined | void;
+
+export interface InstanceSeedResult {
+	readonly committedWarnings: readonly unknown[];
 }
 
 export class InstanceStartError extends AggregateError {
@@ -118,8 +124,10 @@ export class InstanceLifecycle {
 		const started: AnyServiceLifecycle[] = [];
 		try {
 			for (const service of this.#services) {
+				phaseSignal.throwIfAborted();
 				await service.start(phaseSignal);
 				started.push(service);
+				phaseSignal.throwIfAborted();
 			}
 			this.#state.startFinished(true);
 			if (this.#seedState.status === "seed_failed") this.#state.restoreSeedFailure();
@@ -138,7 +146,7 @@ export class InstanceLifecycle {
 		if (failures.length > 0) throw new InstanceStopError(failures);
 	}
 
-	async seed(signal?: AbortSignal): Promise<void> {
+	async seed(signal?: AbortSignal): Promise<InstanceSeedResult> {
 		const phaseSignal = this.#phaseSignal(signal);
 		if (this.#seedState.status !== "unseeded") {
 			throw new SeedNotAllowedError(this.#seedState.status);
@@ -146,8 +154,9 @@ export class InstanceLifecycle {
 		this.#state.beginSeed();
 		const attempt = this.#seedState.attempt + 1;
 		const seeding: InstanceSeedState = { attempt, status: "seeding" };
+		const committedWarnings: unknown[] = [];
 		try {
-			await this.#seedStateStore.write(seeding);
+			collectCommittedWarning(await this.#seedStateStore.write(seeding), committedWarnings);
 			this.#seedState = seeding;
 		} catch (cause) {
 			this.#state.seedCancelled();
@@ -155,12 +164,19 @@ export class InstanceLifecycle {
 		}
 
 		try {
-			for (const service of this.#services) await service.seed(phaseSignal);
+			for (const service of this.#services) {
+				phaseSignal.throwIfAborted();
+				await service.seed(phaseSignal);
+				phaseSignal.throwIfAborted();
+			}
+			phaseSignal.throwIfAborted();
 			await this.#scenarioSeed?.run(phaseSignal);
+			phaseSignal.throwIfAborted();
 			const seeded: InstanceSeedState = { attempt, status: "seeded" };
-			await this.#seedStateStore.write(seeded);
+			collectCommittedWarning(await this.#seedStateStore.write(seeded), committedWarnings);
 			this.#seedState = seeded;
 			this.#state.seedFinished(true);
+			return Object.freeze({ committedWarnings: Object.freeze(committedWarnings) });
 		} catch (seedFailure) {
 			const failed: InstanceSeedState = {
 				attempt,
@@ -176,12 +192,12 @@ export class InstanceLifecycle {
 			this.#seedState = failed;
 			const persistenceFailures: unknown[] = [];
 			try {
-				await this.#seedStateStore.write(failed);
+				collectCommittedWarning(await this.#seedStateStore.write(failed), persistenceFailures);
 			} catch (cause) {
 				persistenceFailures.push(cause);
 			}
 			this.#state.seedFinished(false);
-			throw new InstanceSeedError(seedFailure, persistenceFailures);
+			throw new InstanceSeedError(seedFailure, [...committedWarnings, ...persistenceFailures]);
 		}
 	}
 
@@ -190,6 +206,10 @@ export class InstanceLifecycle {
 			? this.#signal
 			: AbortSignal.any([this.#signal, signal]);
 	}
+}
+
+function collectCommittedWarning(result: SeedStateWriteResult, warnings: unknown[]): void {
+	if (result) warnings.push(result.committedWarning);
 }
 
 async function stopServices(

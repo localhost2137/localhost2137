@@ -65,6 +65,20 @@ describe("MutationScope", () => {
 		scope.dispose();
 	});
 
+	it("interrupts a non-cooperative awaited phase at the shared deadline", async () => {
+		const time = new ManualTime();
+		const scope = new MutationScope(time, time, {
+			label: "closing the runtime",
+			timeoutMs: 10,
+		});
+		const wait = scope.wait(() => new Promise<never>(() => undefined));
+
+		time.advance(10);
+
+		await expect(wait).rejects.toBeInstanceOf(MutationTimeoutError);
+		scope.dispose();
+	});
+
 	it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])("rejects invalid timeout %s", (timeoutMs) => {
 		const time = new ManualTime();
 		expect(() => new MutationScope(time, time, { label: "invalid", timeoutMs })).toThrow(TypeError);

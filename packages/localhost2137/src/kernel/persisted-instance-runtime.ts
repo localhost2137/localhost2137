@@ -1,9 +1,15 @@
 import type { ActiveInstance, ActiveInstanceFactory } from "./active-instance.js";
 import type { ActiveInstanceRegistry } from "./active-instance-registry.js";
 import { parseInstanceId } from "./identifiers.js";
+import type { MonotonicClock } from "./instance-leases.js";
 import type { InstanceManifestPolicy } from "./instance-manifest-policy.js";
-import type { InstanceStoragePort } from "./instance-storage.js";
+import { type InstanceStoragePort, StorageWriteCommittedError } from "./instance-storage.js";
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
+import { MutationScope } from "./mutation-scope.js";
+import { RuntimeAdmission, type RuntimeAdmissionLease } from "./runtime-admission.js";
+import type { TaskScheduler } from "./task-tracker.js";
+
+const STARTUP_TIMEOUT_MS = 30_000;
 
 export class InstanceRuntimeClosedError extends Error {
 	constructor() {
@@ -13,9 +19,12 @@ export class InstanceRuntimeClosedError extends Error {
 }
 
 export class PersistedInstanceRuntime {
+	readonly #admission = new RuntimeAdmission();
 	readonly #factory: ActiveInstanceFactory;
 	readonly #manifests: InstanceManifestPolicy;
+	readonly #monotonicClock: MonotonicClock;
 	readonly #registry: ActiveInstanceRegistry;
+	readonly #scheduler: TaskScheduler;
 	readonly #storage: InstanceStoragePort;
 	readonly #trash: InstanceTrashCleanup;
 	#closePromise: Promise<void> | undefined;
@@ -25,60 +34,99 @@ export class PersistedInstanceRuntime {
 	constructor(input: {
 		readonly factory: ActiveInstanceFactory;
 		readonly manifests: InstanceManifestPolicy;
+		readonly monotonicClock: MonotonicClock;
 		readonly registry: ActiveInstanceRegistry;
+		readonly scheduler: TaskScheduler;
 		readonly storage: InstanceStoragePort;
 		readonly trash: InstanceTrashCleanup;
 	}) {
 		this.#factory = input.factory;
 		this.#manifests = input.manifests;
+		this.#monotonicClock = input.monotonicClock;
 		this.#registry = input.registry;
+		this.#scheduler = input.scheduler;
 		this.#storage = input.storage;
 		this.#trash = input.trash;
 	}
 
 	initialize(): Promise<void> {
-		this.assertOpen();
 		this.#initializePromise ??= this.#storage.initialize();
 		return this.#initializePromise;
 	}
 
+	admit(): RuntimeAdmissionLease {
+		try {
+			return this.#admission.admit();
+		} catch {
+			throw new InstanceRuntimeClosedError();
+		}
+	}
+
 	assertOpen(): void {
-		if (this.#closePromise) throw new InstanceRuntimeClosedError();
+		try {
+			this.#admission.assertOpen();
+		} catch {
+			throw new InstanceRuntimeClosedError();
+		}
 	}
 
 	startPersisted(): Promise<void> {
 		this.assertOpen();
 		if (this.#startPromise) return this.#startPromise;
-		this.#startPromise = this.#startPersisted().catch((cause: unknown) => {
-			this.#startPromise = undefined;
-			throw cause;
+		const admission = this.admit();
+		const scope = new MutationScope(this.#monotonicClock, this.#scheduler, {
+			label: "starting persisted instances",
+			signals: [admission.signal],
+			timeoutMs: STARTUP_TIMEOUT_MS,
 		});
+		this.#startPromise = this.#startPersisted(scope)
+			.catch((cause: unknown) => {
+				this.#startPromise = undefined;
+				throw cause;
+			})
+			.finally(() => {
+				scope.dispose();
+				admission.release();
+			});
 		return this.#startPromise;
 	}
 
-	async #startPersisted(): Promise<void> {
-		await this.initialize();
-		const recovery = await this.#storage.recover();
+	async #startPersisted(scope: MutationScope): Promise<void> {
+		await scope.wait(() => this.initialize());
+		const recovery = await scope.wait(() => this.#storage.recover());
 		for (const trashId of recovery.cleanupTrashIds) this.#trash.schedule(trashId);
 		const started: ActiveInstance[] = [];
 		try {
-			for (const stored of await this.#storage.listInstances()) {
+			for (const stored of await scope.wait(() => this.#storage.listInstances())) {
+				scope.checkpoint();
 				if (stored.persistence !== "persistent" || stored.status !== "ready") continue;
 				const instanceId = parseInstanceId(stored.id);
 				if (this.#registry.has(instanceId)) continue;
 				const manifest = this.#manifests.repairInterruptedSeed(stored);
-				if (manifest !== stored) await this.#storage.writeInstance(instanceId, manifest);
-				const active = await this.#factory.start(instanceId, manifest);
+				if (manifest !== stored) {
+					await writeInstanceManifest(this.#storage, instanceId, manifest, scope);
+				}
+				const active = await this.#factory.start(instanceId, manifest, {
+					remainingMs: () => scope.remainingMs(),
+					signal: scope.signal,
+				});
 				started.push(active);
 				const refreshed = this.#manifests.refreshConfiguration(active.manifest);
-				await this.#storage.writeInstance(instanceId, refreshed);
+				await writeInstanceManifest(this.#storage, instanceId, refreshed, scope);
 				active.manifest = refreshed;
 				this.#registry.add(active);
 			}
 		} catch (cause) {
 			const failures: unknown[] = [cause];
 			for (const active of started.reverse()) {
-				await active.lifecycle.stopAll().catch((failure: unknown) => failures.push(failure));
+				active.leases.retire();
+				await active.lifecycle
+					.stopAll(scope.signal)
+					.catch((failure: unknown) => failures.push(failure));
+				const report = await active.generation.close(cause, scope.remainingMs());
+				if (report.failures.length > 0 || report.unfinishedLabels.length > 0) {
+					failures.push(report);
+				}
 				this.#registry.remove(active);
 			}
 			throw new AggregateError(failures, "Could not start persisted instances.");
@@ -87,31 +135,60 @@ export class PersistedInstanceRuntime {
 
 	stopAll(timeoutMs: number): Promise<void> {
 		if (this.#closePromise) return this.#closePromise;
-		this.#closePromise = this.#stopAll(timeoutMs);
+		const scope = new MutationScope(this.#monotonicClock, this.#scheduler, {
+			label: "closing the instance runtime",
+			timeoutMs,
+		});
+		this.#closePromise = this.#stopAll(scope).finally(() => scope.dispose());
 		return this.#closePromise;
 	}
 
-	async #stopAll(timeoutMs: number): Promise<void> {
+	async #stopAll(scope: MutationScope): Promise<void> {
+		const closing = new InstanceRuntimeClosedError();
 		const failures: unknown[] = [];
+		await scope
+			.wait(() => this.#admission.close(closing))
+			.catch((cause: unknown) => failures.push(cause));
 		for (const active of [...this.#registry.all()].reverse()) {
+			let lease: { release(): void } | undefined;
 			try {
-				const lease = await active.leases.acquireExclusive({ timeoutMs });
-				try {
-					active.leases.retire();
-					await active.lifecycle.stopAll();
-				} finally {
-					lease.release();
-				}
-				const report = await active.tasks.close({ graceMs: timeoutMs });
-				if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
+				lease = await active.leases.acquireExclusive({
+					signal: scope.signal,
+					timeoutMs: scope.remainingMs(),
+				});
+				active.leases.retire();
+				await active.lifecycle.stopAll(scope.signal);
 			} catch (cause) {
 				failures.push(cause);
+				active.leases.retire();
+			} finally {
+				lease?.release();
 			}
+			const report = await active.generation.close(closing, scope.remainingMs());
+			if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
 		}
-		const cleanup = await this.#trash.close(timeoutMs);
+		const cleanup = await this.#trash.close(scope.remainingMs());
 		if (cleanup.failures.length > 0 || cleanup.unfinishedLabels.length > 0) failures.push(cleanup);
+		if (scope.signal.aborted) failures.push(scope.signal.reason);
 		if (failures.length > 0) {
 			throw new AggregateError(failures, "Instance runtime shutdown had failures.");
 		}
 	}
+}
+
+async function writeInstanceManifest(
+	storage: InstanceStoragePort,
+	instanceId: import("./identifiers.js").InstanceId,
+	manifest: import("./manifests.js").InstanceManifest,
+	scope: MutationScope,
+): Promise<void> {
+	scope.checkpoint();
+	try {
+		await storage.writeInstance(instanceId, manifest);
+	} catch (cause) {
+		if (!(cause instanceof StorageWriteCommittedError) || cause.operation !== "write_instance") {
+			throw cause;
+		}
+	}
+	scope.checkpoint();
 }

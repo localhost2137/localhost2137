@@ -43,45 +43,85 @@ export class InstanceManager {
 		this.#mutations = new DurableInstanceMutations({
 			factory,
 			manifests,
+			monotonicClock: dependencies.monotonicClock,
 			registry: this.#registry,
+			scheduler: dependencies.scheduler,
 			storage: dependencies.storage,
 			trash,
 		});
 		this.#runtime = new PersistedInstanceRuntime({
 			factory,
 			manifests,
+			monotonicClock: dependencies.monotonicClock,
 			registry: this.#registry,
+			scheduler: dependencies.scheduler,
 			storage: dependencies.storage,
 			trash,
 		});
 	}
 
 	async create(
-		options: Readonly<{ id: string; persistence: "ephemeral" | "persistent"; seed: boolean }>,
+		options: Readonly<{
+			id: string;
+			persistence: "ephemeral" | "persistent";
+			seed: boolean;
+			signal?: AbortSignal;
+			timeoutMs?: number;
+		}>,
 	): Promise<InstanceSummary> {
 		const instanceId = parseInstanceId(options.id);
-		await this.#runtime.initialize();
-		return this.#mutations.create(instanceId, options);
+		const admission = this.#runtime.admit();
+		try {
+			await this.#runtime.initialize();
+			return await this.#mutations.create(instanceId, {
+				...options,
+				runtimeSignal: admission.signal,
+			});
+		} finally {
+			admission.release();
+		}
 	}
 
 	async list(): Promise<readonly InstanceSummary[]> {
+		this.#runtime.assertOpen();
 		return Object.freeze(await Promise.all(this.#registry.all().map(summarizeInstance)));
 	}
 
 	async get(id: string): Promise<InstanceSummary> {
+		this.#runtime.assertOpen();
 		return await summarizeInstance(this.#registry.get(parseInstanceId(id)));
 	}
 
 	logs(id: string): StructuredLogSnapshot {
+		this.#runtime.assertOpen();
 		return instanceLogs(this.#registry.get(parseInstanceId(id)));
 	}
 
 	async acquireShared(id: string, signal?: AbortSignal): Promise<InstanceLease> {
-		this.#runtime.assertOpen();
-		return await this.#registry.get(parseInstanceId(id)).leases.acquireShared(signal);
+		const admission = this.#runtime.admit();
+		try {
+			const lease = await this.#registry
+				.get(parseInstanceId(id))
+				.leases.acquireShared(
+					signal ? AbortSignal.any([signal, admission.signal]) : admission.signal,
+				);
+			let released = false;
+			return Object.freeze({
+				release: () => {
+					if (released) return;
+					released = true;
+					lease.release();
+					admission.release();
+				},
+			});
+		} catch (cause) {
+			admission.release();
+			throw cause;
+		}
 	}
 
 	service(id: string, key: string): AnyServiceLifecycle {
+		this.#runtime.assertOpen();
 		const instanceId = parseInstanceId(id);
 		const serviceKey = parseServiceKey(key);
 		const active = this.#registry.get(instanceId);
@@ -91,27 +131,42 @@ export class InstanceManager {
 	}
 
 	async seed(id: string, options: LifecycleMutationOptions): Promise<void> {
-		this.#runtime.assertOpen();
-		const active = this.#registry.get(parseInstanceId(id));
-		const lease = await active.leases.acquireExclusive(options);
+		const admission = this.#runtime.admit();
 		try {
-			await active.lifecycle.seed();
+			await this.#mutations.seed(parseInstanceId(id), {
+				...options,
+				runtimeSignal: admission.signal,
+			});
 		} finally {
-			lease.release();
+			admission.release();
 		}
 	}
 
 	async destroy(id: string, options: LifecycleMutationOptions): Promise<void> {
-		this.#runtime.assertOpen();
-		await this.#mutations.destroy(parseInstanceId(id), options);
+		const admission = this.#runtime.admit();
+		try {
+			await this.#mutations.destroy(parseInstanceId(id), {
+				...options,
+				runtimeSignal: admission.signal,
+			});
+		} finally {
+			admission.release();
+		}
 	}
 
 	async reset(
 		id: string,
 		options: LifecycleMutationOptions & Readonly<{ seed: boolean }>,
 	): Promise<InstanceSummary> {
-		this.#runtime.assertOpen();
-		return await this.#mutations.reset(parseInstanceId(id), options);
+		const admission = this.#runtime.admit();
+		try {
+			return await this.#mutations.reset(parseInstanceId(id), {
+				...options,
+				runtimeSignal: admission.signal,
+			});
+		} finally {
+			admission.release();
+		}
 	}
 
 	startPersisted(): Promise<void> {
@@ -128,4 +183,8 @@ export {
 	InstanceAlreadyExistsError,
 	InstanceNotFoundError,
 } from "./active-instance-registry.js";
-export { InstanceCreationError, InstanceResetError } from "./durable-instance-mutations.js";
+export {
+	InstanceCreationError,
+	InstanceMutationCommittedError,
+	InstanceResetError,
+} from "./durable-instance-mutations.js";

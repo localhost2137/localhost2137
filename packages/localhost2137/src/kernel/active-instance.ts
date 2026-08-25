@@ -1,12 +1,22 @@
 import { type InstanceId, parseServiceKey } from "./identifiers.js";
+import { ActiveInstanceGeneration } from "./active-instance-generation.js";
 import { ReadonlyInstanceClock } from "./instance-clock.js";
 import { InstanceLeaseCoordinator, type MonotonicClock } from "./instance-leases.js";
 import { InstanceLifecycle, type ScenarioSeedPort } from "./instance-lifecycle.js";
-import type { InstanceStoragePort } from "./instance-storage.js";
+import {
+	type InstanceStoragePort,
+	StorageWriteCommittedError,
+	type StorageWriteOperation,
+} from "./instance-storage.js";
 import type { InstanceServiceTemplate, InstanceTemplate } from "./instance-template.js";
 import type { LifecycleConfigData } from "./lifecycle-context.js";
 import type { InstanceLifecycleStatus, ServiceLifecycleStatus } from "./lifecycle-state.js";
-import type { InstanceManifest, InstanceSeedState, ServiceManifest } from "./manifests.js";
+import type {
+	InstanceManifest,
+	InstanceSeedState,
+	ServiceManifest,
+	StorageTransitionManifest,
+} from "./manifests.js";
 import { StructuredPluginLogger } from "./plugin-log-adapter.js";
 import type { RuntimeTime } from "./runtime-time.js";
 import { type AnyServiceLifecycle, ServiceLifecycle } from "./service-lifecycle.js";
@@ -20,11 +30,13 @@ import { InstanceTaskTracker, type TaskScheduler } from "./task-tracker.js";
 
 export interface ActiveInstance {
 	readonly clock: ReadonlyInstanceClock;
+	readonly generation: ActiveInstanceGeneration;
 	readonly id: InstanceId;
 	readonly leases: InstanceLeaseCoordinator;
 	readonly lifecycle: InstanceLifecycle;
 	readonly logs: StructuredLogRing;
 	manifest: InstanceManifest;
+	pendingResetTransition?: StorageTransitionManifest;
 	readonly services: readonly AnyServiceLifecycle[];
 	readonly tasks: InstanceTaskTracker;
 }
@@ -58,12 +70,18 @@ export class ActiveInstanceFactory {
 		this.#dependencies = dependencies;
 	}
 
-	async start(instanceId: InstanceId, manifest: InstanceManifest): Promise<ActiveInstance> {
+	async start(
+		instanceId: InstanceId,
+		manifest: InstanceManifest,
+		options: Readonly<{ remainingMs: () => number; signal: AbortSignal }>,
+	): Promise<ActiveInstance> {
 		const tasks = new InstanceTaskTracker(this.#dependencies.scheduler);
+		const generation = new ActiveInstanceGeneration(tasks);
+		const signal = AbortSignal.any([generation.signal, options.signal]);
 		const clock = new ReadonlyInstanceClock(manifest.clock, this.#dependencies.time);
 		const logs = new StructuredLogRing(this.#dependencies.logLimits);
 		const services = this.#template.services.map((template) =>
-			this.#service(instanceId, template, clock, tasks, logs),
+			this.#service(instanceId, template, clock, tasks, logs, generation.signal),
 		);
 		const holder = { manifest };
 		const scenarioSeed = this.#dependencies.scenarioSeed?.(instanceId.value);
@@ -74,15 +92,23 @@ export class ActiveInstanceFactory {
 			seedStateStore: {
 				write: async (seed) => {
 					const next = { ...holder.manifest, seed };
-					await this.#dependencies.storage.writeInstance(instanceId, next);
+					try {
+						await this.#dependencies.storage.writeInstance(instanceId, next);
+					} catch (cause) {
+						if (!isCommittedStorageWrite(cause, "write_instance")) throw cause;
+						holder.manifest = next;
+						return Object.freeze({ committedWarning: cause });
+					}
 					holder.manifest = next;
+					return undefined;
 				},
 			},
 			services,
-			signal: new AbortController().signal,
+			signal: generation.signal,
 		});
 		const active: ActiveInstance = {
 			clock,
+			generation,
 			id: instanceId,
 			leases: new InstanceLeaseCoordinator(
 				tasks,
@@ -100,9 +126,28 @@ export class ActiveInstanceFactory {
 			services,
 			tasks,
 		};
-		await reconcileServices(services, this.#reconciliationStore(instanceId));
-		await lifecycle.start();
-		return active;
+		try {
+			await reconcileServices(services, this.#reconciliationStore(instanceId), signal);
+			await lifecycle.start(signal);
+			await tasks.idle({ signal, timeoutMs: options.remainingMs() });
+			return active;
+		} catch (cause) {
+			const cleanupFailures: unknown[] = [];
+			if (lifecycle.status() === "running" || lifecycle.status() === "seed_failed") {
+				await lifecycle.stopAll(signal).catch((failure: unknown) => cleanupFailures.push(failure));
+			}
+			const report = await generation.close(cause, options.remainingMs());
+			if (report.failures.length > 0 || report.unfinishedLabels.length > 0) {
+				cleanupFailures.push(report);
+			}
+			if (cleanupFailures.length > 0) {
+				throw new AggregateError(
+					[cause, ...cleanupFailures],
+					`Starting instance "${instanceId.value}" failed during cleanup.`,
+				);
+			}
+			throw cause;
+		}
 	}
 
 	#service(
@@ -111,6 +156,7 @@ export class ActiveInstanceFactory {
 		clock: ReadonlyInstanceClock,
 		tasks: InstanceTaskTracker,
 		logs: StructuredLogRing,
+		generationSignal: AbortSignal,
 	): AnyServiceLifecycle {
 		const serviceKey = parseServiceKey(template.serviceKey);
 		return new ServiceLifecycle<unknown, LifecycleConfigData, unknown>({
@@ -128,7 +174,7 @@ export class ActiveInstanceFactory {
 					serviceKey: serviceKey.value,
 				}),
 				serviceKey: serviceKey.value,
-				signal: new AbortController().signal,
+				signal: generationSignal,
 				storage: this.#dependencies.storage.pluginStorage(instanceId, serviceKey),
 				tasks,
 			},
@@ -163,6 +209,10 @@ export class ActiveInstanceFactory {
 			},
 		};
 	}
+}
+
+function isCommittedStorageWrite(cause: unknown, operation: StorageWriteOperation): boolean {
+	return cause instanceof StorageWriteCommittedError && cause.operation === operation;
 }
 
 export async function summarizeInstance(active: ActiveInstance): Promise<InstanceSummary> {

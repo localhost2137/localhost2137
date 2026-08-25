@@ -16,10 +16,6 @@ export class InstanceTrashCleanup {
 			.catch(() => undefined);
 	}
 
-	retainFailure(label: string, cause: unknown): void {
-		this.#tasks.track(label, Promise.reject(cause)).catch(() => undefined);
-	}
-
 	close(graceMs: number): Promise<TaskCloseReport> {
 		return this.#tasks.close({ graceMs });
 	}
