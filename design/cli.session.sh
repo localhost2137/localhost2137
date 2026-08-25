@@ -131,4 +131,4 @@ $ localhost env --format dotenv >> .env.local
 
 # …or skip the file entirely: run your app with connection env injected
 # (env vars only + signal forwarding — not a process supervisor):
-$ localhost run -- npm run dev
+$ localhost run -- pnpm run dev

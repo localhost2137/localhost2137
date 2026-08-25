@@ -43,5 +43,36 @@ jobs:
       - name: Validate repository
         run: pnpm check
 
+      - name: Test coverage
+        if: runner.os == 'Linux'
+        run: pnpm test:coverage
+
       - name: Build packages
         run: pnpm build
+
+  package-smoke:
+    name: Linux package smoke
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build, pack, and consume packages
+        run: pnpm package:smoke
