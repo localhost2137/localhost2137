@@ -10,7 +10,7 @@ export interface SeedStateStore {
 	write(state: InstanceSeedState): Promise<SeedStateWriteResult>;
 }
 
-export type SeedStateWriteResult = Readonly<{ committedWarning: unknown }> | undefined | void;
+type SeedStateWriteResult = Readonly<{ committedWarning: unknown }> | undefined;
 
 export interface InstanceSeedResult {
 	readonly committedWarnings: readonly unknown[];

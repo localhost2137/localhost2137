@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	MutationAbortedError,
+	type MutationAbortedError,
 	MutationScope,
 	MutationTimeoutError,
 } from "../../src/kernel/mutation-scope.js";
