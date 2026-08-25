@@ -1,5 +1,11 @@
 import { Hono } from "hono";
-import { defineConfig, defineOperation, definePlugin, type PluginEnv } from "localhost2137";
+import {
+	defineConfig,
+	defineOperation,
+	definePlugin,
+	LocalhostError,
+	type PluginEnv,
+} from "localhost2137";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -38,11 +44,30 @@ describe("authoring descriptors", () => {
 	it("keeps the public root limited to authoring APIs", async () => {
 		const publicRoot = await import("localhost2137");
 		expect(Object.keys(publicRoot).sort()).toEqual([
+			"LocalhostError",
 			"defineConfig",
 			"defineOperation",
 			"definePlugin",
 		]);
 		expect("loadResolvedConfig" in publicRoot).toBe(false);
+	});
+
+	it("keeps expected plugin error causes internal", () => {
+		const internal = new Error("private detail");
+		const error = new LocalhostError("USER_EXISTS", "That user already exists.", {
+			cause: internal,
+			details: { field: "name" },
+			status: 409,
+		});
+
+		expect(error).toMatchObject({
+			code: "USER_EXISTS",
+			details: { field: "name" },
+			message: "That user already exists.",
+			status: 409,
+		});
+		expect(error.cause).toBe(internal);
+		expect(Object.keys(error)).not.toContain("cause");
 	});
 
 	it("creates immutable descriptors without freezing Hono or Zod internals", () => {

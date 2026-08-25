@@ -1,16 +1,22 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import {
 	defineConfig,
 	defineOperation,
 	definePlugin,
 	type InstanceClockStatus,
 	type InstanceHandle,
+	LocalhostError,
 	type PluginEnv,
 	type ReservedOperationKey,
 	type ReservedServiceKey,
 	type ScenarioFacade,
 } from "localhost2137";
+import { z } from "zod";
+
+const expectedPluginError = new LocalhostError("USER_EXISTS", "That user already exists.", {
+	status: 409,
+});
+type _ExpectedPluginErrorCode = Expect<Equal<typeof expectedPluginError.code, "USER_EXISTS">>;
 
 type Equal<Left, Right> =
 	(<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
