@@ -30,6 +30,9 @@ export function createPublicGateway(
 	const app = new Hono();
 	app.all("/:instance/:service", (context) => gateway.dispatch(context));
 	app.all("/:instance/:service/*", (context) => gateway.dispatch(context));
+	app.notFound(() =>
+		publicError(404, "route_not_found", "Emulated instance or service not found."),
+	);
 	return app;
 }
 
@@ -58,6 +61,9 @@ class PublicGateway {
 	}
 
 	async dispatch(context: Context): Promise<Response> {
+		if (!isUnambiguousPublicPath(new URL(context.req.raw.url).pathname)) {
+			return publicError(400, "invalid_route", "Invalid instance or service path.");
+		}
 		const instanceId = context.req.param("instance");
 		const serviceKey = context.req.param("service");
 		if (!instanceId || !serviceKey) {
@@ -73,64 +79,99 @@ class PublicGateway {
 			return publicResolutionError(cause);
 		}
 
-		const correlationId = this.#correlationId();
-		const startedAt = this.#monotonicClock.nowMilliseconds();
-		const requestAttributes = Object.freeze({ method: context.req.method, path: context.req.path });
-		appendRequestLog(lease, {
-			attributes: requestAttributes,
-			correlationId,
-			instanceId,
-			kind: "request",
-			message: "Public API request started.",
-			serviceKey,
-			status: "started",
-			virtualTime: lease.context.clock.now().toISOString(),
-			wallTime: this.#time.nowTimestamp(),
-		});
-
+		let released = false;
+		let responseOwnsLease = false;
+		let correlationId: string | undefined;
+		const releaseOnce = () => {
+			if (released) return;
+			released = true;
+			lease.release();
+		};
 		try {
+			const requestCorrelationId = this.#correlationId();
+			correlationId = requestCorrelationId;
+			const startedAt = this.#monotonicClock.nowMilliseconds();
+			const requestAttributes = Object.freeze({
+				method: context.req.method,
+				path: context.req.path,
+			});
+			tryAppendRequestLog(lease, {
+				attributes: requestAttributes,
+				correlationId: requestCorrelationId,
+				instanceId,
+				kind: "request",
+				message: "Public API request started.",
+				serviceKey,
+				status: "started",
+				virtualTime: lease.context.clock.now().toISOString(),
+				wallTime: this.#time.nowTimestamp(),
+			});
 			const request = rewritePublicRequest(context.req.raw);
 			const wrapper = this.#wrappers.get(lease.generation, serviceKey, api);
 			const response = await wrapper.fetch(request, {
 				localhostContext: lease.context,
 			});
-			return responseWithFinalizer(response, () => {
-				appendRequestLog(lease, {
-					attributes: Object.freeze({
-						...requestAttributes,
-						...(responseSize(response) === undefined
-							? {}
-							: { responseBytes: responseSize(response) }),
-						responseStatus: response.status,
-					}),
-					correlationId,
-					durationMs: elapsed(this.#monotonicClock.nowMilliseconds(), startedAt),
-					instanceId,
-					kind: "request",
-					message: "Public API request completed.",
-					serviceKey,
-					status: response.status >= 500 ? "failed" : "succeeded",
-					virtualTime: lease.context.clock.now().toISOString(),
-					wallTime: this.#time.nowTimestamp(),
-				});
-				lease.release();
+			const ownedResponse = responseWithFinalizer(response, () => {
+				try {
+					tryAppendRequestLog(lease, {
+						attributes: Object.freeze({
+							...requestAttributes,
+							...(responseSize(response) === undefined
+								? {}
+								: { responseBytes: responseSize(response) }),
+							responseStatus: response.status,
+						}),
+							correlationId: requestCorrelationId,
+						durationMs: elapsed(this.#monotonicClock.nowMilliseconds(), startedAt),
+						instanceId,
+						kind: "request",
+						message: "Public API request completed.",
+						serviceKey,
+						status: response.status >= 500 ? "failed" : "succeeded",
+						virtualTime: lease.context.clock.now().toISOString(),
+						wallTime: this.#time.nowTimestamp(),
+					});
+				} finally {
+					releaseOnce();
+				}
 			});
+			responseOwnsLease = true;
+			return ownedResponse;
 		} catch (cause) {
-			appendRequestLog(lease, {
-				attributes: Object.freeze({ ...requestAttributes, error: errorName(cause) }),
-				correlationId,
-				durationMs: elapsed(this.#monotonicClock.nowMilliseconds(), startedAt),
+			tryAppendRequestLog(lease, {
+				attributes: Object.freeze({
+					error: errorName(cause),
+					method: context.req.method,
+					path: context.req.path,
+				}),
+				correlationId: correlationId ?? safeCorrelationId(this.#correlationId),
 				instanceId,
 				kind: "request",
 				message: "Public API request failed before a response was produced.",
 				serviceKey,
 				status: "failed",
-				virtualTime: lease.context.clock.now().toISOString(),
-				wallTime: this.#time.nowTimestamp(),
+				wallTime: safeTimestamp(this.#time),
 			});
-			lease.release();
 			return publicError(500, "plugin_request_failed", "Emulated service request failed.");
+		} finally {
+			if (!responseOwnsLease) releaseOnce();
 		}
+	}
+}
+
+function safeCorrelationId(correlationId: () => string): string {
+	try {
+		return correlationId();
+	} catch {
+		return "public-request-failure";
+	}
+}
+
+function safeTimestamp(time: RuntimeTime): string {
+	try {
+		return time.nowTimestamp();
+	} catch {
+		return new Date(0).toISOString();
 	}
 }
 
@@ -156,8 +197,33 @@ function publicError(status: number, code: string, message: string): Response {
 	return Response.json({ error: code, message }, { status });
 }
 
-function appendRequestLog(lease: RunningServiceLease, input: StructuredLogInput): void {
-	lease.logs.append(input);
+function tryAppendRequestLog(lease: RunningServiceLease, input: StructuredLogInput): void {
+	try {
+		lease.logs.append(input);
+	} catch {
+		// Observability is best-effort at the adapter boundary. A malformed clock or
+		// failing log sink must never retain the generation lease.
+	}
+}
+
+function isUnambiguousPublicPath(pathname: string): boolean {
+	for (const rawSegment of pathname.split("/")) {
+		let decoded = rawSegment;
+		for (let pass = 0; pass < 4; pass += 1) {
+			let next: string;
+			try {
+				next = decodeURIComponent(decoded);
+			} catch {
+				return false;
+			}
+			if (next === decoded) break;
+			decoded = next;
+		}
+		if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) {
+			return false;
+		}
+	}
+	return true;
 }
 
 function responseSize(response: Response): number | undefined {

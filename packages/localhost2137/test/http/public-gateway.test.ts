@@ -5,8 +5,10 @@ import type { RuntimePluginApi } from "../../src/http/plugin-api-registry.js";
 import { createPublicGateway } from "../../src/http/public-gateway.js";
 import { InstanceNotFoundError } from "../../src/kernel/active-instance-registry.js";
 import { InvalidIdentifierError } from "../../src/kernel/identifiers.js";
+import { InstanceLeaseCoordinator } from "../../src/kernel/instance-leases.js";
 import type { RunningServiceLease } from "../../src/kernel/instance-manager.js";
 import { StructuredLogRing } from "../../src/kernel/structured-log.js";
+import type { TaskScheduler } from "../../src/kernel/task-tracker.js";
 
 interface FixtureState {
 	readonly instance: string;
@@ -97,12 +99,33 @@ describe("public Hono gateway", () => {
 		expect(fixture.releases).toEqual(["dev"]);
 	});
 
+	it("releases the generation lease when the plugin response stream fails", async () => {
+		const failure = new Error("plugin stream failed");
+		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
+		api.get("/stream", (context) =>
+			context.body(
+				new ReadableStream({
+					start(controller) {
+						controller.error(failure);
+					},
+				}),
+			),
+		);
+		const fixture = gatewayFixture(api);
+
+		const response = await fixture.app.request("/dev/fixture/stream");
+		await expect(response.text()).rejects.toBe(failure);
+
+		expect(fixture.releases).toEqual(["dev"]);
+	});
+
 	it("keeps runtime routing failures distinct from control envelopes", async () => {
 		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
 		const fixture = gatewayFixture(api);
 
 		const missingService = await fixture.app.request("/dev/missing/path");
 		const invalidInstance = await fixture.app.request("/INVALID/fixture/path");
+		const missingInstance = await fixture.app.request("/missing/fixture/path");
 
 		expect(missingService.status).toBe(404);
 		expect(await missingService.json()).toEqual({
@@ -114,6 +137,120 @@ describe("public Hono gateway", () => {
 			error: "invalid_route",
 			message: "Invalid instance or service path.",
 		});
+		expect(missingInstance.status).toBe(404);
+		expect(await missingInstance.json()).toMatchObject({ error: "route_not_found" });
+	});
+
+	it("rejects ambiguous encoded separators and keeps normalized traversal inside the plugin", async () => {
+		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
+		api.get("/*", (context) => context.json({ path: context.req.path }));
+		const fixture = gatewayFixture(api);
+
+		const encodedSeparator = await fixture.app.request("/dev/fixture/a%252Fb");
+		const encodedTraversal = await fixture.app.request("/dev/fixture/%252e%252e/admin");
+		const normalizedTraversal = await fixture.app.request("/dev/fixture/a/../inside");
+
+		expect([encodedSeparator.status, encodedTraversal.status]).toEqual([400, 400]);
+		expect(await encodedSeparator.json()).toMatchObject({ error: "invalid_route" });
+		expect(await encodedTraversal.json()).toMatchObject({ error: "invalid_route" });
+		expect(await normalizedTraversal.json()).toEqual({ path: "/inside" });
+	});
+
+	it("releases exactly once when plugin dispatch fails before producing a response", async () => {
+		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
+		Object.defineProperty(api, "routes", {
+			configurable: true,
+			get: () => {
+				throw new Error("broken plugin route registry");
+			},
+		});
+		const fixture = gatewayFixture(api);
+
+		const response = await fixture.app.request("/dev/fixture/path");
+
+		expect(response.status).toBe(500);
+		expect(await response.json()).toMatchObject({ error: "plugin_request_failed" });
+		expect(fixture.releases).toEqual(["dev"]);
+	});
+
+	it("lets an exclusive reset proceed only after an open response is cancelled", async () => {
+		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
+		api.get("/stream", (context) => context.body(new ReadableStream({ start: () => undefined })));
+		const scheduler: TaskScheduler = {
+			schedule: (delayMs, callback) => {
+				const timer = setTimeout(callback, delayMs);
+				return { cancel: () => clearTimeout(timer) };
+			},
+		};
+		const leases = new InstanceLeaseCoordinator({ idle: async () => undefined }, scheduler, {
+			nowMilliseconds: () => performance.now(),
+		});
+		const logs = new StructuredLogRing({ maxBytes: 100_000, maxEntries: 100 });
+		const app = createPublicGateway({
+			apis: { resolve: () => api },
+			correlationId: () => "stream-correlation",
+			monotonicClock: { nowMilliseconds: () => performance.now() },
+			runtime: {
+				acquireService: async (_instance, service, signal) => {
+					const lease = await leases.acquireShared(signal);
+					return {
+						context: runningContext("dev", service, signal),
+						generation: {},
+						logs,
+						release: lease.release,
+					};
+				},
+			},
+			time: {
+				nowMilliseconds: () => performance.now(),
+				nowTimestamp: () => "2026-08-25T12:00:00.000Z",
+			},
+		});
+		const response = await app.request("/dev/fixture/stream");
+		let resetAcquired = false;
+		const reset = leases.acquireExclusive({ timeoutMs: 1_000 }).then((lease) => {
+			resetAcquired = true;
+			return lease;
+		});
+		await Promise.resolve();
+		expect(resetAcquired).toBe(false);
+
+		await response.body?.cancel("reset race completed");
+		const resetLease = await reset;
+		expect(resetAcquired).toBe(true);
+		resetLease.release();
+	});
+
+	it("treats request logging as best effort without leaking a lease", async () => {
+		const api = new Hono<PluginEnv<FixtureState, { name: string }>>();
+		api.get("/ok", (context) => context.body(null, 204));
+		const release = vi.fn();
+		const app = createPublicGateway({
+			apis: { resolve: () => api },
+			correlationId: () => "log-correlation",
+			monotonicClock: { nowMilliseconds: () => 1 },
+			runtime: {
+				acquireService: async (_instance, service, signal) => ({
+					context: runningContext("dev", service, signal),
+					generation: {},
+					logs: {
+						append: () => {
+							throw new Error("log sink failed");
+						},
+					} as unknown as StructuredLogRing,
+					release,
+				}),
+			},
+			time: {
+				nowMilliseconds: () => 1,
+				nowTimestamp: () => "2026-08-25T12:00:00.000Z",
+			},
+		});
+
+		const response = await app.request("/dev/fixture/ok");
+
+		expect(response.status).toBe(204);
+		expect(release).toHaveBeenCalledOnce();
 	});
 });
 
