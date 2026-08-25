@@ -214,6 +214,30 @@ describe("operation schema metadata", () => {
 		expect(Reflect.get(reusedProperties, "__proto__")).toEqual({ type: "boolean" });
 	});
 
+	it("restores a prototype-shaped field in a referenced definition", () => {
+		const leaf = z.object({ ["__proto__"]: z.string() }).meta({ id: "Leaf" });
+		const metadata = createOperationMetadata(
+			operation({
+				description: "Referenced prototype-shaped fixture",
+				input: z.object({ leaf }),
+				output: z.object({ ok: z.boolean() }),
+				run: () => ({ ok: true }),
+			}),
+		);
+		const leafDefinition = readProperty(readProperty(metadata.input, "$defs"), "Leaf");
+		const properties = readProperty(leafDefinition, "properties");
+
+		expect(isObject(properties)).toBe(true);
+		if (!isObject(properties)) return;
+		expect(Object.hasOwn(properties, "__proto__")).toBe(true);
+		expect(Reflect.get(properties, "__proto__")).toEqual({ type: "string" });
+		expect(readProperty(leafDefinition, "required")).toEqual(["__proto__"]);
+		expect(readProperty(readProperty(metadata.input, "properties"), "leaf")).toEqual({
+			$ref: "#/$defs/Leaf",
+		});
+		expect(metadata.cli.kind).toBe("json");
+	});
+
 	it("reports supported-API conversion failures with the schema role", () => {
 		expect(() => createSchemaMetadata(z.date(), "config")).toThrowError(
 			expect.objectContaining<Partial<SchemaIntrospectionError>>({

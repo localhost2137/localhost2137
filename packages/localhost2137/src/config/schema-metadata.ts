@@ -123,16 +123,18 @@ function reconcileGeneratedObjectProperties(
 	generatedSchemasByPath: Map<string, GeneratedSchemaAtPath>,
 	propertiesByObjectPath: ReadonlyMap<string, ReadonlyMap<string, object>>,
 ): void {
+	const propertiesByGeneratedSchema = new WeakMap<object, ReadonlyMap<string, object>>();
+	for (const [parentPath, properties] of propertiesByObjectPath) {
+		const callbackSchema = generatedSchemasByPath.get(parentPath)?.schema;
+		if (callbackSchema) propertiesByGeneratedSchema.set(callbackSchema, properties);
+	}
+
 	const generatedRoot = generatedSchemasByPath.get("[]")?.schema;
 	if (generatedRoot) {
 		indexGeneratedSchemaGraph(generatedRoot, [], generatedSchemasByPath, new WeakSet());
 	}
-
-	const propertiesByGeneratedSchema = new WeakMap<object, ReadonlyMap<string, object>>();
-	for (const [parentPath, properties] of propertiesByObjectPath) {
-		const generatedSchema = generatedSchemasByPath.get(parentPath)?.schema;
-		if (generatedSchema) propertiesByGeneratedSchema.set(generatedSchema, properties);
-	}
+	const finalSchemasByPath = new Map<string, GeneratedSchemaAtPath>();
+	indexGeneratedSchemaGraph(finalSchema, [], finalSchemasByPath, new WeakSet());
 
 	const generatedSchemas = [...generatedSchemasByPath.values()].sort(
 		(left, right) => left.path.length - right.path.length,
@@ -140,7 +142,8 @@ function reconcileGeneratedObjectProperties(
 	for (const { path, schema } of generatedSchemas) {
 		const properties = propertiesByGeneratedSchema.get(schema);
 		if (!properties) continue;
-		const finalParent = valueAtPath(finalSchema, path);
+		const finalAtPath = finalSchemasByPath.get(JSON.stringify(path))?.schema;
+		const finalParent = resolveLocalSchemaReference(finalAtPath, finalSchemasByPath);
 		if (!isUnknownRecord(finalParent)) continue;
 		const finalProperties = Reflect.get(finalParent, "properties");
 		if (!isUnknownRecord(finalProperties)) continue;
@@ -163,10 +166,13 @@ function indexGeneratedSchemaGraph(
 	ancestors: WeakSet<object>,
 ): void {
 	if (typeof value !== "object" || value === null) return;
-	generatedSchemasByPath.set(JSON.stringify(path), {
-		path: Object.freeze([...path]),
-		schema: value,
-	});
+	const serializedPath = JSON.stringify(path);
+	if (!generatedSchemasByPath.has(serializedPath)) {
+		generatedSchemasByPath.set(serializedPath, {
+			path: Object.freeze([...path]),
+			schema: value,
+		});
+	}
 	if (ancestors.has(value)) return;
 	ancestors.add(value);
 	if (Array.isArray(value)) {
@@ -181,13 +187,37 @@ function indexGeneratedSchemaGraph(
 	ancestors.delete(value);
 }
 
-function valueAtPath(value: unknown, path: readonly (number | string)[]): unknown {
+function resolveLocalSchemaReference(
+	value: unknown,
+	finalSchemasByPath: ReadonlyMap<string, GeneratedSchemaAtPath>,
+): unknown {
 	let current = value;
-	for (const segment of path) {
-		if (typeof current !== "object" || current === null) return undefined;
-		current = Reflect.get(current, segment);
+	const visited = new WeakSet<object>();
+	while (isUnknownRecord(current) && !visited.has(current)) {
+		visited.add(current);
+		const reference = Reflect.get(current, "$ref");
+		if (typeof reference !== "string") return current;
+		const targetPath = localJsonPointerPath(reference);
+		if (!targetPath) return current;
+		const target = finalSchemasByPath.get(JSON.stringify(targetPath))?.schema;
+		if (!target) return current;
+		current = target;
 	}
 	return current;
+}
+
+function localJsonPointerPath(reference: string): readonly string[] | undefined {
+	if (reference === "#") return [];
+	if (!reference.startsWith("#/")) return undefined;
+	try {
+		const pointer = decodeURIComponent(reference.slice(1));
+		return pointer
+			.slice(1)
+			.split("/")
+			.map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
+	} catch {
+		return undefined;
+	}
 }
 
 function compileCliInputSchema(schema: JsonObject): CliInputSchema {
