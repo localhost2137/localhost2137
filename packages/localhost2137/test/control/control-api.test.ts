@@ -201,6 +201,41 @@ describe("control API policy", () => {
 		expect(body).not.toContain(TOKEN);
 	});
 
+	it("redacts expected error messages and details at the control boundary", async () => {
+		const operations = {
+			execute: vi.fn(async () => {
+				throw new LocalhostError(
+					"EXPECTED_FAILURE",
+					"Expected failure token=xoxb-private-message.",
+					{
+						details: { nested: { signingSecret: "private-detail", visible: true } },
+						status: 409,
+					},
+				);
+			}),
+		};
+		const fixture = controlFixture({ operations });
+
+		const response = await fixture.app.request("/instances/dev/services/fixture/operations/fail", {
+			body: "{}",
+			headers: jsonHeaders(),
+			method: "POST",
+		});
+		const body = await response.text();
+
+		expect(response.status).toBe(409);
+		expect(JSON.parse(body)).toEqual({
+			error: {
+				code: "EXPECTED_FAILURE",
+				correlationId: "control-1",
+				details: { nested: { signingSecret: "[REDACTED]", visible: true } },
+				message: "Expected failure [REDACTED]",
+			},
+		});
+		expect(body).not.toContain("xoxb-private-message");
+		expect(body).not.toContain("private-detail");
+	});
+
 	it("uses the adapter correlation for operation failures and their logs", async () => {
 		const bindOperation = defineOperation<"fixture", object, object>();
 		const operations = {

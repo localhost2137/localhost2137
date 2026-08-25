@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { RunningPluginContext } from "../../src/authoring/context.js";
-import type { LocalhostError } from "../../src/authoring/localhost-error.js";
+import { LocalhostError } from "../../src/authoring/localhost-error.js";
 import { defineOperation } from "../../src/authoring/operation.js";
 import {
 	OperationExecutor,
@@ -165,6 +165,46 @@ describe("OperationRunner", () => {
 				serviceKey: "fixture",
 			}),
 		).rejects.toMatchObject({ code: "OPERATION_OUTPUT_INVALID", status: 500 });
+	});
+
+	it("fails closed for a forged expected error from untyped plugin code", async () => {
+		const forged = Object.create(LocalhostError.prototype);
+		Object.assign(forged, {
+			code: "invalid-code",
+			message: "token=xoxb-forged-value",
+			retryable: "yes",
+			status: 200,
+		});
+		const operation = defineFixtureOperation({
+			description: "forged error",
+			input: z.object({}),
+			output: z.null(),
+			run: () => {
+				throw forged;
+			},
+		});
+		const { logs, runner } = fixtureRunner();
+
+		const failure = await runner
+			.run({
+				correlationId: "adapter-correlation",
+				context: fixtureContext(),
+				instanceId: "dev",
+				logs,
+				operation,
+				operationKey: "forged",
+				rawInput: {},
+				serviceKey: "fixture",
+			})
+			.catch((cause: unknown) => cause);
+
+		expect(failure).toMatchObject({
+			code: "PLUGIN_EXECUTION_FAILED",
+			correlationId: "adapter-correlation",
+			message: "The plugin operation failed.",
+			status: 500,
+		});
+		expect(JSON.stringify(failure)).not.toContain("xoxb-forged-value");
 	});
 });
 

@@ -200,7 +200,14 @@ function operationError(
 	correlationId: string,
 	signal: AbortSignal | undefined,
 ): LocalhostError {
-	if (cause instanceof LocalhostError) return withCorrelation(cause, correlationId);
+	if (cause instanceof LocalhostError) {
+		try {
+			return withCorrelation(cause, correlationId);
+		} catch {
+			// An untyped plugin can forge or corrupt a prototype-compatible value.
+			// Treat it as an unknown plugin failure instead of trusting its fields.
+		}
+	}
 	if (signal?.aborted && cause === signal.reason) {
 		return new LocalhostError("REQUEST_ABORTED", "Operation execution was cancelled.", {
 			cause,

@@ -1,6 +1,11 @@
 const DEFAULT_SENSITIVE_KEY =
 	/(?:authorization|cookie|credential|password|secret|signing|token|api[-_]?key)/i;
 const REDACTED = "[REDACTED]";
+const SENSITIVE_TEXT_PATTERNS: readonly RegExp[] = Object.freeze([
+	/\bBearer\s+[A-Za-z0-9._~+/-]{8,}/g,
+	/\b(?:gh[opusr]_[A-Za-z0-9_]+|xox[baprs]-[A-Za-z0-9-]+)\b/g,
+	/\b(?:api[-_ ]?key|authorization|credential|cookie|password|secret|signing[-_ ]?secret|token)\s*[:=]\s*[^\s,;]+/gi,
+]);
 
 export interface RedactionOptions {
 	readonly sensitiveKey?: RegExp;
@@ -8,6 +13,13 @@ export interface RedactionOptions {
 
 export function redact(value: unknown, options: RedactionOptions = {}): unknown {
 	return redactValue(value, options.sensitiveKey ?? DEFAULT_SENSITIVE_KEY, new WeakSet());
+}
+
+export function redactText(value: string): string {
+	return SENSITIVE_TEXT_PATTERNS.reduce(
+		(redacted, pattern) => redacted.replace(pattern, REDACTED),
+		value,
+	);
 }
 
 function redactValue(value: unknown, sensitiveKey: RegExp, ancestors: WeakSet<object>): unknown {

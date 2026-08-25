@@ -16,7 +16,7 @@ import { InvalidLifecycleTransitionError } from "../kernel/lifecycle-state.js";
 import { MutationAbortedError, MutationTimeoutError } from "../kernel/mutation-scope.js";
 import { ownOperationJson } from "../kernel/operation-json.js";
 import { InstanceRuntimeClosedError } from "../kernel/persisted-instance-runtime.js";
-import { redact } from "../kernel/redaction.js";
+import { redact, redactText } from "../kernel/redaction.js";
 import {
 	TaskIdleAbortedError,
 	TaskIdleTimeoutError,
@@ -33,7 +33,18 @@ export interface ControlErrorEnvelope {
 }
 
 export function mapControlError(cause: unknown, correlationId: string): LocalhostError {
-	if (cause instanceof LocalhostError) return safeLocalhostError(cause, correlationId);
+	if (cause instanceof LocalhostError) {
+		try {
+			return safeLocalhostError(cause, correlationId);
+		} catch {
+			return error(
+				"INTERNAL_ERROR",
+				"The runtime could not complete the request.",
+				500,
+				correlationId,
+			);
+		}
+	}
 	if (cause instanceof InvalidIdentifierError) {
 		return error("INVALID_REQUEST", "Invalid instance or service identifier.", 400, correlationId);
 	}
@@ -116,7 +127,7 @@ function safeLocalhostError(cause: LocalhostError, correlationId: string): Local
 	const correlated = withCorrelation(cause, correlationId);
 	const details = safeDetails(correlated.details);
 	const status = validErrorStatus(correlated.status) ? correlated.status : 500;
-	return new LocalhostError(correlated.code, correlated.message, {
+	return new LocalhostError(correlated.code, redactText(correlated.message), {
 		cause: correlated,
 		correlationId,
 		...(details ? { details } : {}),

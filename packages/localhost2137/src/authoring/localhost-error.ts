@@ -27,29 +27,139 @@ export interface LocalhostErrorOptions {
 
 /** A safe, stable expected error that may cross a localhost2137 adapter boundary. */
 export class LocalhostError<Code extends string = string> extends Error {
-	readonly code: Code;
-	readonly correlationId?: string;
-	readonly details?: Readonly<Record<string, unknown>>;
-	readonly retryable: boolean;
-	readonly status: number;
+	declare readonly code: Code;
+	declare readonly correlationId?: string;
+	declare readonly details?: JsonObject;
+	declare readonly retryable: boolean;
+	declare readonly status: number;
 
 	constructor(code: Code, message: string, options: LocalhostErrorOptions) {
-		super(message);
+		const validated = validateErrorInput(code, message, options);
+		super(validated.message);
 		this.name = "LocalhostError";
-		this.code = code;
-		if (options.correlationId !== undefined) this.correlationId = options.correlationId;
-		if (options.details !== undefined) this.details = options.details;
-		this.retryable = options.retryable ?? false;
-		this.status = options.status;
-		if (options.cause !== undefined) {
+		defineReadonly(this, "message", validated.message, false);
+		defineReadonly(this, "code", validated.code as Code, true);
+		if (validated.correlationId !== undefined) {
+			defineReadonly(this, "correlationId", validated.correlationId, true);
+		}
+		if (validated.details !== undefined) defineReadonly(this, "details", validated.details, true);
+		defineReadonly(this, "retryable", validated.retryable, true);
+		defineReadonly(this, "status", validated.status, true);
+		if (validated.hasCause) {
 			Object.defineProperty(this, "cause", {
 				configurable: false,
 				enumerable: false,
-				value: options.cause,
+				value: validated.cause,
 				writable: false,
 			});
 		}
 	}
+}
+
+function defineReadonly(target: object, key: string, value: unknown, enumerable: boolean): void {
+	Object.defineProperty(target, key, {
+		configurable: false,
+		enumerable,
+		value,
+		writable: false,
+	});
+}
+
+interface ValidatedErrorInput {
+	readonly cause: unknown;
+	readonly code: string;
+	readonly correlationId?: string;
+	readonly details?: JsonObject;
+	readonly hasCause: boolean;
+	readonly message: string;
+	readonly retryable: boolean;
+	readonly status: number;
+}
+
+function validateErrorInput(
+	code: unknown,
+	message: unknown,
+	options: unknown,
+): ValidatedErrorInput {
+	if (typeof code !== "string" || !/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/.test(code)) {
+		throw new TypeError("Localhost error codes must use stable UPPER_SNAKE_CASE.");
+	}
+	if (code.length > 64) throw new TypeError("Localhost error codes must not exceed 64 characters.");
+	const safeMessage = safeBoundedText(message, "Localhost error messages", 512);
+	if (!isPlainRecord(options)) throw new TypeError("Localhost error options must be an object.");
+	const status = dataProperty(options, "status", true);
+	if (!Number.isSafeInteger(status) || (status as number) < 400 || (status as number) > 599) {
+		throw new TypeError("Localhost error status must be an integer from 400 to 599.");
+	}
+	const retryable = dataProperty(options, "retryable", false);
+	if (retryable !== undefined && typeof retryable !== "boolean") {
+		throw new TypeError("Localhost error retryable must be a boolean.");
+	}
+	const correlation = dataProperty(options, "correlationId", false);
+	const correlationId =
+		correlation === undefined
+			? undefined
+			: safeBoundedText(correlation, "Localhost error correlation IDs", 128);
+	const rawDetails = dataProperty(options, "details", false);
+	let details: JsonObject | undefined;
+	if (rawDetails !== undefined) {
+		const owned = ownJsonValue(rawDetails);
+		if (!isJsonObject(owned)) throw new TypeError("Localhost error details must be a JSON object.");
+		details = owned;
+	}
+	const causeDescriptor = Object.getOwnPropertyDescriptor(options, "cause");
+	if (causeDescriptor && !("value" in causeDescriptor)) {
+		throw new TypeError("Localhost error cause must be a data property.");
+	}
+	return Object.freeze({
+		cause: causeDescriptor?.value,
+		code,
+		...(correlationId === undefined ? {} : { correlationId }),
+		...(details === undefined ? {} : { details }),
+		hasCause: causeDescriptor !== undefined && causeDescriptor.value !== undefined,
+		message: safeMessage,
+		retryable: retryable ?? false,
+		status: status as number,
+	});
+}
+
+function safeBoundedText(value: unknown, label: string, maximumLength: number): string {
+	if (typeof value !== "string") throw new TypeError(`${label} must be strings.`);
+	const owned = value.trim();
+	if (owned.length === 0) throw new TypeError(`${label} must not be empty.`);
+	if (owned.length > maximumLength) {
+		throw new TypeError(`${label} must not exceed ${maximumLength} characters.`);
+	}
+	if (/[\u0000-\u001f\u007f]/.test(owned)) {
+		throw new TypeError(`${label} must not contain control characters.`);
+	}
+	return owned;
+}
+
+function dataProperty(
+	value: Readonly<Record<string, unknown>>,
+	key: string,
+	required: boolean,
+): unknown {
+	const descriptor = Object.getOwnPropertyDescriptor(value, key);
+	if (!descriptor) {
+		if (required) throw new TypeError(`Localhost error option ${key} is required.`);
+		return undefined;
+	}
+	if (!("value" in descriptor)) {
+		throw new TypeError(`Localhost error option ${key} must be a data property.`);
+	}
+	return descriptor.value;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	if (typeof value !== "object" || value === null) return false;
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
 }
 
 export function withCorrelation<Code extends string>(
@@ -65,3 +175,4 @@ export function withCorrelation<Code extends string>(
 		status: error.status,
 	});
 }
+import { type JsonObject, ownJsonValue } from "./json-value.js";

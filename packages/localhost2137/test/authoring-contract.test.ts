@@ -70,6 +70,60 @@ describe("authoring descriptors", () => {
 		expect(Object.keys(error)).not.toContain("cause");
 	});
 
+	it("validates and owns expected errors at the JavaScript boundary", () => {
+		const details = { nested: { count: 1 } };
+		const error = new LocalhostError("USER_EXISTS", "  That user already exists.  ", {
+			details,
+			retryable: true,
+			status: 409,
+		});
+		details.nested.count = 2;
+
+		expect(error.message).toBe("That user already exists.");
+		expect(error.details).toEqual({ nested: { count: 1 } });
+		expect(Object.isFrozen(error.details)).toBe(true);
+		expect(Object.isFrozen(error.details?.nested)).toBe(true);
+		expect(Reflect.set(error, "status", 200)).toBe(false);
+
+		const invalidArguments: readonly unknown[][] = [
+			["lowercase", "Safe.", { status: 400 }],
+			["A".repeat(65), "Safe.", { status: 400 }],
+			["INVALID_CODE", "   ", { status: 400 }],
+			["INVALID_CODE", "unsafe\nmessage", { status: 400 }],
+			["INVALID_CODE", "x".repeat(513), { status: 400 }],
+			["INVALID_CODE", "Safe.", { status: 200 }],
+			["INVALID_CODE", "Safe.", { status: 400.5 }],
+			["INVALID_CODE", "Safe.", { retryable: "yes", status: 400 }],
+			["INVALID_CODE", "Safe.", { details: new Date(), status: 400 }],
+			["INVALID_CODE", "Safe.", { details: [], status: 400 }],
+		];
+		for (const arguments_ of invalidArguments) {
+			expect(() => Reflect.construct(LocalhostError, arguments_)).toThrow(TypeError);
+		}
+
+		const accessorDetails = {};
+		Object.defineProperty(accessorDetails, "token", {
+			enumerable: true,
+			get: () => "must-not-be-read",
+		});
+		expect(() =>
+			Reflect.construct(LocalhostError, [
+				"INVALID_CODE",
+				"Safe.",
+				{ details: accessorDetails, status: 400 },
+			]),
+		).toThrow(TypeError);
+		const cyclicDetails: Record<string, unknown> = {};
+		cyclicDetails.self = cyclicDetails;
+		expect(() =>
+			Reflect.construct(LocalhostError, [
+				"INVALID_CODE",
+				"Safe.",
+				{ details: cyclicDetails, status: 400 },
+			]),
+		).toThrow(TypeError);
+	});
+
 	it("creates immutable descriptors without freezing Hono or Zod internals", () => {
 		const operation = greetOperation(defineOperation<"fixture", State, Config>());
 		const api = new Hono<PluginEnv<State, Config>>();
