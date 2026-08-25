@@ -17,6 +17,7 @@ import type {
 	ServiceManifest,
 	StorageTransitionManifest,
 } from "./manifests.js";
+import { ownInstanceManifest } from "./manifests.js";
 import { StructuredPluginLogger } from "./plugin-log-adapter.js";
 import type { RuntimeTime } from "./runtime-time.js";
 import { type AnyServiceLifecycle, ServiceLifecycle } from "./service-lifecycle.js";
@@ -91,7 +92,7 @@ export class ActiveInstanceFactory {
 			seedState: manifest.seed,
 			seedStateStore: {
 				write: async (seed) => {
-					const next = { ...holder.manifest, seed };
+					const next = ownInstanceManifest({ ...holder.manifest, seed });
 					try {
 						await this.#dependencies.storage.writeInstance(instanceId, next);
 					} catch (cause) {

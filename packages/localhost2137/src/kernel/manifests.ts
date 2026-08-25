@@ -165,18 +165,18 @@ export class ManifestValidationError extends Error {
 }
 
 export function parseInstanceManifest(value: unknown, filePath: string): InstanceManifest {
-	return freezeInstanceManifest(parseManifest("instance", instanceManifestSchema, value, filePath));
+	return validateAndOwnInstanceManifest(value, filePath);
 }
 
 export function parseServiceManifest(value: unknown, filePath: string): ServiceManifest {
-	return Object.freeze(parseManifest("service", serviceManifestSchema, value, filePath));
+	return validateAndOwnServiceManifest(value, filePath);
 }
 
 export function parseTransitionManifest(
 	value: unknown,
 	filePath: string,
 ): StorageTransitionManifest {
-	return Object.freeze(parseManifest("transition", transitionManifestSchema, value, filePath));
+	return validateAndOwnTransitionManifest(value, filePath);
 }
 
 export function parseInstanceQuarantineManifest(
@@ -184,6 +184,10 @@ export function parseInstanceQuarantineManifest(
 	filePath: string,
 ): InstanceQuarantineManifest {
 	return Object.freeze(parseManifest("quarantine", quarantineManifestSchema, value, filePath));
+}
+
+export function ownInstanceManifest(manifest: InstanceManifest): InstanceManifest {
+	return validateAndOwnInstanceManifest(manifest, "<runtime instance manifest>");
 }
 
 function freezeInstanceManifest(manifest: InstanceManifest): InstanceManifest {
@@ -198,6 +202,31 @@ function freezeInstanceManifest(manifest: InstanceManifest): InstanceManifest {
 		seed,
 		...(manifest.transition ? { transition: Object.freeze({ ...manifest.transition }) } : {}),
 	});
+}
+
+export function ownServiceManifest(manifest: ServiceManifest): ServiceManifest {
+	return validateAndOwnServiceManifest(manifest, "<runtime service manifest>");
+}
+
+export function ownTransitionManifest(
+	manifest: StorageTransitionManifest,
+): StorageTransitionManifest {
+	return validateAndOwnTransitionManifest(manifest, "<runtime transition manifest>");
+}
+
+function validateAndOwnInstanceManifest(value: unknown, filePath: string): InstanceManifest {
+	return freezeInstanceManifest(parseManifest("instance", instanceManifestSchema, value, filePath));
+}
+
+function validateAndOwnServiceManifest(value: unknown, filePath: string): ServiceManifest {
+	return Object.freeze(parseManifest("service", serviceManifestSchema, value, filePath));
+}
+
+function validateAndOwnTransitionManifest(
+	value: unknown,
+	filePath: string,
+): StorageTransitionManifest {
+	return Object.freeze(parseManifest("transition", transitionManifestSchema, value, filePath));
 }
 
 function parseManifest<Schema extends z.ZodType>(

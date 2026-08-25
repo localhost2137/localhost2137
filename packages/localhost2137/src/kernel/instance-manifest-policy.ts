@@ -1,7 +1,12 @@
 import type { InstanceId } from "./identifiers.js";
 import { initialClockState } from "./instance-clock.js";
 import type { InstanceTemplate } from "./instance-template.js";
-import type { InstanceManifest, StorageTransitionManifest } from "./manifests.js";
+import {
+	type InstanceManifest,
+	ownInstanceManifest,
+	ownTransitionManifest,
+	type StorageTransitionManifest,
+} from "./manifests.js";
 import type { RuntimeTime } from "./runtime-time.js";
 
 export class InstanceManifestPolicy {
@@ -20,7 +25,7 @@ export class InstanceManifestPolicy {
 		persistence: "ephemeral" | "persistent",
 		transitionId?: string,
 	): InstanceManifest {
-		return {
+		return ownInstanceManifest({
 			clock: initialClockState(this.#template.clock),
 			configuredServices: this.#configuredServices(),
 			configFingerprint: this.#template.fingerprint,
@@ -31,29 +36,29 @@ export class InstanceManifestPolicy {
 			seed: { attempt: 0, status: "unseeded" },
 			status: "creating",
 			...(transitionId ? { transition: { id: transitionId, kind: "reset" } } : {}),
-		};
+		});
 	}
 
 	markReady(manifest: InstanceManifest): InstanceManifest {
-		return { ...manifest, status: "ready" };
+		return ownInstanceManifest({ ...manifest, status: "ready" });
 	}
 
 	clearTransition(manifest: InstanceManifest): InstanceManifest {
 		const { transition: _transition, ...ready } = manifest;
-		return ready;
+		return ownInstanceManifest(ready);
 	}
 
 	refreshConfiguration(manifest: InstanceManifest): InstanceManifest {
-		return {
+		return ownInstanceManifest({
 			...manifest,
 			configFingerprint: this.#template.fingerprint,
 			configuredServices: this.#configuredServices(),
-		};
+		});
 	}
 
 	repairInterruptedSeed(manifest: InstanceManifest): InstanceManifest {
 		if (manifest.seed.status !== "seeding") return manifest;
-		return {
+		return ownInstanceManifest({
 			...manifest,
 			seed: {
 				attempt: manifest.seed.attempt,
@@ -63,18 +68,18 @@ export class InstanceManifestPolicy {
 				},
 				status: "seed_failed",
 			},
-		};
+		});
 	}
 
 	transition(instanceId: InstanceId, kind: "destroy" | "reset"): StorageTransitionManifest {
-		return {
+		return ownTransitionManifest({
 			createdAt: this.#time.nowTimestamp(),
 			instanceId: instanceId.value,
 			kind,
 			phase: "old_staged",
 			schemaVersion: 1,
 			transitionId: `${kind}_${this.#token()}`,
-		};
+		});
 	}
 
 	creationTrashId(instanceId: InstanceId): string {

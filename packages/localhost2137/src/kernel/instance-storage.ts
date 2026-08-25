@@ -6,6 +6,7 @@ import type {
 	ServiceManifest,
 	StorageTransitionManifest,
 } from "./manifests.js";
+import { ownInstanceManifest, ownServiceManifest, ownTransitionManifest } from "./manifests.js";
 
 export interface StorageRecoveryReport {
 	readonly cleanupTrashIds: readonly string[];
@@ -47,9 +48,20 @@ export class StorageWriteCommittedError extends Error {
 		super(`Storage operation ${operation} committed before its durability check failed.`);
 		this.name = "StorageWriteCommittedError";
 		this.operation = operation;
-		this.intendedManifest = intendedManifest;
+		this.intendedManifest = ownCommittedManifest(operation, intendedManifest);
 		this.cause = cause;
 	}
+}
+
+function ownCommittedManifest(
+	operation: StorageWriteOperation,
+	manifest: InstanceManifest | ServiceManifest | StorageTransitionManifest,
+): InstanceManifest | ServiceManifest | StorageTransitionManifest {
+	if (operation === "commit_transition") {
+		return ownTransitionManifest(manifest as StorageTransitionManifest);
+	}
+	if (operation === "write_service") return ownServiceManifest(manifest as ServiceManifest);
+	return ownInstanceManifest(manifest as InstanceManifest);
 }
 
 export interface InstanceStoragePort {
