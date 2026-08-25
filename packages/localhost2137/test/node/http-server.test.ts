@@ -1,5 +1,6 @@
+import { createServer } from "node:http";
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HttpServerCloseTimeoutError, NodeHttpServer } from "../../src/node/http-server.js";
 
 describe("NodeHttpServer", () => {
@@ -80,5 +81,47 @@ describe("NodeHttpServer", () => {
 		await expect(server.start({ host: "127.0.0.1", port: -1 })).rejects.toThrow("HTTP server port");
 		await server.close(1_000);
 		await server.settled();
+	});
+
+	it("accepts only exact loopback hosts and formats IPv6 URLs", async () => {
+		for (const host of ["localhost", "127.0.0.1", "::1"] as const) {
+			const server = new NodeHttpServer(new Hono().get("/", (context) => context.text("ok")));
+			const address = await server.start({ host, port: 0 });
+
+			expect(address.host).toBe(host);
+			expect(address.url).toBe(`http://${host === "::1" ? "[::1]" : host}:${address.port}`);
+			expect(await (await fetch(address.url)).text()).toBe("ok");
+			await server.close(1_000);
+		}
+	});
+
+	it("rejects untyped non-loopback hosts before allocating an adapter server", async () => {
+		const createAdapter = vi.fn(() => createServer());
+		for (const host of ["0.0.0.0", "192.0.2.1", "", "127.0.0.1:2137", undefined]) {
+			const server = new NodeHttpServer(new Hono(), createAdapter);
+			await expect(Reflect.apply(server.start, server, [{ host, port: 0 }])).rejects.toThrow(
+				"HTTP server host",
+			);
+		}
+		expect(createAdapter).not.toHaveBeenCalled();
+	});
+
+	it("owns post-listen server errors and reports them through close and settlement", async () => {
+		let nativeServer: ReturnType<typeof createServer> | undefined;
+		const server = new NodeHttpServer(new Hono(), () => {
+			nativeServer = createServer();
+			return nativeServer;
+		});
+		await server.start({ host: "127.0.0.1", port: 0 });
+		const failure = new Error("late accept failure");
+
+		nativeServer?.emit("error", failure);
+		const report = server.close(1_000);
+		const settlement = server.settled();
+
+		await expect(report).rejects.toMatchObject({ errors: [failure] });
+		await expect(settlement).rejects.toMatchObject({ errors: [failure] });
+		expect(server.close(1_000)).toBe(report);
+		expect(server.settled()).toBe(settlement);
 	});
 });

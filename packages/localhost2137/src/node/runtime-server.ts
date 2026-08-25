@@ -1,4 +1,8 @@
-import type { HttpServerAddress, LoopbackHost } from "./http-server.js";
+import {
+	type HttpServerAddress,
+	type LoopbackHost,
+	validateHttpServerOptions,
+} from "./http-server.js";
 
 export interface InstanceRuntimeOwner {
 	settled(): Promise<void>;
@@ -26,6 +30,11 @@ export class RuntimeServer {
 
 	start(options: Readonly<{ host: LoopbackHost; port: number }>): Promise<HttpServerAddress> {
 		if (this.#closeReport) return Promise.reject(new Error("Runtime server shutdown has started."));
+		try {
+			validateHttpServerOptions(options);
+		} catch (cause) {
+			return Promise.reject(cause);
+		}
 		this.#start ??= this.#startOwned(options);
 		return this.#start;
 	}
@@ -37,7 +46,13 @@ export class RuntimeServer {
 				new TypeError("Runtime close timeoutMs must be a non-negative integer."),
 			);
 		}
-		this.#closeReport = this.#closeOwned(timeoutMs);
+		const httpReport = invokeOwner(() => this.#http.close(timeoutMs));
+		const runtimeReport = invokeOwner(() => this.#runtime.stopAll({ timeoutMs }));
+		const httpSettlement = invokeOwner(() => this.#http.settled());
+		const runtimeSettlement = invokeOwner(() => this.#runtime.settled());
+		this.#settled = settleOwners([httpSettlement, runtimeSettlement]);
+		void this.#settled.catch(() => undefined);
+		this.#closeReport = settleOwners([httpReport, runtimeReport]);
 		return this.#closeReport;
 	}
 
@@ -63,13 +78,13 @@ export class RuntimeServer {
 			throw new AggregateError(cleanupFailures, "Runtime HTTP startup failed.");
 		}
 	}
+}
 
-	async #closeOwned(timeoutMs: number): Promise<void> {
-		await this.#start?.catch(() => undefined);
-		const reports = [this.#http.close(timeoutMs), this.#runtime.stopAll({ timeoutMs })];
-		this.#settled = settleOwners([this.#http.settled(), this.#runtime.settled()]);
-		void this.#settled.catch(() => undefined);
-		await settleOwners(reports);
+function invokeOwner(start: () => Promise<void>): Promise<void> {
+	try {
+		return start();
+	} catch (cause) {
+		return Promise.reject(cause);
 	}
 }
 

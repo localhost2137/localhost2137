@@ -29,6 +29,17 @@ describe("RuntimeServer", () => {
 		expect(events).toEqual(["runtime:start", "http:start"]);
 	});
 
+	it("rejects untyped host values before starting either owner", async () => {
+		const fixture = owners();
+		const server = new RuntimeServer(fixture.runtime, fixture.http);
+
+		await expect(
+			Reflect.apply(server.start, server, [{ host: "0.0.0.0", port: 0 }]),
+		).rejects.toThrow("HTTP server host");
+		expect(fixture.runtime.startPersisted).not.toHaveBeenCalled();
+		expect(fixture.http.start).not.toHaveBeenCalled();
+	});
+
 	it("starts both close owners and keeps settlement distinct from bounded reports", async () => {
 		const fixture = owners();
 		const httpSettlement = deferred<void>();
@@ -41,9 +52,12 @@ describe("RuntimeServer", () => {
 		await server.start({ host: "127.0.0.1", port: 0 });
 
 		const report = server.close(25);
+		const settlement = server.settled();
+		expect(server.close(25)).toBe(report);
+		expect(server.settled()).toBe(settlement);
 		const failure = await report.catch((cause: unknown) => cause);
 		let settled = false;
-		void server.settled().then(() => {
+		void settlement.then(() => {
 			settled = true;
 		});
 
@@ -56,7 +70,7 @@ describe("RuntimeServer", () => {
 		await Promise.resolve();
 		expect(settled).toBe(false);
 		runtimeSettlement.resolve();
-		await server.settled();
+		await settlement;
 		expect(settled).toBe(true);
 	});
 
