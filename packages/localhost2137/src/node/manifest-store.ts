@@ -2,7 +2,9 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
 	type InstanceManifest,
+	type InstanceQuarantineManifest,
 	parseInstanceManifest,
+	parseInstanceQuarantineManifest,
 	parseServiceManifest,
 	parseTransitionManifest,
 	type ServiceManifest,
@@ -37,6 +39,10 @@ export class NodeManifestStore {
 		return parseServiceManifest(await readJson(filePath), filePath);
 	}
 
+	async readQuarantine(filePath: string): Promise<InstanceQuarantineManifest> {
+		return parseInstanceQuarantineManifest(await readJson(filePath), filePath);
+	}
+
 	async readTransition(filePath: string): Promise<StorageTransitionManifest> {
 		return parseTransitionManifest(await readJson(filePath), filePath);
 	}
@@ -47,6 +53,14 @@ export class NodeManifestStore {
 
 	async writeService(filePath: string, manifest: ServiceManifest): Promise<void> {
 		await writeManifest(filePath, parseServiceManifest(manifest, filePath), this.#writeOptions);
+	}
+
+	async writeQuarantine(filePath: string, manifest: InstanceQuarantineManifest): Promise<void> {
+		await writeManifest(
+			filePath,
+			parseInstanceQuarantineManifest(manifest, filePath),
+			this.#writeOptions,
+		);
 	}
 
 	async writeTransition(filePath: string, manifest: StorageTransitionManifest): Promise<void> {

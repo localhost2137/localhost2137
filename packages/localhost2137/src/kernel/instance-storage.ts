@@ -1,11 +1,17 @@
 import type { PluginStorage } from "../authoring/context.js";
 import type { InstanceId, ServiceKey } from "./identifiers.js";
-import type { InstanceManifest, ServiceManifest, StorageTransitionManifest } from "./manifests.js";
+import type {
+	InstanceManifest,
+	InstanceQuarantineReason,
+	ServiceManifest,
+	StorageTransitionManifest,
+} from "./manifests.js";
 
 export interface StorageRecoveryReport {
 	readonly cleanupTrashIds: readonly string[];
 	readonly quarantinedInstanceIds: readonly string[];
 	readonly restoredResetIds: readonly string[];
+	readonly unknownTrashEntries: readonly string[];
 }
 
 export class InstanceStagingError extends Error {
@@ -65,6 +71,10 @@ export interface InstanceStoragePort {
 	discardActiveReplacement(instanceId: InstanceId, transitionId: string): Promise<void>;
 	restoreStagedInstance(instanceId: InstanceId, transitionId: string): Promise<void>;
 	commitTransition(transition: StorageTransitionManifest): Promise<void>;
-	quarantineActiveInstance(instanceId: InstanceId, trashId: string): Promise<void>;
+	quarantineActiveInstance(
+		instanceId: InstanceId,
+		trashId: string,
+		reason?: InstanceQuarantineReason,
+	): Promise<void>;
 	cleanupTrash(trashId: string): Promise<void>;
 }

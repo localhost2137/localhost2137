@@ -1,4 +1,4 @@
-import { mkdtemp, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -50,12 +50,17 @@ describe("NodeInstanceStorage", () => {
 	});
 
 	it.each([
-		["creating", "persistent"],
-		["ready", "ephemeral"],
+		["creating", "persistent", "incomplete_recovery"],
+		["ready", "ephemeral", "ephemeral_recovery"],
 	] as const)(
 		"quarantines %s %s instances left by a crashed runtime",
-		async (status, persistence) => {
-			const storage = await fixtureStorage();
+		async (status, persistence, reason) => {
+			const directory = await temporaryDirectory();
+			const storage = new NodeInstanceStorage(directory, {
+				now: () => new Date("2026-08-25T12:30:00.000Z"),
+				recoveryToken: () => "token12345",
+			});
+			await storage.initialize();
 			const instanceId = parseInstanceId("crashed");
 			await storage.createInstance(
 				instanceId,
@@ -66,8 +71,43 @@ describe("NodeInstanceStorage", () => {
 			expect(report.quarantinedInstanceIds).toEqual(["crashed"]);
 			expect(report.cleanupTrashIds).toHaveLength(1);
 			expect(await storage.readInstance(instanceId)).toBeUndefined();
+			const trashId = report.cleanupTrashIds[0];
+			if (!trashId) throw new Error("Expected recovery quarantine id.");
+			expect(
+				JSON.parse(await readFile(join(directory, "trash", trashId, "quarantine.json"), "utf8")),
+			).toEqual({
+				createdAt: "2026-08-25T12:30:00.000Z",
+				instanceId: "crashed",
+				reason,
+				schemaVersion: 1,
+				trashId,
+			});
+
+			const restarted = new NodeInstanceStorage(directory);
+			expect(await restarted.recover()).toMatchObject({
+				cleanupTrashIds: [trashId],
+				unknownTrashEntries: [],
+			});
+			await restarted.cleanupTrash(trashId);
+			expect(await restarted.recover()).toMatchObject({ cleanupTrashIds: [] });
 		},
 	);
+
+	it("reports unknown trash entries in portable code-unit order", async () => {
+		const directory = await temporaryDirectory();
+		const storage = new NodeInstanceStorage(directory);
+		await storage.initialize();
+		await Promise.all([
+			mkdir(join(directory, "trash", "z-unknown")),
+			mkdir(join(directory, "trash", "A-unknown")),
+			mkdir(join(directory, "trash", "ä-unknown")),
+			writeFile(join(directory, "trash", "a-file"), "not runtime metadata"),
+		]);
+
+		const report = await storage.recover();
+		expect(report.unknownTrashEntries).toEqual(["A-unknown", "a-file", "z-unknown", "ä-unknown"]);
+		expect(report.cleanupTrashIds).toEqual([]);
+	});
 
 	it("rolls back an interrupted reset whose replacement was not ready", async () => {
 		const storage = await fixtureStorage();
@@ -114,6 +154,52 @@ describe("NodeInstanceStorage", () => {
 			status: "ready",
 		});
 		expect((await storage.readInstance(instanceId))?.transition).toBeUndefined();
+	});
+
+	it("cleans a stale committed reset after its active manifest was already finalized", async () => {
+		const storage = await fixtureStorage();
+		const instanceId = parseInstanceId("dev");
+		const transition = transitionManifest("reset_finalized_1", "reset");
+		await storage.createInstance(instanceId, instanceManifest("dev"));
+		await storage.stageInstance(instanceId, transition);
+		await storage.createInstance(
+			instanceId,
+			instanceManifest("dev", {
+				configFingerprint: `sha256:${"b".repeat(64)}`,
+				transition: { id: transition.transitionId, kind: "reset" },
+			}),
+		);
+		await storage.commitTransition(transition);
+		await storage.writeInstance(
+			instanceId,
+			instanceManifest("dev", { configFingerprint: `sha256:${"c".repeat(64)}` }),
+		);
+
+		const report = await storage.recover();
+		expect(report.cleanupTrashIds).toContain(transition.transitionId);
+		expect(await storage.readInstance(instanceId)).toMatchObject({
+			configFingerprint: `sha256:${"c".repeat(64)}`,
+			status: "ready",
+		});
+	});
+
+	it("rejects committed reset trash that conflicts with another active transition", async () => {
+		const storage = await fixtureStorage();
+		const instanceId = parseInstanceId("dev");
+		const transition = transitionManifest("reset_conflict_1", "reset");
+		await storage.createInstance(instanceId, instanceManifest("dev"));
+		await storage.stageInstance(instanceId, transition);
+		await storage.createInstance(
+			instanceId,
+			instanceManifest("dev", {
+				transition: { id: "reset_other_123", kind: "reset" },
+			}),
+		);
+		await storage.commitTransition(transition);
+
+		await expect(storage.recover()).rejects.toThrow(
+			"committed reset conflicts with active instance metadata",
+		);
 	});
 
 	it("completes an interrupted destroy without restoring staged state", async () => {

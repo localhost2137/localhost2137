@@ -9,6 +9,7 @@ import {
 import {
 	ManifestValidationError,
 	parseInstanceManifest,
+	parseInstanceQuarantineManifest,
 	parseServiceManifest,
 } from "../../src/kernel/manifests.js";
 
@@ -86,5 +87,21 @@ describe("versioned manifests", () => {
 		if (manifest.seed.status !== "seed_failed") throw new Error("Expected failed seed fixture.");
 		expect(Object.isFrozen(manifest.seed.failure)).toBe(true);
 		expect(Object.isFrozen(manifest.transition)).toBe(true);
+	});
+
+	it("validates and freezes runtime quarantine metadata", () => {
+		const manifest = parseInstanceQuarantineManifest(
+			{
+				createdAt: "2026-08-25T12:00:00.000Z",
+				instanceId: "dev",
+				reason: "failed_creation",
+				schemaVersion: 1,
+				trashId: "create_dev_12345678",
+			},
+			"quarantine.json",
+		);
+
+		expect(manifest).toMatchObject({ instanceId: "dev", reason: "failed_creation" });
+		expect(Object.isFrozen(manifest)).toBe(true);
 	});
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { type InstanceId, parseInstanceId, type ServiceKey } from "../kernel/identifiers.js";
 import {
@@ -11,12 +11,15 @@ import {
 } from "../kernel/instance-storage.js";
 import type {
 	InstanceManifest,
+	InstanceQuarantineReason,
 	ServiceManifest,
 	StorageTransitionManifest,
 } from "../kernel/manifests.js";
 import { AtomicWriteError, syncDirectory } from "./atomic-file.js";
+import { quarantineInstance } from "./instance-quarantine.js";
 import { NodeManifestStore } from "./manifest-store.js";
 import { NodePluginStorage } from "./plugin-storage.js";
+import { sortedStorageDirectories } from "./storage-directory-entries.js";
 import {
 	instanceDirectory,
 	type StoragePaths,
@@ -24,38 +27,30 @@ import {
 	serviceDirectory,
 	storagePaths,
 	transitionDirectory,
-	validateTransitionId,
 } from "./storage-paths.js";
-
-class StorageRecoveryError extends Error {
-	readonly instanceId?: string;
-	readonly transitionId?: string;
-
-	constructor(
-		message: string,
-		details: Readonly<{ instanceId?: string; transitionId?: string }> = {},
-	) {
-		super(message);
-		this.name = "StorageRecoveryError";
-		if (details.instanceId) this.instanceId = details.instanceId;
-		if (details.transitionId) this.transitionId = details.transitionId;
-	}
-}
+import { NodeStorageRecovery, StorageRecoveryError } from "./storage-recovery.js";
 
 export interface NodeInstanceStorageOptions {
 	readonly manifestStore?: NodeManifestStore;
+	readonly now?: () => Date;
 	readonly recoveryToken?: () => string;
 }
 
 export class NodeInstanceStorage implements InstanceStoragePort {
 	readonly #manifests: NodeManifestStore;
+	readonly #now: () => Date;
 	readonly #paths: StoragePaths;
-	readonly #recoveryToken: () => string;
+	readonly #recovery: NodeStorageRecovery;
 
 	constructor(root: string, options: NodeInstanceStorageOptions = {}) {
 		this.#paths = storagePaths(root);
 		this.#manifests = options.manifestStore ?? new NodeManifestStore();
-		this.#recoveryToken = options.recoveryToken ?? randomUUID;
+		this.#now = options.now ?? (() => new Date());
+		this.#recovery = new NodeStorageRecovery({
+			manifests: this.#manifests,
+			paths: this.#paths,
+			recoveryToken: options.recoveryToken ?? randomUUID,
+		});
 	}
 
 	async initialize(): Promise<void> {
@@ -67,57 +62,13 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 
 	async recover(): Promise<StorageRecoveryReport> {
 		await this.initialize();
-		const cleanupTrashIds: string[] = [];
-		const quarantinedInstanceIds: string[] = [];
-		const restoredResetIds: string[] = [];
-
-		for (const entry of await sortedDirectories(this.#paths.trash)) {
-			if (entry.name === "locks") continue;
-			const transitionPath = resolve(this.#paths.trash, entry.name, "transition.json");
-			if (!(await exists(transitionPath))) continue;
-			const transition = await this.#manifests.readTransition(transitionPath);
-			if (transition.transitionId !== entry.name) {
-				throw new StorageRecoveryError(
-					`Transition directory "${entry.name}" contains manifest for "${transition.transitionId}".`,
-					{ transitionId: transition.transitionId },
-				);
-			}
-			await this.#recoverTransition(transition, cleanupTrashIds, restoredResetIds);
-		}
-
-		for (const entry of await sortedDirectories(this.#paths.instances)) {
-			const instanceId = parseInstanceId(entry.name);
-			const manifest = await this.#readRequiredInstance(instanceId);
-			if (manifest.status === "creating" || manifest.persistence === "ephemeral") {
-				if (manifest.transition) {
-					throw new StorageRecoveryError(
-						`Instance "${instanceId.value}" references missing reset transition "${manifest.transition.id}".`,
-						{ instanceId: instanceId.value, transitionId: manifest.transition.id },
-					);
-				}
-				const trashId = recoveryTrashId(instanceId.value, this.#recoveryToken());
-				await this.quarantineActiveInstance(instanceId, trashId);
-				cleanupTrashIds.push(trashId);
-				quarantinedInstanceIds.push(instanceId.value);
-			} else if (manifest.transition) {
-				throw new StorageRecoveryError(
-					`Ready instance "${instanceId.value}" references missing reset transition "${manifest.transition.id}".`,
-					{ instanceId: instanceId.value, transitionId: manifest.transition.id },
-				);
-			}
-		}
-
-		return Object.freeze({
-			cleanupTrashIds: Object.freeze(cleanupTrashIds),
-			quarantinedInstanceIds: Object.freeze(quarantinedInstanceIds),
-			restoredResetIds: Object.freeze(restoredResetIds),
-		});
+		return this.#recovery.recover(this);
 	}
 
 	async listInstances(): Promise<readonly InstanceManifest[]> {
 		await this.initialize();
 		const manifests: InstanceManifest[] = [];
-		for (const entry of await sortedDirectories(this.#paths.instances)) {
+		for (const entry of await sortedStorageDirectories(this.#paths.instances)) {
 			const instanceId = parseInstanceId(entry.name);
 			manifests.push(await this.#readRequiredInstance(instanceId));
 		}
@@ -269,12 +220,17 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 		}
 	}
 
-	async quarantineActiveInstance(instanceId: InstanceId, trashId: string): Promise<void> {
-		await rename(
-			instanceDirectory(this.#paths, instanceId),
-			transitionDirectory(this.#paths, trashId),
+	async quarantineActiveInstance(
+		instanceId: InstanceId,
+		trashId: string,
+		reason: InstanceQuarantineReason = "failed_creation",
+	): Promise<void> {
+		await quarantineInstance(
+			{ manifests: this.#manifests, now: this.#now, paths: this.#paths },
+			instanceId,
+			trashId,
+			reason,
 		);
-		await Promise.all([syncDirectory(this.#paths.instances), syncDirectory(this.#paths.trash)]);
 	}
 
 	async cleanupTrash(trashId: string): Promise<void> {
@@ -290,69 +246,6 @@ export class NodeInstanceStorage implements InstanceStoragePort {
 			);
 		}
 		return manifest;
-	}
-
-	async #recoverTransition(
-		transition: StorageTransitionManifest,
-		cleanupTrashIds: string[],
-		restoredResetIds: string[],
-	): Promise<void> {
-		const instanceId = parseInstanceId(transition.instanceId);
-		const staging = transitionDirectory(this.#paths, transition.transitionId);
-		const activePath = instanceDirectory(this.#paths, instanceId);
-		const stagedPath = resolve(staging, "instance");
-		const [active, staged] = await Promise.all([exists(activePath), exists(stagedPath)]);
-
-		if (transition.kind === "destroy") {
-			if (active && staged)
-				throw transitionConflict(transition, "destroy has both active and staged state");
-			cleanupTrashIds.push(transition.transitionId);
-			return;
-		}
-		if (transition.phase === "committed") {
-			if (!active)
-				throw transitionConflict(transition, "committed reset has no active replacement");
-			await this.#clearRecoveredTransition(instanceId, transition.transitionId);
-			cleanupTrashIds.push(transition.transitionId);
-			return;
-		}
-		if (!staged && active) {
-			cleanupTrashIds.push(transition.transitionId);
-			return;
-		}
-		if (staged && !active) {
-			await this.restoreStagedInstance(instanceId, transition.transitionId);
-			restoredResetIds.push(instanceId.value);
-			cleanupTrashIds.push(transition.transitionId);
-			return;
-		}
-		if (!active || !staged) throw transitionConflict(transition, "reset has no recoverable state");
-
-		const activeManifest = await this.#readRequiredInstance(instanceId);
-		if (
-			activeManifest.status === "ready" &&
-			activeManifest.transition?.id === transition.transitionId
-		) {
-			await this.commitTransition(transition);
-			await this.#clearRecoveredTransition(instanceId, transition.transitionId);
-		} else {
-			await this.discardActiveReplacement(instanceId, transition.transitionId);
-			await this.restoreStagedInstance(instanceId, transition.transitionId);
-			restoredResetIds.push(instanceId.value);
-		}
-		cleanupTrashIds.push(transition.transitionId);
-	}
-
-	async #clearRecoveredTransition(instanceId: InstanceId, transitionId: string): Promise<void> {
-		const manifest = await this.#readRequiredInstance(instanceId);
-		if (manifest.transition?.id !== transitionId) {
-			throw new StorageRecoveryError(
-				`Reset transition "${transitionId}" does not match active instance metadata.`,
-				{ instanceId: instanceId.value, transitionId },
-			);
-		}
-		const { transition: _transition, ...ready } = manifest;
-		await this.writeInstance(instanceId, ready);
 	}
 }
 
@@ -371,22 +264,6 @@ function assertTransitionIdentity(
 	}
 }
 
-function recoveryTrashId(instanceId: string, token: string): string {
-	const result = `recovery_${instanceId}_${token}`;
-	validateTransitionId(result);
-	return result;
-}
-
-function transitionConflict(
-	transition: StorageTransitionManifest,
-	reason: string,
-): StorageRecoveryError {
-	return new StorageRecoveryError(
-		`Cannot recover ${transition.kind} transition "${transition.transitionId}": ${reason}.`,
-		{ instanceId: transition.instanceId, transitionId: transition.transitionId },
-	);
-}
-
 async function exists(path: string): Promise<boolean> {
 	try {
 		await stat(path);
@@ -395,13 +272,6 @@ async function exists(path: string): Promise<boolean> {
 		if (hasCode(cause, "ENOENT")) return false;
 		throw cause;
 	}
-}
-
-async function sortedDirectories(path: string) {
-	const entries = await readdir(path, { withFileTypes: true });
-	return entries
-		.filter((entry) => entry.isDirectory())
-		.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function hasCode(value: unknown, expected: string): boolean {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const INSTANCE_MANIFEST_SCHEMA_VERSION = 1;
+const QUARANTINE_MANIFEST_SCHEMA_VERSION = 1;
 const SERVICE_MANIFEST_SCHEMA_VERSION = 1;
 const TRANSITION_MANIFEST_SCHEMA_VERSION = 1;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
@@ -47,6 +48,19 @@ export interface StorageTransitionManifest {
 	readonly phase: "committed" | "old_staged";
 	readonly schemaVersion: 1;
 	readonly transitionId: string;
+}
+
+export type InstanceQuarantineReason =
+	| "ephemeral_recovery"
+	| "failed_creation"
+	| "incomplete_recovery";
+
+export interface InstanceQuarantineManifest {
+	readonly createdAt: string;
+	readonly instanceId: string;
+	readonly reason: InstanceQuarantineReason;
+	readonly schemaVersion: 1;
+	readonly trashId: string;
 }
 
 const identifierSchema = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/);
@@ -126,7 +140,15 @@ const transitionManifestSchema: z.ZodType<StorageTransitionManifest> = z.strictO
 	transitionId: transitionIdSchema,
 });
 
-export type ManifestKind = "instance" | "service" | "transition";
+const quarantineManifestSchema: z.ZodType<InstanceQuarantineManifest> = z.strictObject({
+	createdAt: timestampSchema,
+	instanceId: identifierSchema,
+	reason: z.enum(["ephemeral_recovery", "failed_creation", "incomplete_recovery"]),
+	schemaVersion: z.literal(QUARANTINE_MANIFEST_SCHEMA_VERSION),
+	trashId: transitionIdSchema,
+});
+
+export type ManifestKind = "instance" | "quarantine" | "service" | "transition";
 
 export class ManifestValidationError extends Error {
 	readonly filePath: string;
@@ -155,6 +177,13 @@ export function parseTransitionManifest(
 	filePath: string,
 ): StorageTransitionManifest {
 	return Object.freeze(parseManifest("transition", transitionManifestSchema, value, filePath));
+}
+
+export function parseInstanceQuarantineManifest(
+	value: unknown,
+	filePath: string,
+): InstanceQuarantineManifest {
+	return Object.freeze(parseManifest("quarantine", quarantineManifestSchema, value, filePath));
 }
 
 function freezeInstanceManifest(manifest: InstanceManifest): InstanceManifest {
