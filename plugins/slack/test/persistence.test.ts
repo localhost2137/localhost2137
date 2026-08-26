@@ -297,6 +297,144 @@ describe("Slack persistence", () => {
 		}
 	});
 
+	it("allocates exact timestamps beyond Number safe-integer precision and across restart", async () => {
+		const root = await mkdtemp(join(tmpdir(), "localhost2137-slack-"));
+		roots.push(root);
+		const path = join(root, "slack.sqlite");
+		const distantNow = new Date("2255-06-05T23:47:34.741Z");
+		let database = new SlackDatabase(path);
+		try {
+			migrateDatabase(database.raw());
+			const service = new SlackService(database);
+			service.initialize(config(), distantNow);
+			const channel = service.createChannel({ name: "general", now: distantNow });
+			expect(
+				service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now: distantNow,
+					text: "first",
+					user: "U000000",
+				}).message.ts,
+			).toBe("9007199254.741000");
+			expect(
+				service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now: distantNow,
+					text: "second",
+					user: "U000000",
+				}).message.ts,
+			).toBe("9007199254.741001");
+			expect(messageTimestampCounter(database)).toBe(9_007_199_254_741_001n);
+
+			database.close();
+			database = new SlackDatabase(path);
+			expect(
+				database.messages.create({
+					channelId: channel.id,
+					now: distantNow,
+					text: "after restart",
+					userId: "U000000",
+				}).ts,
+			).toBe("9007199254.741002");
+			expect(messageTimestampCounter(database)).toBe(9_007_199_254_741_002n);
+		} finally {
+			database.close();
+		}
+	});
+
+	it("supports the maximum JavaScript Date without timestamp precision loss", async () => {
+		const database = await migratedDatabase();
+		const maximumDate = new Date(8_640_000_000_000_000);
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), maximumDate);
+			const channel = service.createChannel({ name: "general", now: maximumDate });
+			const first = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now: maximumDate,
+				text: "first",
+				user: "U000000",
+			}).message;
+			const second = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now: maximumDate,
+				text: "second",
+				user: "U000000",
+			}).message;
+			expect(first.ts).toBe("8640000000000.000000");
+			expect(second.ts).toBe("8640000000000.000001");
+			expect(messageTimestampCounter(database)).toBe(8_640_000_000_000_000_001n);
+		} finally {
+			database.close();
+		}
+	});
+
+	it("fails timestamp exhaustion without consuming a message ID", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			database
+				.raw()
+				.prepare("INSERT INTO counters(kind, value) VALUES ('message_ts', ?)")
+				.run(9_223_372_036_854_775_807n);
+			expect(() =>
+				service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "cannot allocate",
+					user: "U000000",
+				}),
+			).toThrow(/timestamp sequence is exhausted/);
+			expect(database.raw().prepare("SELECT COUNT(*) AS count FROM messages").get()).toEqual({
+				count: 0,
+			});
+			expect(
+				database.raw().prepare("SELECT value FROM counters WHERE kind = 'message'").get(),
+			).toBeUndefined();
+			expect(messageTimestampCounter(database)).toBe(9_223_372_036_854_775_807n);
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rolls back timestamp and message counters when message persistence fails", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			expect(() =>
+				database.messages.create({
+					channelId: channel.id,
+					now,
+					text: "missing user",
+					userId: "U404",
+				}),
+			).toThrow(/FOREIGN KEY constraint failed/);
+			expect(messageTimestampCounter(database)).toBeUndefined();
+			expect(
+				database.raw().prepare("SELECT value FROM counters WHERE kind = 'message'").get(),
+			).toBeUndefined();
+			expect(
+				database.messages.create({
+					channelId: channel.id,
+					now,
+					text: "valid",
+					userId: "U000000",
+				}),
+			).toMatchObject({ id: "M000001", ts: "1767225600.000000" });
+		} finally {
+			database.close();
+		}
+	});
+
 	it("rolls back message and event allocation when a write fails", async () => {
 		const database = await migratedDatabase();
 		try {
@@ -458,4 +596,13 @@ function config() {
 		signingSecret: "test-signing-secret",
 		workspaceName: "Local Test",
 	} as const;
+}
+
+function messageTimestampCounter(database: SlackDatabase): bigint | undefined {
+	const row = database
+		.raw()
+		.prepare("SELECT value FROM counters WHERE kind = 'message_ts'")
+		.safeIntegers(true)
+		.get() as { value: bigint } | undefined;
+	return row?.value;
 }

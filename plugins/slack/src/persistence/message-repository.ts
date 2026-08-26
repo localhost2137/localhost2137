@@ -1,5 +1,10 @@
 import type Database from "better-sqlite3";
 import type { ChannelId, SlackMessage, UserId } from "../domain/models.js";
+import {
+	dateToSlackMicroseconds,
+	formatSlackTimestamp,
+	MAX_SLACK_TIMESTAMP_MICROSECONDS,
+} from "../domain/slack-timestamp.js";
 import { insertSequencedId } from "./id-sequence.js";
 
 interface MessageRow {
@@ -15,6 +20,7 @@ interface MessageRow {
 
 export interface MessagePageOptions {
 	readonly beforeId?: string;
+	readonly inclusive?: boolean;
 	readonly latest?: string;
 	readonly limit: number;
 	readonly oldest?: string;
@@ -86,13 +92,13 @@ export class MessageRepository {
 		}
 		if (input.oldest) {
 			conditions.push(
-				"CAST(REPLACE(ts, '.', '') AS INTEGER) > CAST(REPLACE(?, '.', '') AS INTEGER)",
+				`CAST(REPLACE(ts, '.', '') AS INTEGER) ${input.inclusive ? ">=" : ">"} CAST(REPLACE(?, '.', '') AS INTEGER)`,
 			);
 			parameters.push(input.oldest);
 		}
 		if (input.latest) {
 			conditions.push(
-				"CAST(REPLACE(ts, '.', '') AS INTEGER) < CAST(REPLACE(?, '.', '') AS INTEGER)",
+				`CAST(REPLACE(ts, '.', '') AS INTEGER) ${input.inclusive ? "<=" : "<"} CAST(REPLACE(?, '.', '') AS INTEGER)`,
 			);
 			parameters.push(input.latest);
 		}
@@ -109,18 +115,25 @@ export class MessageRepository {
 	#nextTimestamp(now: Date): string {
 		const current = this.#database
 			.prepare("SELECT value FROM counters WHERE kind = 'message_ts'")
-			.get() as { value: number } | undefined;
-		const next = Math.max(now.getTime() * 1_000, (current?.value ?? 0) + 1);
+			.safeIntegers(true)
+			.get() as { value: bigint } | undefined;
+		const wallClock = dateToSlackMicroseconds(now);
+		const next = maxBigInt(wallClock, (current?.value ?? 0n) + 1n, 1n);
+		if (next > MAX_SLACK_TIMESTAMP_MICROSECONDS) {
+			throw new RangeError("Slack message timestamp sequence is exhausted.");
+		}
 		this.#database
 			.prepare(
 				`INSERT INTO counters(kind, value) VALUES ('message_ts', ?)
 				 ON CONFLICT(kind) DO UPDATE SET value = excluded.value`,
 			)
 			.run(next);
-		const seconds = Math.floor(next / 1_000_000);
-		const micros = next % 1_000_000;
-		return `${seconds}.${String(micros).padStart(6, "0")}`;
+		return formatSlackTimestamp(next);
 	}
+}
+
+function maxBigInt(...values: readonly bigint[]): bigint {
+	return values.reduce((maximum, value) => (value > maximum ? value : maximum));
 }
 
 function toMessage(row: MessageRow): SlackMessage {

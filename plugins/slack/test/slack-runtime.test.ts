@@ -303,6 +303,69 @@ describe("Slack runtime integration", () => {
 		}
 	});
 
+	it("applies exact inclusive history boundaries", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const channel = await instance.slack.createChannel({ name: "general" });
+			const first = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: "U000000",
+				text: "first",
+			});
+			const second = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: "U000000",
+				text: "second",
+			});
+			const third = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: "U000000",
+				text: "third",
+			});
+			const connection = instance.slack.connection;
+
+			await expectHistory(connection.apiUrl, connection.botToken, channel.id, {
+				expected: ["third"],
+				oldest: second.ts,
+			});
+			await expectHistory(connection.apiUrl, connection.botToken, channel.id, {
+				expected: ["third", "second"],
+				inclusive: "true",
+				oldest: second.ts,
+			});
+			await expectHistory(connection.apiUrl, connection.botToken, channel.id, {
+				expected: ["first"],
+				latest: second.ts,
+			});
+			await expectHistory(connection.apiUrl, connection.botToken, channel.id, {
+				expected: ["second", "first"],
+				inclusive: "true",
+				latest: second.ts,
+			});
+			await expectHistory(connection.apiUrl, connection.botToken, channel.id, {
+				expected: ["second"],
+				latest: third.ts,
+				oldest: first.ts,
+			});
+			await expectHistory(connection.apiUrl, connection.botToken, channel.id, {
+				expected: ["third", "second", "first"],
+				inclusive: "true",
+				latest: third.ts,
+				oldest: first.ts,
+			});
+
+			const outsideSqliteRange = await slackGet(connection.apiUrl, "conversations.history", {
+				channel: channel.id,
+				latest: "9223372036854.775808",
+				token: connection.botToken,
+			});
+			expect(await outsideSqliteRange.json()).toEqual({ error: "invalid_ts_latest", ok: false });
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("maps Slack world invariant failures to stable control errors", async () => {
 		const runtime = await startRuntime(slack, null);
 		const instance = await runtime.createInstance();
@@ -514,6 +577,28 @@ function responseCursor(body: unknown): string {
 	return String(
 		Reflect.get(Reflect.get(body as object, "response_metadata") as object, "next_cursor"),
 	);
+}
+
+async function expectHistory(
+	apiUrl: string,
+	token: string,
+	channel: string,
+	input: Readonly<{
+		expected: readonly string[];
+		inclusive?: string;
+		latest?: string;
+		oldest?: string;
+	}>,
+): Promise<void> {
+	const response = await slackGet(apiUrl, "conversations.history", {
+		channel,
+		...(input.inclusive ? { inclusive: input.inclusive } : {}),
+		...(input.latest ? { latest: input.latest } : {}),
+		...(input.oldest ? { oldest: input.oldest } : {}),
+		token,
+	});
+	const body = (await response.json()) as { messages: Array<{ text: string }> };
+	expect(body.messages.map(({ text }) => text)).toEqual(input.expected);
 }
 
 function requiredHeader(

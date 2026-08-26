@@ -1,11 +1,11 @@
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import type { PluginEnv } from "localhost2137";
 import type { SlackConfig } from "../config.js";
 import { SlackError } from "../domain/slack-error.js";
+import { formatSlackTimestamp, parseSlackTimestamp } from "../domain/slack-timestamp.js";
 import { LOCAL_BOT_ID } from "../slack-identities.js";
 import type { SlackState } from "../state.js";
 import { pageResult, readPagination } from "./pagination.js";
-import { slackChannel, slackMessage, slackUser } from "./slack-responses.js";
 import {
 	authenticateSlackRequest,
 	optionalBoolean,
@@ -13,6 +13,7 @@ import {
 	readSlackRequest,
 	requiredString,
 } from "./slack-request.js";
+import { slackChannel, slackMessage, slackUser } from "./slack-responses.js";
 
 type SlackContext = Context<PluginEnv<SlackState, SlackConfig>>;
 type SlackHandler = (context: SlackContext) => Promise<Response>;
@@ -155,9 +156,10 @@ async function conversationsHistory(context: SlackContext): Promise<Response> {
 	const result = pageResult(
 		runtime.state.service.listMessages(resolvedChannel.id, {
 			...(pagination.afterKey ? { beforeId: pagination.afterKey } : {}),
-			...(latest ? { latest: inclusive ? shiftTimestamp(latest, 1) : latest } : {}),
+			inclusive,
+			...(latest ? { latest } : {}),
 			limit: pagination.limit + 1,
-			...(oldest ? { oldest: inclusive ? shiftTimestamp(oldest, -1) : oldest } : {}),
+			...(oldest ? { oldest } : {}),
 		}),
 		{
 			filter,
@@ -226,23 +228,12 @@ function readTimestamp(
 	const value = request.values[name];
 	if (value === undefined || value === "") return undefined;
 	const text = String(value);
-	if (!/^\d+\.\d{1,6}$/.test(text)) {
+	const timestamp = parseSlackTimestamp(text);
+	if (timestamp === undefined) {
 		throw new SlackError(
 			name === "latest" ? "invalid_ts_latest" : "invalid_ts_oldest",
 			`Slack ${name} must be a seconds.microseconds timestamp.`,
 		);
 	}
-	return normalizeTimestamp(text);
-}
-
-function shiftTimestamp(value: string, microseconds: -1 | 1): string {
-	const [secondsText, fractionText] = value.split(".");
-	const total = Number(secondsText) * 1_000_000 + Number(fractionText?.padEnd(6, "0"));
-	const shifted = total + microseconds;
-	return `${Math.floor(shifted / 1_000_000)}.${String(shifted % 1_000_000).padStart(6, "0")}`;
-}
-
-function normalizeTimestamp(value: string): string {
-	const [seconds, fraction] = value.split(".");
-	return `${seconds}.${fraction?.padEnd(6, "0")}`;
+	return formatSlackTimestamp(timestamp);
 }
