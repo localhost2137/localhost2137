@@ -1,81 +1,162 @@
 ---
 title: Virtual time and asynchronous work
-description: Advance instance clocks deliberately and wait for plugin-owned delivery work without wall-clock sleeps.
+description: Advance instance clocks deliberately, observe reconciled service behavior, and wait at the correct completion boundary without wall-clock sleeps.
 ---
 
-Every instance owns a durable clock. Plugins read emulator time through `ctx.clock.now()`; an
-application still uses its normal time unless the application itself provides a clock seam.
+Every instance owns a durable clock. Plugins read emulator time through `ctx.clock.now()` and may
+reconcile documented time-derived behavior when that clock advances. The application, SDK, operating
+system, and untracked plugin code still use their own clocks unless they provide another seam.
 
-## Clock modes
+Virtual time is therefore useful only when the behavior under test belongs to a plugin and the
+installed plugin says that advancement drives it.
 
-Real mode follows wall time with a persisted offset:
+## Choose a mode from the claim
 
-```ts
-clock: { mode: "real" }
+Configure one clock mode in `localhost.config.ts`:
+
+```ts title="localhost.config.ts"
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+  clock: {
+    mode: "pinned",
+    startAt: "2026-01-01T00:00:00.000Z",
+  },
+  services: {},
+});
 ```
 
-Pinned mode begins at an exact instant and moves only when explicitly advanced:
+| Claim | Mode | Why |
+| --- | --- | --- |
+| A plugin expires, renews, retries, or schedules work at an exact emulator instant | Pinned | Time stays at `startAt` until an explicit advance. |
+| A callback signature or SDK replay check must agree with machine time | Real | Plugin time follows wall time, plus any explicit persisted offset. |
+| The application itself runs a timer or compares `Date.now()` | Either is insufficient alone | Supply an application clock seam or wait for the application's own completion boundary. |
+| The real provider runs a hosted scheduler | Neither proves provider execution | Keep a provider-facing check for the hosted behavior. |
 
-```ts
-clock: {
-  mode: "pinned",
-  startAt: "2026-01-01T00:00:00.000Z",
-}
-```
+A pinned clock in a persistent world remains fixed across daemon restarts. A real clock keeps moving
+with wall time and retains any offset added by explicit advances. Advancing real mode can therefore
+move plugin timestamps outside an SDK's wall-clock replay window. The clock belongs to the instance:
+creating or resetting a world starts it from the configured clock state, while restarting the daemon
+keeps a persistent world's current clock.
 
-Use pinned time for deterministic billing, expiry, retry, and scheduling scenarios. Use real mode
-when a provider SDK validates callback timestamps against the machine clock, as Slack Bolt does by
-default.
+[What determinism means](/determinism#runtime-mechanisms-have-defined-scopes) covers the other
+sources of variation that neither mode controls.
+
+## Inspect one exact transition
+
+Read the selected world before moving it:
 
 ```sh
-localhost clock status --json
-localhost clock advance 30d --json
+pnpm exec localhost clock status --instance dev --json
+pnpm exec localhost clock advance 2h --instance dev --json
 ```
 
-Durations are positive whole values followed by `ms`, `s`, `m`, `h`, `d`, or `w`. There is no month
-unit because calendar months are ambiguous. The first-party Stripe plugin defines its current
-recurring interval as exactly 30 days.
-
-## What advancement means
-
-Advancement commits an `{ advanceId, from, to }` window, then presents it to configured plugins in
-stable order. Plugins that own time-derived behavior reconcile that window idempotently and persist
-effects before acknowledging it. After interruption, unacknowledged work resumes instead of moving
-the clock again.
-
-Programmatic tests use the same path:
+Programmatic tests receive the same transition data:
 
 ```ts
 const before = await instance.clock.status();
-const advanced = await instance.clock.advance("30d");
-
-expect(advanced.from).toBe(before.now);
-expect(advanced.to).not.toBe(before.now);
-```
-
-Clock advancement is not a snapshot or branch. To compare two outcomes from the same baseline,
-create and seed two instances independently.
-
-## Tracked work and `idle()`
-
-Plugins send outbound requests through their runtime context and register non-fetch work with the
-task tracker. `await instance.idle()` waits until the instance remains empty of tracked tasks after a
-microtask turn. This includes tasks created by finishing tasks.
-
-Use it after an operation triggers callbacks:
-
-```ts
-await instance.slack.sendMessage({
-  channel: channel.id,
-  from: user.id,
-  text: "ping",
+expect(before).toEqual({
+  mode: "pinned",
+  now: "2026-01-01T00:00:00.000Z",
 });
-await instance.idle();
 
-const messages = await instance.slack.listMessages({ channel: channel.id });
-expect(messages.map(({ text }) => text)).toContain("pong");
+const advanced = await instance.clock.advance("2h");
+expect(advanced).toMatchObject({
+  from: "2026-01-01T00:00:00.000Z",
+  mode: "pinned",
+  to: "2026-01-01T02:00:00.000Z",
+});
+expect(advanced.advanceId.length).toBeGreaterThan(0);
 ```
 
-`idle()` is a synchronization boundary, not a retry policy. Provider-specific retry schedules remain
-inside plugins. Some retries run only after another positive clock advance; consult the installed
-plugin's compatibility notes.
+Durations are positive whole values followed by `ms`, `s`, `m`, `h`, `d`, or `w`. Values such as
+`1.5h`, `0s`, `-1d`, and `1month` are rejected. There is no month or year unit because their length
+depends on a calendar. A plugin may define a fixed business interval—such as the first-party Stripe
+plugin's exact 30-day recurring period—but that is plugin behavior, not duration syntax.
+
+An advance adds the requested duration. It does not set an absolute timestamp. Two successful
+`advance("30d")` calls move the clock by 60 days and receive different advance IDs.
+
+## What a successful advance includes
+
+The runtime first commits an `{ advanceId, from, to }` window to the instance. It then presents that
+window to configured services in stable order. A service with `onTimeAdvanced` decides which of its
+deadlines were crossed, persists the corresponding effects, and acknowledges that advance ID.
+
+Before acknowledging each service, the runtime waits for tracked work started during its
+reconciliation and surfaces failures from that scope. A successful `clock.advance()` therefore means
+the clock moved and every configured service finished reconciling that committed window. It does not
+mean that every application job caused by a delivered callback has finished.
+
+The runtime does not call a service once per deadline. One `30d` transition is one window; the plugin
+may create zero, one, or many effects inside it. Splitting a transition into two `15d` calls creates
+two windows. Treat the split and combined results as equivalent only when the plugin documents and
+tests that property.
+
+The runtime also does not invent time behavior for a plugin with no `onTimeAdvanced` hook. Its clock
+still moves, but service state changes only when the plugin implements and documents a reaction to
+that window.
+
+## Use time and completion in the right order
+
+A time-based application scenario normally has three separate boundaries:
+
+```text
+arrange durable plugin state
+  -> advance plugin time and reconcile the window
+  -> wait for the application's observable completion
+```
+
+For example, a subscription test can create a subscription through the application's normal SDK,
+advance the instance by the plugin's documented billing interval, and inspect the resulting invoice
+through a control operation. If webhook handling writes to an application database after returning
+its HTTP response, the test must also wait for that database or job boundary.
+
+Use `await instance.idle()` after an ordinary operation starts callbacks or other tracked plugin
+work. A successful clock advance already waits for work registered by its time-reconciliation hooks,
+so a second idle call does not extend that guarantee into the application. It can still be useful
+after a later operation, but it is not a general “everything is done” call.
+
+A retry persisted for a future virtual instant is not current tracked work. `idle()` can settle the
+failed attempt while the retry remains scheduled in plugin state. Move time again when the plugin's
+documented retry deadline is due.
+
+[Callbacks and webhooks](/callbacks#what-idle-establishes) separates delivery settlement from
+application completion. [Integration testing](/testing#in-process-typed-tests) contains the complete
+first-party recurring-billing example.
+
+## Recover a committed failure without moving twice
+
+Clock advancement is durable because a process can stop after the clock moves but before every
+service acknowledges the window. An `INSTANCE_MUTATION_COMMITTED` control error means the clock
+already moved. Its error details contain `advanceId`, `from`, `to`, `mode`, and
+`reconciliationPending`.
+
+| Error state | Meaning | Next action |
+| --- | --- | --- |
+| `reconciliationPending: true` | At least one service has not acknowledged the committed window. | Fix the reported plugin, delivery, cancellation, or configuration cause. A persistent instance resumes pending work during restart before becoming ready; calling advance again in the running daemon with the original duration resumes the same window. |
+| `reconciliationPending: false` | Reconciliation completed, but a storage operation reported a durability warning after committing. | Inspect current clock and service state. Do not repeat the duration as a repair. |
+| A different error code | The committed-mutation contract does not apply. | Read the error and current clock status before deciding whether anything moved. |
+
+While reconciliation remains pending, an advance with a different duration is rejected rather than
+creating a second window. If an unacknowledged service was removed from config, restore the prior
+service configuration and restart so the existing window can finish. Do not reset or delete the
+world merely to hide a pending transition.
+
+The CLI prints the committed error and its boundary-scoped correlation ID. Programmatic control
+clients expose the structured details on `ControlApiError`. Use those details and current clock
+status instead of inferring recovery from the duration you originally requested.
+
+[Diagnose a failing scenario](/diagnosing#treat-asynchronous-failures-as-evidence) explains committed
+mutations alongside lifecycle conflicts and boundary-scoped logs.
+
+## Keep the resulting claim narrow
+
+A useful virtual-time test can establish that the installed plugin saw a precise time window,
+reconciled its documented state, settled its tracked work, and produced the observed local result.
+It cannot establish that application clocks, SDK internals, external queues, DNS, TLS, or a real
+provider scheduler behaved the same way.
+
+State the starting instant, duration, installed plugin version, application boundary, and observed
+effect in the test. That is enough to make the scenario repeatable without calling the whole system
+deterministic.

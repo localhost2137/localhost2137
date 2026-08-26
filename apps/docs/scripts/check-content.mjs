@@ -109,7 +109,7 @@ assert(!diagnosing?.includes("`task`, `lifecycle`"));
 const cli = content.get("cli.mdx");
 assert(cli?.includes("request, operation, delivery, and plugin logs"));
 assert(!cli?.includes("request, operation, lifecycle"));
-for (const file of ["cli.mdx", "diagnosing.mdx", "plugins/first-plugin.mdx"]) {
+for (const file of ["cli.mdx", "diagnosing.mdx", "plugins/first-plugin.mdx", "virtual-time.mdx"]) {
 	for (const fence of content.get(file)?.matchAll(/```sh\n([\s\S]*?)```/g) ?? []) {
 		assert(
 			!/<[^>\n]+>/.test(fence[1]),

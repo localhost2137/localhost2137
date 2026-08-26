@@ -26,6 +26,9 @@ export default defineConfig({
 - `clock` is either `{ mode: "real" }` or a pinned clock with an RFC 3339 `startAt`.
 - `services` is a keyed map of configured plugin factories.
 
+[Virtual time and asynchronous work](/virtual-time) explains how mode selection, durable advances,
+plugin reconciliation, and application completion affect a test.
+
 Config discovery walks upward from the working directory. Pass `--config <path>` when discovery is
 ambiguous. Config is loaded and frozen once at daemon startup; changes require a restart.
 
