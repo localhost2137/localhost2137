@@ -60,6 +60,8 @@ export class ActiveRuntimeFileStore {
 		if (typeof ownerId !== "string" || ownerId.length < 1) {
 			throw new TypeError("Active runtime removal requires an owner id.");
 		}
+		// The daemon storage lock serializes this ownership check and both unlinks
+		// against every valid publisher; the caller retains it until cleanup ends.
 		let descriptor: RuntimeDescriptor;
 		try {
 			descriptor = await readRuntimeDescriptorFile(this.#paths.runtime);

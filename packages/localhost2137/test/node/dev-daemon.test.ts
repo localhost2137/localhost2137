@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ResolvedConfig, resolveConfig } from "../../src/config/config-resolution.js";
 import { discoverActiveRuntime } from "../../src/node/active-runtime-discovery.js";
+import { ActiveRuntimeFileStore } from "../../src/node/active-runtime-file-store.js";
 import { type DevDaemon, startDevDaemon } from "../../src/node/dev-daemon.js";
 import { createDevProjectRuntime } from "../../src/node/dev-runtime-dependencies.js";
+import { acquireStorageLock } from "../../src/node/storage-lock.js";
 import { storagePaths } from "../../src/node/storage-paths.js";
 
 const temporaryDirectories: string[] = [];
@@ -188,6 +190,58 @@ describe("dev daemon", () => {
 		expect(createCalls).toBe(0);
 		expect(bindCalls).toBe(0);
 		expect(await pathExists(storagePaths(fixture.storage).lock)).toBe(false);
+	});
+
+	it("retains the storage lock through publication removal and runtime settlement", async () => {
+		const fixture = await fixtureConfig();
+		const events: string[] = [];
+		let lockPresentDuringRemoval = false;
+		let lockPresentAfterRuntimeSettlement = false;
+		const daemon = await startDevDaemon(
+			{ cwd: fixture.project, port: 0 },
+			{
+				async acquireLock(paths) {
+					const lock = await acquireStorageLock(paths);
+					const release = lock.release.bind(lock);
+					vi.spyOn(lock, "release").mockImplementation(async () => {
+						events.push("lock:release");
+						await release();
+					});
+					return lock;
+				},
+				createActiveRuntimeOwner(storageRoot) {
+					const owner = new ActiveRuntimeFileStore(storageRoot);
+					return {
+						publish: (descriptor, token) => owner.publish(descriptor, token),
+						async remove(ownerId) {
+							lockPresentDuringRemoval = await pathExists(storagePaths(storageRoot).lock);
+							events.push("runtime-files:remove");
+							return owner.remove(ownerId);
+						},
+					};
+				},
+				createRuntime(config, controlToken) {
+					const runtime = createDevProjectRuntime(config, controlToken);
+					const settled = runtime.server.settled.bind(runtime.server);
+					vi.spyOn(runtime.server, "settled").mockImplementation(async () => {
+						await settled();
+						lockPresentAfterRuntimeSettlement = await pathExists(
+							storagePaths(config.storage.dir).lock,
+						);
+						events.push("runtime:settled");
+					});
+					return runtime;
+				},
+				loadConfig: async () => fixture.config,
+			},
+		);
+		daemons.push(daemon);
+
+		await daemon.close();
+
+		expect(events).toEqual(["runtime-files:remove", "runtime:settled", "lock:release"]);
+		expect(lockPresentDuringRemoval).toBe(true);
+		expect(lockPresentAfterRuntimeSettlement).toBe(true);
 	});
 });
 
