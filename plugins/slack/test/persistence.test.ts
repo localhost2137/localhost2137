@@ -1,5 +1,4 @@
-import { readFile } from "node:fs/promises";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -120,6 +119,92 @@ describe("Slack persistence", () => {
 			expect(
 				database.raw().prepare("SELECT value FROM counters WHERE kind = 'user'").get(),
 			).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
+	it.each([
+		{
+			expectedHumanId: "U000001",
+			expectedNextId: "U000002",
+			persistedHumanId: "U000000",
+		},
+		{
+			expectedHumanId: "U000007",
+			expectedNextId: "U000008",
+			persistedHumanId: "U000007",
+		},
+	] as const)(
+		"reserves the canonical bot name when held by human $persistedHumanId",
+		async ({ expectedHumanId, expectedNextId, persistedHumanId }) => {
+			const database = await botNameConflictDatabase(persistedHumanId);
+			try {
+				migrateDatabase(database.raw());
+				expect(database.users.findById(expectedHumanId)).toMatchObject({
+					admin: true,
+					bot: false,
+					name: `localhost2137-bot-preserved-${expectedHumanId}`,
+				});
+				const service = new SlackService(database);
+				service.initialize(config(), now);
+				expect(service.requireUser("U000000")).toMatchObject({
+					admin: false,
+					bot: true,
+					name: "localhost2137-bot",
+				});
+				expect(service.authenticate(config().botToken)).toMatchObject({
+					bot: true,
+					id: "U000000",
+				});
+				expect(service.createUser({ admin: false, name: "After conflict", now }).id).toBe(
+					expectedNextId,
+				);
+			} finally {
+				database.close();
+			}
+		},
+	);
+
+	it("rolls back canonical bot-name reservation failure", async () => {
+		const database = await botNameConflictDatabase("U000007");
+		try {
+			database.raw().exec(`
+				CREATE TRIGGER reject_bot_name_reservation
+				BEFORE UPDATE OF name ON users
+				WHEN OLD.id = 'U000007'
+				BEGIN
+					SELECT RAISE(ABORT, 'injected bot name reservation failure');
+				END;
+			`);
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/injected bot name reservation failure/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(3);
+			expect(database.users.findById("U000007")).toMatchObject({
+				admin: true,
+				bot: false,
+				name: "localhost2137-bot",
+			});
+			expect(database.users.findById("U000000")).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
+	it("uses a deterministic suffix when the preserved bot name is already taken", async () => {
+		const database = await botNameConflictDatabase("U000007");
+		try {
+			database
+				.raw()
+				.prepare(
+					"INSERT INTO users(id, name, is_admin, is_bot, created_at_ms) VALUES (?, ?, 0, 0, ?)",
+				)
+				.run("U000006", "localhost2137-bot-preserved-U000007", now.getTime());
+			migrateDatabase(database.raw());
+			expect(database.users.findById("U000007")?.name).toBe(
+				"localhost2137-bot-preserved-U000007-1",
+			);
 		} finally {
 			database.close();
 		}
@@ -349,6 +434,20 @@ async function versionTwoConflictDatabase(): Promise<SlackDatabase> {
 		);
 		PRAGMA user_version = 2;
 	`);
+	return database;
+}
+
+async function botNameConflictDatabase(userId: "U000000" | "U000007"): Promise<SlackDatabase> {
+	const database = await migratedDatabase();
+	database
+		.raw()
+		.prepare("INSERT INTO users(id, name, is_admin, is_bot, created_at_ms) VALUES (?, ?, 1, 0, ?)")
+		.run(userId, "localhost2137-bot", now.getTime());
+	database
+		.raw()
+		.prepare("INSERT INTO counters(kind, value) VALUES ('user', ?)")
+		.run(userId === "U000000" ? 0 : 7);
+	database.raw().pragma("user_version = 3");
 	return database;
 }
 

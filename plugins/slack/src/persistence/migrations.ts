@@ -106,6 +106,7 @@ const migrations: readonly Migration[] = [
 		version: 4,
 		apply(database) {
 			relocateReservedBotConflict(database);
+			reserveCanonicalBotName(database);
 		},
 	},
 ];
@@ -169,11 +170,13 @@ function relocateReservedBotConflict(database: Database.Database): void {
 	const temporaryName = uniqueRelocationName(database);
 	database.prepare("UPDATE users SET name = ? WHERE id = ?").run(temporaryName, LOCAL_BOT_USER_ID);
 	const relocatedId = insertSequencedId(database, "user", undefined, (id) => {
+		const preservedName =
+			persisted.name === LOCAL_BOT_NAME ? uniquePreservedBotName(database, id) : persisted.name;
 		database
 			.prepare(
 				"INSERT INTO users(id, name, is_admin, is_bot, created_at_ms) VALUES (?, ?, ?, ?, ?)",
 			)
-			.run(id, persisted.name, persisted.is_admin, persisted.is_bot, persisted.created_at_ms);
+			.run(id, preservedName, persisted.is_admin, persisted.is_bot, persisted.created_at_ms);
 	});
 	for (const statement of [
 		"UPDATE tokens SET user_id = ? WHERE user_id = ?",
@@ -191,6 +194,27 @@ function relocateReservedBotConflict(database: Database.Database): void {
 
 function isCanonicalBot(user: PersistedUserIdentity): boolean {
 	return user.name === LOCAL_BOT_NAME && user.is_admin === 0 && user.is_bot === 1;
+}
+
+function reserveCanonicalBotName(database: Database.Database): void {
+	const conflict = database
+		.prepare("SELECT id FROM users WHERE name = ? AND id <> ?")
+		.get(LOCAL_BOT_NAME, LOCAL_BOT_USER_ID) as { id: string } | undefined;
+	if (!conflict) return;
+	database
+		.prepare("UPDATE users SET name = ? WHERE id = ?")
+		.run(uniquePreservedBotName(database, conflict.id), conflict.id);
+}
+
+function uniquePreservedBotName(database: Database.Database, userId: string): string {
+	let suffix = 0;
+	while (true) {
+		const qualifier = suffix === 0 ? "" : `-${suffix}`;
+		const candidate = `${LOCAL_BOT_NAME}-preserved-${userId}${qualifier}`;
+		const existing = database.prepare("SELECT 1 FROM users WHERE name = ?").get(candidate);
+		if (existing === undefined) return candidate;
+		suffix += 1;
+	}
 }
 
 function uniqueRelocationName(database: Database.Database): string {

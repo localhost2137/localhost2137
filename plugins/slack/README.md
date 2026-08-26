@@ -61,8 +61,10 @@ Deliberate v0.1 differences:
   rich blocks/attachments, presence, search, or message editing/deletion APIs;
 - channel posting requires membership, but scope authorization is not emulated;
 - bot and user IDs, event IDs, and Slack timestamps are deterministic database sequences;
-- `U000000` is reserved for the installed bot; upgrades relocate a conflicting persisted human to
-  the next generated user ID and rewrite its references transactionally;
+- `U000000` and `localhost2137-bot` are reserved for the installed bot; upgrades relocate a
+  conflicting persisted human to the next generated user ID, rewrite its references
+  transactionally, and preserve a conflicting human name as
+  `localhost2137-bot-preserved-{userId}` (with a deterministic numeric suffix on collision);
 - only the configured bot token is public in v0.1; local users do not receive tokens;
 - public channels are the only accepted `conversations.list` type;
 - Slack Events retries and retry headers are not emulated until durable virtual-time retries exist.
