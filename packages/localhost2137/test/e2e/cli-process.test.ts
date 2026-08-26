@@ -30,6 +30,74 @@ afterEach(async () => {
 });
 
 describe("localhost process transcript", () => {
+	it("uses one explicit, non-discoverable config for the complete CLI session", async () => {
+		const project = await mkdtemp(join(packageDirectory, "test/.tmp-cli-config-"));
+		temporaryDirectories.push(project);
+		const configPath = join(project, "custom.localhost.ts");
+		await copyFile(fixtureConfig, configPath);
+		const port = await availablePort();
+		const run = (arguments_: readonly string[]) => command(project, arguments_);
+		const runJson = (arguments_: readonly string[]) => jsonCommand(project, arguments_);
+
+		const dev = spawn(
+			process.execPath,
+			[tsxCli, sourceBin, "--config", configPath, "dev", "--port", String(port)],
+			processOptions(project),
+		);
+		runningChildren.push(dev);
+		await waitForReady(dev);
+
+		expect(
+			runJson([
+				"exec",
+				"fixture",
+				"echo",
+				"--message",
+				"custom",
+				"--json",
+				`--config=${configPath}`,
+			]),
+		).toEqual({ message: "custom" });
+		expect(runJson(["doctor", "--config", configPath, "--json"])).toMatchObject({
+			runtime: { state: "healthy", url: `http://127.0.0.1:${port}` },
+			status: "ok",
+		});
+		expect(runJson(["--config", configPath, "env", "--format", "json"])).toEqual({
+			FIXTURE_TOKEN: "fixture-secret-value",
+			FIXTURE_URL: `http://127.0.0.1:${port}/dev/fixture`,
+		});
+
+		const child = run([
+			"--config",
+			configPath,
+			"run",
+			"--",
+			process.execPath,
+			"-e",
+			'if (JSON.stringify(process.argv.slice(1)) !== JSON.stringify(["--config", "child.ts"])) process.exit(23)',
+			"--",
+			"--config",
+			"child.ts",
+		]);
+		expect(child.status).toBe(0);
+
+		const delimiter = run([
+			"--config",
+			configPath,
+			"exec",
+			"fixture",
+			"echo",
+			"--",
+			"--instance",
+			"nope",
+		]);
+		expect(delimiter.status).toBe(2);
+		expect(delimiter.stderr).not.toContain('no instance "nope"');
+
+		dev.kill("SIGINT");
+		expect(await processExit(dev)).toEqual({ code: 130, signal: null });
+	}, 30_000);
+
 	it("executes the non-Slack v0.1 command surface against one real daemon", async () => {
 		const project = await mkdtemp(join(packageDirectory, "test/.tmp-cli-process-"));
 		temporaryDirectories.push(project);
