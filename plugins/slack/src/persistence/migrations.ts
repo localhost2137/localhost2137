@@ -7,7 +7,7 @@ import {
 import { LOCAL_BOT_NAME, LOCAL_BOT_USER_ID } from "../slack-identities.js";
 import { insertSequencedId, reconcileSequenceId, type SequenceKind } from "./id-sequence.js";
 
-export const CURRENT_DATABASE_VERSION = 6;
+export const CURRENT_DATABASE_VERSION = 7;
 
 interface Migration {
 	readonly version: number;
@@ -130,6 +130,81 @@ const migrations: readonly Migration[] = [
 			normalizeMessageTimestamps(database);
 		},
 	},
+	{
+		version: 7,
+		apply(database) {
+			if (columnExists(database, "event_deliveries", "next_attempt_at_ms")) return;
+			database.exec(`
+				ALTER TABLE event_delivery_attempts RENAME TO event_delivery_attempts_v6;
+				ALTER TABLE event_deliveries RENAME TO event_deliveries_v6;
+
+				CREATE TABLE event_deliveries (
+					event_id TEXT PRIMARY KEY,
+					message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+					status TEXT NOT NULL CHECK (status IN ('pending', 'retry_scheduled', 'succeeded', 'exhausted')),
+					requested_at_ms INTEGER NOT NULL,
+					completed_at_ms INTEGER,
+					next_attempt_at_ms INTEGER,
+					status_code INTEGER,
+					error TEXT,
+					retry_reason TEXT,
+					CHECK (
+						(status = 'pending' AND completed_at_ms IS NULL AND next_attempt_at_ms IS NULL AND retry_reason IS NULL)
+						OR (status = 'retry_scheduled' AND completed_at_ms IS NULL AND next_attempt_at_ms IS NOT NULL AND retry_reason IS NOT NULL)
+						OR (status IN ('succeeded', 'exhausted') AND completed_at_ms IS NOT NULL AND next_attempt_at_ms IS NULL AND retry_reason IS NULL)
+					)
+				);
+				CREATE INDEX event_deliveries_due_retry
+					ON event_deliveries(next_attempt_at_ms, event_id)
+					WHERE status = 'retry_scheduled';
+
+				CREATE TABLE event_delivery_attempts (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					event_id TEXT NOT NULL REFERENCES event_deliveries(event_id) ON DELETE CASCADE,
+					attempt INTEGER NOT NULL CHECK (attempt BETWEEN 1 AND 4),
+					scheduled_at_ms INTEGER NOT NULL,
+					started_at_ms INTEGER NOT NULL,
+					completed_at_ms INTEGER,
+					status_code INTEGER,
+					error TEXT,
+					retry_reason TEXT,
+					CHECK (
+						(attempt = 1 AND retry_reason IS NULL)
+						OR (attempt > 1 AND retry_reason IS NOT NULL)
+					),
+					UNIQUE (event_id, attempt)
+				);
+
+				INSERT INTO event_deliveries(
+					event_id, message_id, status, requested_at_ms, completed_at_ms,
+					next_attempt_at_ms, status_code, error, retry_reason
+				)
+				SELECT
+					event_id,
+					message_id,
+					CASE status WHEN 'failed' THEN 'exhausted' ELSE status END,
+					requested_at_ms,
+					completed_at_ms,
+					NULL,
+					status_code,
+					error,
+					NULL
+				FROM event_deliveries_v6;
+
+				INSERT INTO event_delivery_attempts(
+					id, event_id, attempt, scheduled_at_ms, started_at_ms,
+					completed_at_ms, status_code, error, retry_reason
+				)
+				SELECT
+					id, event_id, attempt, started_at_ms, started_at_ms,
+					completed_at_ms, status_code, error, NULL
+				FROM event_delivery_attempts_v6;
+
+				DROP TABLE event_delivery_attempts_v6;
+				DROP TABLE event_deliveries_v6;
+			`);
+		},
+	},
 ];
 
 export function migrateDatabase(database: Database.Database): void {
@@ -168,6 +243,11 @@ function tableExists(database: Database.Database, name: string): boolean {
 			.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
 			.get(name) !== undefined
 	);
+}
+
+function columnExists(database: Database.Database, table: string, column: string): boolean {
+	const rows = database.pragma(`table_info(${table})`) as Array<{ name?: unknown }>;
+	return rows.some((row) => row.name === column);
 }
 
 function reconcileRows(database: Database.Database, kind: SequenceKind, query: string): void {

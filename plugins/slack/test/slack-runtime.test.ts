@@ -532,6 +532,7 @@ describe("Slack runtime integration", () => {
 				entries: expect.arrayContaining([
 					expect.objectContaining({
 						attributes: {
+							attempt: 1,
 							eventId: message.eventId,
 							outcome: "succeeded",
 							statusCode: 204,
@@ -574,9 +575,11 @@ describe("Slack runtime integration", () => {
 				entries: expect.arrayContaining([
 					expect.objectContaining({
 						attributes: {
+							attempt: 1,
 							...(status === undefined ? {} : { statusCode: status }),
 							error: status === undefined ? "timeout" : "non_success_status",
 							eventId: message.eventId,
+							nextAttemptAt: "2026-01-01T00:00:00.000Z",
 							outcome: "failed",
 						},
 						kind: "plugin",
@@ -585,6 +588,40 @@ describe("Slack runtime integration", () => {
 					}),
 				]),
 			});
+		} finally {
+			await instance.destroy();
+		}
+	});
+
+	it("retries failed Events callbacks when the instance clock advances", async () => {
+		const deliveries: ReceivedRequest[] = [];
+		const receiver = await startReceiver(async (request, response) => {
+			deliveries.push(await readRequest(request));
+			response.writeHead(deliveries.length === 1 ? 503 : 204).end();
+		});
+		const runtime = await startRuntime(slack, receiver.url);
+		const instance = await runtime.createInstance();
+		try {
+			const channel = await instance.slack.createChannel({ name: "general" });
+			const message = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: "U000000",
+				text: "retry me",
+			});
+
+			await expect(instance.clock.advance("1ms")).resolves.toMatchObject({
+				from: "2026-01-01T00:00:00.000Z",
+				mode: "pinned",
+				to: "2026-01-01T00:00:00.001Z",
+			});
+
+			expect(deliveries).toHaveLength(2);
+			expect(requiredHeader(deliveries[1]?.headers ?? {}, "x-slack-retry-num")).toBe("1");
+			expect(requiredHeader(deliveries[1]?.headers ?? {}, "x-slack-retry-reason")).toBe(
+				"http_error",
+			);
+			expect(JSON.parse(deliveries[1]?.body ?? "{}")).toMatchObject({ event_id: message.eventId });
+			await expect(instance.idle()).rejects.toThrow(/tracked task|failed/i);
 		} finally {
 			await instance.destroy();
 		}

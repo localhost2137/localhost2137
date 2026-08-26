@@ -35,14 +35,17 @@ export interface SlackMessage {
 	readonly userId: UserId;
 }
 
-type DeliveryStatus = "failed" | "pending" | "succeeded";
+type DeliveryStatus = "exhausted" | "pending" | "retry_scheduled" | "succeeded";
 
 export interface EventDelivery {
+	readonly attemptCount: number;
 	readonly completedAt: Date | null;
 	readonly error: string | null;
 	readonly eventId: EventId;
 	readonly messageId: MessageId;
+	readonly nextAttemptAt: Date | null;
 	readonly requestedAt: Date;
+	readonly retryReason: string | null;
 	readonly status: DeliveryStatus;
 	readonly statusCode: number | null;
 }

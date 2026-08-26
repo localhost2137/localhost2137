@@ -55,7 +55,7 @@ parameters. Cursor pagination is opaque, method/filter-bound, and based on deter
 | `conversations.history` | newest-first messages, cursor/bounds pagination, thread fields |
 | `chat.postMessage` | bot messages, optional `thread_ts`, Events callback emission |
 
-Deliberate v0.1 differences:
+Deliberate differences:
 
 - no HTTPS, OAuth, scopes, rate limits, enterprise/grid, DMs, private channels, files, reactions,
   rich blocks/attachments, presence, search, or message editing/deletion APIs;
@@ -67,7 +67,8 @@ Deliberate v0.1 differences:
   `localhost2137-bot-preserved-{userId}` (with a deterministic numeric suffix on collision);
 - only the configured bot token is public in v0.1; local users do not receive tokens;
 - public channels are the only accepted `conversations.list` type;
-- Slack Events retries and retry headers are not emulated until durable virtual-time retries exist.
+- Events retries are driven only by explicit virtual-time advancement; there is no wall-clock
+  scheduler.
 
 ## Control operations
 
@@ -87,12 +88,21 @@ same domain errors to Slack-shaped responses.
 
 Each message event gets one stable `event_id`. Delivery uses the exact compact JSON bytes signed by
 `v0=HMAC_SHA256(signingSecret, "v0:{timestamp}:{body}")` and sends
-`X-Slack-Request-Timestamp` plus `X-Slack-Signature`. One three-second attempt runs through
+`X-Slack-Request-Timestamp` plus `X-Slack-Signature`. Each three-second attempt runs through
 `ctx.fetch` and is tracked by the instance. Success, non-2xx, timeout, and transport outcomes are
 persisted in SQLite. Generic outbound logs describe transport acceptance, while the Slack plugin
-emits a separate safe semantic outcome (`eventId`, `outcome`, optional `statusCode`, and classified
-`error`) only after the terminal delivery state is persisted. `instance.idle()` waits for delivery
-work and surfaces failed attempts. There are no automatic retries in v0.1.
+emits a separate safe semantic outcome only after the attempt result and next deadline are stored.
+`instance.idle()` waits for delivery work and surfaces a failed initial attempt.
+
+Retries follow Slack's documented bounded schedule: retry 1 is due immediately, retry 2 one minute
+later, and retry 3 five minutes after that. Because localhost2137 has no real-time scheduler, the
+immediate retry runs on the next positive `instance.clock.advance(...)`; one large advance drains
+every crossed deadline. Retries reuse the stable event body and add `X-Slack-Retry-Num` plus a
+locally meaningful `X-Slack-Retry-Reason`: `http_timeout`, `connection_failed`, `http_error`, or
+`unknown_error`. A failed response with `X-Slack-No-Retry: 1` suppresses remaining attempts. This
+matches the relevant subset of Slack's
+[Events API retry contract](https://docs.slack.dev/apis/events-api/), while deliberately omitting
+redirect and TLS-specific failure classifications that the local transport does not expose.
 
 Use real clock mode with Bolt's default replay-window verification. Pinned-clock signature tests
 should verify the supplied virtual timestamp directly instead of comparing it with wall time.
@@ -107,7 +117,7 @@ events adapter ---------------------> delivery repository
 lifecycle --------------------------> database resource owner
 ```
 
-Raw parameterized SQL and six explicit migrations own the schema. Repositories map rows to domain
+Raw parameterized SQL and seven explicit migrations own the schema. Repositories map rows to domain
 records. `SlackDatabase` is the only connection resource owner, closes idempotently, enables foreign
 keys/WAL, and provides the transaction boundary for multi-row message/event creation. The plugin
 never imports runtime internals and keeps no module-global instance state.

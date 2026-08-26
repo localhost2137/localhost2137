@@ -2,8 +2,10 @@ import type { PluginClock, PluginLogger, TaskTracker } from "localhost2137";
 import type { SlackConfig } from "../config.js";
 import type { EventId, SlackMessage, SlackUser } from "../domain/models.js";
 import type { SlackDatabase } from "../persistence/database.js";
+import type { DueDeliveryAttempt } from "../persistence/delivery-repository.js";
 import { createMessageEventEnvelope } from "./event-envelope.js";
 import { signSlackRequest } from "./request-signature.js";
+import { type DeliveryError, nextRetryDeadline, retryReasonFor } from "./retry-policy.js";
 
 const DEFAULT_DELIVERY_TIMEOUT_MS = 3_000;
 
@@ -37,27 +39,51 @@ export class SlackEventDispatcher {
 		this.#timeoutSignal = dependencies.timeoutSignal ?? AbortSignal.timeout;
 	}
 
+	async reconcileThrough(context: EventRuntimeContext, through: Date): Promise<void> {
+		const url = this.#config.eventsUrl;
+		if (!url) return;
+		for (;;) {
+			const attempt = this.#database.deliveries.dueAttempt(through);
+			if (!attempt) return;
+			const delivery = this.#database.deliveries.get(attempt.eventId);
+			const message = this.#database.messages.getById(delivery.messageId);
+			const actor = this.#database.users.getById(message.userId);
+			await this.#deliver(context, url, { actor, message }, attempt, false);
+		}
+	}
+
 	schedule(
 		context: EventRuntimeContext,
 		input: Readonly<{ actor: SlackUser; eventId: EventId; message: SlackMessage }>,
 	): void {
 		const url = this.#config.eventsUrl;
 		if (!url) return;
-		const delivery = this.#deliver(context, url, input);
+		const attempt = Object.freeze({
+			attempt: 1,
+			eventId: input.eventId,
+			retryReason: null,
+			scheduledAt: context.clock.now(),
+		});
+		const delivery = this.#deliver(context, url, input, attempt, true);
 		void context.tasks.track(`Slack event ${input.eventId}`, delivery).catch(() => undefined);
 	}
 
 	async #deliver(
 		context: EventRuntimeContext,
 		url: string,
-		input: Readonly<{ actor: SlackUser; eventId: EventId; message: SlackMessage }>,
+		input: Readonly<{ actor: SlackUser; message: SlackMessage }>,
+		attempt: DueDeliveryAttempt,
+		surfaceCallbackFailure: boolean,
 	): Promise<void> {
 		const startedAt = context.clock.now();
-		this.#database.deliveries.startAttempt(input.eventId, startedAt);
+		this.#database.deliveries.startAttempt(attempt.eventId, {
+			...attempt,
+			now: startedAt,
+		});
 		const body = JSON.stringify(
 			createMessageEventEnvelope({
 				actor: input.actor,
-				eventId: input.eventId,
+				eventId: attempt.eventId,
 				message: input.message,
 				workspace: this.#database.workspace.get(),
 			}),
@@ -71,6 +97,12 @@ export class SlackEventDispatcher {
 				body,
 				headers: {
 					"content-type": "application/json; charset=utf-8",
+					...(attempt.retryReason
+						? {
+								"x-slack-retry-num": String(attempt.attempt - 1),
+								"x-slack-retry-reason": attempt.retryReason,
+							}
+						: {}),
 					"x-slack-request-timestamp": timestamp,
 					"x-slack-signature": signSlackRequest({
 						body,
@@ -83,11 +115,13 @@ export class SlackEventDispatcher {
 			});
 		} catch {
 			const error = attemptTimedOut(attemptSignal, timeout) ? "timeout" : "transport_error";
-			this.#completeFailure(context, input.eventId, { error });
+			this.#completeFailure(context, attempt, { error });
 			// ctx.fetch owns transport failure reporting. The outer tracked task
 			// stays successful after the durable outcome is recorded.
 			return;
 		}
+
+		const suppressRetry = !response.ok && response.headers.get("x-slack-no-retry")?.trim() === "1";
 		try {
 			await discardResponseBody(response.body, attemptSignal);
 		} catch (cause) {
@@ -97,25 +131,35 @@ export class SlackEventDispatcher {
 					? "timeout"
 					: "transport_error"
 				: "response_body_error";
-			this.#completeFailure(context, input.eventId, {
+			this.#completeFailure(context, attempt, {
 				error,
 				statusCode: response.status,
+				suppressRetry,
 			});
-			throw new Error(responseDisposalFailureMessage(error), { cause });
+			if (surfaceCallbackFailure) {
+				throw new Error(responseDisposalFailureMessage(error), { cause });
+			}
+			return;
 		}
 		if (!response.ok) {
-			this.#completeFailure(context, input.eventId, {
+			this.#completeFailure(context, attempt, {
 				error: "non_success_status",
 				statusCode: response.status,
+				suppressRetry,
 			});
-			throw new Error(`Slack event delivery returned HTTP ${response.status}.`);
+			if (surfaceCallbackFailure) {
+				throw new Error(`Slack event delivery returned HTTP ${response.status}.`);
+			}
+			return;
 		}
-		this.#database.deliveries.completeSuccess(input.eventId, {
+		this.#database.deliveries.completeSuccess(attempt.eventId, {
+			attempt: attempt.attempt,
 			now: context.clock.now(),
 			statusCode: response.status,
 		});
 		logDeliveryOutcome(context.log, {
-			eventId: input.eventId,
+			attempt: attempt.attempt,
+			eventId: attempt.eventId,
 			outcome: "succeeded",
 			statusCode: response.status,
 		});
@@ -123,22 +167,30 @@ export class SlackEventDispatcher {
 
 	#completeFailure(
 		context: EventRuntimeContext,
-		eventId: EventId,
+		attempt: DueDeliveryAttempt,
 		input: Readonly<{
-			error: "non_success_status" | "response_body_error" | "timeout" | "transport_error";
+			error: DeliveryError;
 			statusCode?: number;
+			suppressRetry?: boolean;
 		}>,
 	): void {
-		this.#database.deliveries.completeFailure(eventId, {
+		const retryReason = retryReasonFor(input.error);
+		const nextAttemptAt = input.suppressRetry === true ? undefined : nextRetryDeadline(attempt);
+		this.#database.deliveries.completeFailure(attempt.eventId, {
+			attempt: attempt.attempt,
 			error: input.error,
+			...(nextAttemptAt ? { nextAttemptAt, retryReason } : {}),
 			now: context.clock.now(),
 			...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
 		});
 		logDeliveryOutcome(context.log, {
+			attempt: attempt.attempt,
 			error: input.error,
-			eventId,
+			eventId: attempt.eventId,
+			...(nextAttemptAt ? { nextAttemptAt } : {}),
 			outcome: "failed",
 			...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
+			suppressed: input.suppressRetry === true,
 		});
 	}
 }
@@ -204,16 +256,22 @@ function responseDisposalFailureMessage(
 function logDeliveryOutcome(
 	logger: PluginLogger,
 	input: Readonly<{
-		error?: "non_success_status" | "response_body_error" | "timeout" | "transport_error";
+		attempt: number;
+		error?: DeliveryError;
 		eventId: EventId;
+		nextAttemptAt?: Date;
 		outcome: "failed" | "succeeded";
 		statusCode?: number;
+		suppressed?: boolean;
 	}>,
 ): void {
 	logger.info("Slack event delivery completed.", {
+		attempt: input.attempt,
 		...(input.error ? { error: input.error } : {}),
 		eventId: input.eventId,
+		...(input.nextAttemptAt ? { nextAttemptAt: input.nextAttemptAt.toISOString() } : {}),
 		outcome: input.outcome,
 		...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
+		...(input.suppressed ? { retrySuppressed: true } : {}),
 	});
 }

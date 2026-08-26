@@ -19,7 +19,11 @@ afterEach(async () => {
 describe("Slack event response ownership", () => {
 	it.each([
 		{ expectedError: null, expectedStatus: "succeeded", statusCode: 200 },
-		{ expectedError: "non_success_status", expectedStatus: "failed", statusCode: 503 },
+		{
+			expectedError: "non_success_status",
+			expectedStatus: "retry_scheduled",
+			statusCode: 503,
+		},
 	] as const)(
 		"keeps tracked $statusCode streaming-response work open until cancellation completes",
 		async ({ expectedError, expectedStatus, statusCode }) => {
@@ -85,9 +89,11 @@ describe("Slack event response ownership", () => {
 				expect(logs.entries).toEqual([
 					{
 						attributes: {
+							attempt: 1,
 							...(expectedError ? { error: expectedError } : {}),
 							eventId: fixture.event.eventId,
-							outcome: expectedStatus,
+							...(expectedError ? { nextAttemptAt: now.toISOString() } : {}),
+							outcome: expectedError ? "failed" : "succeeded",
 							statusCode,
 						},
 						message: "Slack event delivery completed.",
@@ -130,7 +136,7 @@ describe("Slack event response ownership", () => {
 			expect(Date.now() - startedAt).toBeLessThan(1_000);
 			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
 				error: "timeout",
-				status: "failed",
+				status: "retry_scheduled",
 				statusCode: 200,
 			});
 			expect(logs.entries).toHaveLength(1);
@@ -169,14 +175,16 @@ describe("Slack event response ownership", () => {
 			await expect(tracked.only()).rejects.toThrow(/response body could not be discarded/);
 			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
 				error: "response_body_error",
-				status: "failed",
+				status: "retry_scheduled",
 				statusCode: 200,
 			});
 			expect(logs.entries).toEqual([
 				{
 					attributes: {
+						attempt: 1,
 						error: "response_body_error",
 						eventId: fixture.event.eventId,
+						nextAttemptAt: now.toISOString(),
 						outcome: "failed",
 						statusCode: 200,
 					},
@@ -239,14 +247,16 @@ describe("Slack event response ownership", () => {
 				await expect(tracked.only()).rejects.toThrow(message);
 				expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
 					error,
-					status: "failed",
+					status: "retry_scheduled",
 					statusCode: 200,
 				});
 				expect(logs.entries).toEqual([
 					{
 						attributes: {
+							attempt: 1,
 							error,
 							eventId: fixture.event.eventId,
+							nextAttemptAt: now.toISOString(),
 							outcome: "failed",
 							statusCode: 200,
 						},
@@ -290,12 +300,18 @@ describe("Slack event response ownership", () => {
 			await expect(tracked.only()).resolves.toBeUndefined();
 			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
 				error,
-				status: "failed",
+				status: "retry_scheduled",
 				statusCode: null,
 			});
 			expect(logs.entries).toEqual([
 				{
-					attributes: { error, eventId: fixture.event.eventId, outcome: "failed" },
+					attributes: {
+						attempt: 1,
+						error,
+						eventId: fixture.event.eventId,
+						nextAttemptAt: now.toISOString(),
+						outcome: "failed",
+					},
 					message: "Slack event delivery completed.",
 				},
 			]);
@@ -332,6 +348,173 @@ describe("Slack event response ownership", () => {
 			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
 				completedAt: null,
 				status: "pending",
+			});
+		} finally {
+			fixture.database.close();
+		}
+	});
+});
+
+describe("Slack event retries", () => {
+	it("uses Slack's bounded retry schedule and headers with a stable event body", async () => {
+		const fixture = await deliveryFixture();
+		try {
+			const current = { value: now };
+			const requests: Array<Readonly<{ body: string; headers: Headers }>> = [];
+			const tracked = trackedTasks();
+			const context = eventContext(current, tracked.tasks, async (_url, init) => {
+				requests.push(
+					Object.freeze({
+						body: String(init?.body),
+						headers: new Headers(init?.headers),
+					}),
+				);
+				return new Response(null, { status: 503 });
+			});
+
+			fixture.dispatcher.schedule(context, fixture.event);
+			await expect(tracked.only()).rejects.toThrow("HTTP 503");
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 1,
+				nextAttemptAt: now,
+				retryReason: "http_error",
+				status: "retry_scheduled",
+			});
+
+			current.value = new Date(now.getTime() + 1);
+			await fixture.dispatcher.reconcileThrough(context, current.value);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 2,
+				nextAttemptAt: new Date(now.getTime() + 60_000),
+			});
+
+			current.value = new Date(now.getTime() + 60_000);
+			await fixture.dispatcher.reconcileThrough(context, current.value);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 3,
+				nextAttemptAt: new Date(now.getTime() + 6 * 60_000),
+			});
+
+			current.value = new Date(now.getTime() + 6 * 60_000);
+			await fixture.dispatcher.reconcileThrough(context, current.value);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 4,
+				completedAt: current.value,
+				nextAttemptAt: null,
+				status: "exhausted",
+			});
+
+			expect(requests).toHaveLength(4);
+			expect(requests.map((request) => request.body)).toEqual(Array(4).fill(requests[0]?.body));
+			expect(JSON.parse(requests[0]?.body ?? "{}")).toMatchObject({
+				event_id: fixture.event.eventId,
+			});
+			expect(
+				requests.map((request) => ({
+					num: request.headers.get("x-slack-retry-num"),
+					reason: request.headers.get("x-slack-retry-reason"),
+				})),
+			).toEqual([
+				{ num: null, reason: null },
+				{ num: "1", reason: "http_error" },
+				{ num: "2", reason: "http_error" },
+				{ num: "3", reason: "http_error" },
+			]);
+		} finally {
+			fixture.database.close();
+		}
+	});
+
+	it("stops after a successful retry and honors x-slack-no-retry", async () => {
+		for (const scenario of ["success", "suppressed"] as const) {
+			const fixture = await deliveryFixture();
+			try {
+				const current = { value: now };
+				let calls = 0;
+				const tracked = trackedTasks();
+				const context = eventContext(current, tracked.tasks, async () => {
+					calls += 1;
+					if (scenario === "success" && calls === 2) return new Response(null, { status: 204 });
+					return new Response(null, {
+						headers: scenario === "suppressed" ? { "x-slack-no-retry": "1" } : {},
+						status: 503,
+					});
+				});
+
+				fixture.dispatcher.schedule(context, fixture.event);
+				await expect(tracked.only()).rejects.toThrow("HTTP 503");
+				current.value = new Date(now.getTime() + 10 * 60_000);
+				await fixture.dispatcher.reconcileThrough(context, current.value);
+
+				expect(calls).toBe(scenario === "success" ? 2 : 1);
+				expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+					attemptCount: scenario === "success" ? 2 : 1,
+					status: scenario === "success" ? "succeeded" : "exhausted",
+				});
+			} finally {
+				fixture.database.close();
+			}
+		}
+	});
+
+	it("drains every deadline crossed by one large advance", async () => {
+		const fixture = await deliveryFixture();
+		try {
+			const current = { value: now };
+			let calls = 0;
+			const tracked = trackedTasks();
+			const context = eventContext(current, tracked.tasks, async () => {
+				calls += 1;
+				return new Response(null, { status: 503 });
+			});
+
+			fixture.dispatcher.schedule(context, fixture.event);
+			await expect(tracked.only()).rejects.toThrow("HTTP 503");
+			current.value = new Date(now.getTime() + 10 * 60_000);
+			await fixture.dispatcher.reconcileThrough(context, current.value);
+
+			expect(calls).toBe(4);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 4,
+				status: "exhausted",
+			});
+		} finally {
+			fixture.database.close();
+		}
+	});
+
+	it("replays an incomplete attempt without allocating a duplicate attempt number", async () => {
+		const fixture = await deliveryFixture();
+		try {
+			const current = { value: now };
+			let calls = 0;
+			const tracked = trackedTasks();
+			const context = eventContext(current, tracked.tasks, async () => {
+				calls += 1;
+				return new Response(null, { status: 503 });
+			});
+
+			fixture.dispatcher.schedule(context, fixture.event);
+			await expect(tracked.only()).rejects.toThrow("HTTP 503");
+			fixture.database.raw().exec(`
+				CREATE TRIGGER reject_retry_state
+				BEFORE UPDATE OF status ON event_deliveries
+				BEGIN
+					SELECT RAISE(ABORT, 'injected retry persistence failure');
+				END;
+			`);
+			current.value = new Date(now.getTime() + 1);
+			await expect(fixture.dispatcher.reconcileThrough(context, current.value)).rejects.toThrow(
+				/injected retry persistence failure/,
+			);
+			fixture.database.raw().exec("DROP TRIGGER reject_retry_state");
+			await fixture.dispatcher.reconcileThrough(context, current.value);
+
+			expect(calls).toBe(3);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 2,
+				nextAttemptAt: new Date(now.getTime() + 60_000),
+				status: "retry_scheduled",
 			});
 		} finally {
 			fixture.database.close();
@@ -383,6 +566,20 @@ function capturedLogs(): Readonly<{
 				entries.push({ ...(attributes ? { attributes } : {}), message });
 			},
 		},
+	};
+}
+
+function eventContext(
+	clock: { value: Date },
+	tasks: TaskTracker,
+	fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+	return {
+		clock: { now: () => clock.value },
+		fetch,
+		log: capturedLogs().logger,
+		signal: new AbortController().signal,
+		tasks,
 	};
 }
 

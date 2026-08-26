@@ -7,15 +7,24 @@ import { SlackDatabase } from "./persistence/database.js";
 import { assertCurrentDatabaseVersion, migrateDatabase } from "./persistence/migrations.js";
 import type { SlackState } from "./state.js";
 
-export function createSlackLifecycle(dependencies: SlackPluginDependencies): Lifecycle<
-	SlackState,
-	SlackConfig
-> & {
+interface SlackTimeAdvance {
+	readonly advanceId: string;
+	readonly from: Date;
+	readonly to: Date;
+}
+
+type SlackLifecycle = Lifecycle<SlackState, SlackConfig> & {
+	readonly onTimeAdvanced: (
+		context: RunningPluginContext<SlackState, SlackConfig>,
+		advance: SlackTimeAdvance,
+	) => Promise<void>;
 	readonly seed: (
 		context: RunningPluginContext<SlackState, SlackConfig>,
 		seed: SlackSeed,
 	) => Promise<void> | void;
-} {
+};
+
+export function createSlackLifecycle(dependencies: SlackPluginDependencies): SlackLifecycle {
 	return {
 		create(context) {
 			dependencies.recordLifecycle?.("create");
@@ -24,6 +33,9 @@ export function createSlackLifecycle(dependencies: SlackPluginDependencies): Lif
 				migrateDatabase(database.raw());
 				new SlackService(database).initialize(context.config, context.clock.now());
 			});
+		},
+		onTimeAdvanced(context, advance) {
+			return context.state.events.reconcileThrough(context, advance.to);
 		},
 		seed(context, seed) {
 			dependencies.recordLifecycle?.("seed");

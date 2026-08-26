@@ -466,7 +466,7 @@ describe("Slack persistence", () => {
 				database = new SlackDatabase(path);
 				migrateDatabase(database.raw());
 				migrateDatabase(database.raw());
-				expect(database.raw().pragma("user_version", { simple: true })).toBe(6);
+				expect(database.raw().pragma("user_version", { simple: true })).toBe(7);
 				expect(database.messages.getById(older.id).ts).toBe("0.999999");
 				expect(database.messages.getById(parent.id).ts).toBe("1.100000");
 				expect(database.messages.getById(reply.id)).toMatchObject({
@@ -629,8 +629,8 @@ describe("Slack persistence", () => {
 		const database = await migratedDatabase();
 		try {
 			database.raw().pragma(`user_version = ${CURRENT_DATABASE_VERSION + 1}`);
-			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 6/);
-			expect(database.raw().pragma("user_version", { simple: true })).toBe(7);
+			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 7/);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(8);
 		} finally {
 			database.close();
 		}
@@ -955,6 +955,60 @@ describe("Slack persistence", () => {
 		}
 	});
 
+	it("migrates version-6 delivery outcomes without inventing retry work", async () => {
+		const database = await migratedDatabase();
+		try {
+			downgradeDeliverySchema(database);
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			const message = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "legacy failure",
+				user: "U000000",
+			}).message;
+			const eventId = "Ev000001";
+			database
+				.raw()
+				.prepare(
+					`INSERT INTO event_deliveries(event_id, message_id, status, requested_at_ms)
+					 VALUES (?, ?, 'pending', ?)`,
+				)
+				.run(eventId, message.id, now.getTime());
+			database
+				.raw()
+				.prepare(
+					`INSERT INTO event_delivery_attempts(
+						event_id, attempt, started_at_ms, completed_at_ms, status_code, error
+					 ) VALUES (?, 1, ?, ?, 503, 'non_success_status')`,
+				)
+				.run(eventId, now.getTime(), now.getTime());
+			database
+				.raw()
+				.prepare(
+					`UPDATE event_deliveries
+					 SET status = 'failed', completed_at_ms = ?, status_code = 503,
+					     error = 'non_success_status'
+					 WHERE event_id = ?`,
+				)
+				.run(now.getTime(), eventId);
+
+			migrateDatabase(database.raw());
+
+			expect(database.deliveries.get(eventId)).toMatchObject({
+				attemptCount: 1,
+				completedAt: now,
+				nextAttemptAt: null,
+				status: "exhausted",
+			});
+			expect(database.deliveries.dueAttempt(new Date(now.getTime() + 60 * 60_000))).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
 	it.each(["failure", "success"] as const)(
 		"rolls back both delivery records when injected attempt %s completion fails",
 		async (outcome) => {
@@ -972,7 +1026,12 @@ describe("Slack persistence", () => {
 				});
 				const eventId = created.deliveryEventId;
 				if (!eventId) throw new TypeError("Expected an event delivery fixture.");
-				database.deliveries.startAttempt(eventId, now);
+				database.deliveries.startAttempt(eventId, {
+					attempt: 1,
+					now,
+					retryReason: null,
+					scheduledAt: now,
+				});
 				database.raw().exec(`
 					CREATE TRIGGER reject_delivery_attempt_completion
 					BEFORE UPDATE OF completed_at_ms ON event_delivery_attempts
@@ -983,9 +1042,14 @@ describe("Slack persistence", () => {
 
 				expect(() => {
 					if (outcome === "success") {
-						database.deliveries.completeSuccess(eventId, { now, statusCode: 204 });
+						database.deliveries.completeSuccess(eventId, {
+							attempt: 1,
+							now,
+							statusCode: 204,
+						});
 					} else {
 						database.deliveries.completeFailure(eventId, {
+							attempt: 1,
 							error: "transport_error",
 							now,
 						});
@@ -1026,9 +1090,13 @@ describe("Slack persistence", () => {
 			}).deliveryEventId;
 			if (!eventId) throw new TypeError("Expected an event delivery fixture.");
 
-			expect(() => database.deliveries.completeSuccess(eventId, { now, statusCode: 204 })).toThrow(
-				/no active first attempt/,
-			);
+			expect(() =>
+				database.deliveries.completeSuccess(eventId, {
+					attempt: 1,
+					now,
+					statusCode: 204,
+				}),
+			).toThrow(/no active attempt 1/);
 			expect(database.deliveries.get(eventId)).toMatchObject({
 				completedAt: null,
 				status: "pending",
@@ -1109,6 +1177,33 @@ function messageTimestampCounter(database: SlackDatabase): bigint | undefined {
 function downgradeTimestampMigration(database: SlackDatabase, version: 2 | 3 | 4 | 5): void {
 	if (version < 5) database.raw().exec("DROP INDEX IF EXISTS messages_channel_ts_microseconds");
 	database.raw().pragma(`user_version = ${version}`);
+}
+
+function downgradeDeliverySchema(database: SlackDatabase): void {
+	database.raw().exec(`
+		DROP TABLE event_delivery_attempts;
+		DROP TABLE event_deliveries;
+		CREATE TABLE event_deliveries (
+			event_id TEXT PRIMARY KEY,
+			message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+			requested_at_ms INTEGER NOT NULL,
+			completed_at_ms INTEGER,
+			status_code INTEGER,
+			error TEXT
+		);
+		CREATE TABLE event_delivery_attempts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL REFERENCES event_deliveries(event_id) ON DELETE CASCADE,
+			attempt INTEGER NOT NULL CHECK (attempt = 1),
+			started_at_ms INTEGER NOT NULL,
+			completed_at_ms INTEGER,
+			status_code INTEGER,
+			error TEXT,
+			UNIQUE (event_id, attempt)
+		);
+	`);
+	database.raw().pragma("user_version = 6");
 }
 
 function timestampOrderingIndex(database: SlackDatabase): unknown {
