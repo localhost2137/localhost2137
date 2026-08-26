@@ -302,12 +302,19 @@ observed message: ping
 sent reply: pong
 ```
 
-Current `listMessages` contract for the final exercise state (delivery-only `eventId` is intentionally
-not part of persisted list items):
+Final control-plane observation, preserved verbatim from the exercise HEAD:
 
 ```text
 $ pnpm exec localhost --config ./localhost.config.mjs \
     exec slack list-messages --channel general --json
+[{"channel":"C000001","eventId":null,"id":"M000002","text":"pong","threadTs":null,"ts":"1787735748.512000","userId":"U000000"},{"channel":"C000001","eventId":null,"id":"M000001","text":"ping","threadTs":null,"ts":"1787735748.496000","userId":"U000001"}]
+```
+
+Contract correction (2026-08-26, `253e1ff`): the transcript above truthfully reflects the then-HEAD
+schema. Current `listMessages` items omit the delivery-only `eventId`; the equivalent shape for that
+historical state is shown below as an illustrative projection, not a second observed external run:
+
+```json
 [{"channel":"C000001","id":"M000002","text":"pong","threadTs":null,"ts":"1787735748.512000","userId":"U000000"},{"channel":"C000001","id":"M000001","text":"ping","threadTs":null,"ts":"1787735748.496000","userId":"U000001"}]
 ```
 
