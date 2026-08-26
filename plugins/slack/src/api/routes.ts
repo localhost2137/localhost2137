@@ -153,9 +153,10 @@ async function conversationsHistory(context: SlackContext): Promise<Response> {
 	const latest = readTimestamp(request, "latest");
 	const filter = JSON.stringify({ channel: resolvedChannel.id, inclusive, latest, oldest });
 	const pagination = readPagination(request, { filter, method: "conversations.history" });
+	const beforeTs = pagination.afterKey ? normalizedCursorTimestamp(pagination.afterKey) : undefined;
 	const result = pageResult(
 		runtime.state.service.listMessages(resolvedChannel.id, {
-			...(pagination.afterKey ? { beforeId: pagination.afterKey } : {}),
+			...(beforeTs ? { beforeTs } : {}),
 			inclusive,
 			...(latest ? { latest } : {}),
 			limit: pagination.limit + 1,
@@ -163,7 +164,7 @@ async function conversationsHistory(context: SlackContext): Promise<Response> {
 		}),
 		{
 			filter,
-			key: (message) => message.id,
+			key: (message) => normalizedPersistedTimestamp(message.ts),
 			limit: pagination.limit,
 			method: "conversations.history",
 		},
@@ -234,6 +235,22 @@ function readTimestamp(
 			name === "latest" ? "invalid_ts_latest" : "invalid_ts_oldest",
 			`Slack ${name} must be a seconds.microseconds timestamp.`,
 		);
+	}
+	return formatSlackTimestamp(timestamp);
+}
+
+function normalizedCursorTimestamp(value: string): string {
+	const timestamp = parseSlackTimestamp(value);
+	if (timestamp === undefined || formatSlackTimestamp(timestamp) !== value) {
+		throw new SlackError("invalid_cursor", "Slack history cursor timestamp is invalid.");
+	}
+	return value;
+}
+
+function normalizedPersistedTimestamp(value: string): string {
+	const timestamp = parseSlackTimestamp(value);
+	if (timestamp === undefined) {
+		throw new Error("Slack persisted message timestamp is invalid after migration.");
 	}
 	return formatSlackTimestamp(timestamp);
 }

@@ -19,7 +19,7 @@ interface MessageRow {
 }
 
 export interface MessagePageOptions {
-	readonly beforeId?: string;
+	readonly beforeTs?: string;
 	readonly inclusive?: boolean;
 	readonly latest?: string;
 	readonly limit: number;
@@ -86,9 +86,11 @@ export class MessageRepository {
 	listPage(channelId: ChannelId, input: MessagePageOptions): readonly SlackMessage[] {
 		const conditions = ["channel_id = ?", "deleted = 0"];
 		const parameters: Array<number | string> = [channelId];
-		if (input.beforeId) {
-			conditions.push("id < ?");
-			parameters.push(input.beforeId);
+		if (input.beforeTs) {
+			conditions.push(
+				"CAST(REPLACE(ts, '.', '') AS INTEGER) < CAST(REPLACE(?, '.', '') AS INTEGER)",
+			);
+			parameters.push(input.beforeTs);
 		}
 		if (input.oldest) {
 			conditions.push(
@@ -106,7 +108,8 @@ export class MessageRepository {
 		const rows = this.#database
 			.prepare(
 				`SELECT id, channel_id, user_id, text, ts, created_at_ms, thread_ts, deleted
-				 FROM messages WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+				 FROM messages WHERE ${conditions.join(" AND ")}
+				 ORDER BY CAST(REPLACE(ts, '.', '') AS INTEGER) DESC LIMIT ?`,
 			)
 			.all(...parameters) as MessageRow[];
 		return Object.freeze(rows.map(toMessage));

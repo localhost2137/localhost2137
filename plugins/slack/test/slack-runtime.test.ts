@@ -367,6 +367,52 @@ describe("Slack runtime integration", () => {
 		}
 	});
 
+	it("paginates timestamp-ordered history without duplicates or skips", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const channel = await instance.slack.createChannel({ name: "general" });
+			for (const text of ["first", "second", "third", "fourth", "fifth"]) {
+				await instance.slack.sendMessage({ channel: channel.id, from: "U000000", text });
+			}
+			const collected: string[] = [];
+			let cursor = "";
+			for (let page = 0; page < 3; page += 1) {
+				const response = await slackGet(instance.slack.connection.apiUrl, "conversations.history", {
+					channel: channel.id,
+					...(cursor ? { cursor } : {}),
+					limit: "2",
+					token: instance.slack.connection.botToken,
+				});
+				const body = (await response.json()) as {
+					messages: Array<{ text: string }>;
+					response_metadata: { next_cursor: string };
+				};
+				collected.push(...body.messages.map(({ text }) => text));
+				cursor = body.response_metadata.next_cursor;
+			}
+			expect(cursor).toBe("");
+			expect(collected).toEqual(["fifth", "fourth", "third", "second", "first"]);
+			expect(new Set(collected).size).toBe(collected.length);
+
+			const firstPage = await slackGet(instance.slack.connection.apiUrl, "conversations.history", {
+				channel: channel.id,
+				limit: "2",
+				token: instance.slack.connection.botToken,
+			});
+			const opaqueCursor = responseCursor(await firstPage.json());
+			const invalidCursor = withCursorKey(opaqueCursor, "1767225600.0");
+			const invalid = await slackGet(instance.slack.connection.apiUrl, "conversations.history", {
+				channel: channel.id,
+				cursor: invalidCursor,
+				token: instance.slack.connection.botToken,
+			});
+			expect(await invalid.json()).toEqual({ error: "invalid_cursor", ok: false });
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("maps Slack world invariant failures to stable control errors", async () => {
 		const runtime = await startRuntime(slack, null);
 		const instance = await runtime.createInstance();
@@ -613,6 +659,14 @@ function responseCursor(body: unknown): string {
 	return String(
 		Reflect.get(Reflect.get(body as object, "response_metadata") as object, "next_cursor"),
 	);
+}
+
+function withCursorKey(cursor: string, key: string): string {
+	const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<
+		string,
+		unknown
+	>;
+	return Buffer.from(JSON.stringify({ ...payload, key }), "utf8").toString("base64url");
 }
 
 async function expectHistory(

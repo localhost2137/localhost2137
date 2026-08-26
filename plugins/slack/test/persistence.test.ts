@@ -427,6 +427,79 @@ describe("Slack persistence", () => {
 		}
 	});
 
+	it("orders and paginates exact timestamps across wide and semantic message IDs after restart", async () => {
+		const root = await mkdtemp(join(tmpdir(), "localhost2137-slack-"));
+		roots.push(root);
+		const path = join(root, "slack.sqlite");
+		let database = new SlackDatabase(path);
+		try {
+			migrateDatabase(database.raw());
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			database.raw().prepare("INSERT INTO counters(kind, value) VALUES ('message', 999998)").run();
+			const narrow = database.messages.create({
+				channelId: channel.id,
+				now,
+				text: "narrow numeric ID",
+				userId: "U000000",
+			});
+			const wide = database.messages.create({
+				channelId: channel.id,
+				now,
+				text: "wide numeric ID",
+				userId: "U000000",
+			});
+			database
+				.raw()
+				.prepare(
+					`INSERT INTO messages(
+						id, channel_id, user_id, text, ts, created_at_ms, thread_ts, deleted
+					) VALUES ('M_SEMANTIC', ?, 'U000000', ?, '1767225600.000002', ?, NULL, 0)`,
+				)
+				.run(channel.id, "semantic migrated ID", now.getTime());
+			downgradeTimestampMigration(database, 2);
+			database.close();
+
+			database = new SlackDatabase(path);
+			migrateDatabase(database.raw());
+			const firstPage = database.messages.listPage(channel.id, { limit: 2 });
+			const pageBoundary = firstPage.at(-1);
+			if (!pageBoundary) throw new TypeError("Expected a timestamp page boundary.");
+			const secondPage = database.messages.listPage(channel.id, {
+				beforeTs: pageBoundary.ts,
+				limit: 2,
+			});
+			expect(firstPage.map(({ id }) => id)).toEqual(["M_SEMANTIC", "M1000000"]);
+			expect(secondPage.map(({ id }) => id)).toEqual(["M999999"]);
+			expect([...firstPage, ...secondPage].map(({ id }) => id)).toEqual([
+				"M_SEMANTIC",
+				"M1000000",
+				"M999999",
+			]);
+			expect(narrow).toMatchObject({ id: "M999999", ts: "1767225600.000000" });
+			expect(wide).toMatchObject({ id: "M1000000", ts: "1767225600.000001" });
+			expect(
+				database.messages.listPage(channel.id, { limit: 10, oldest: wide.ts }).map(({ id }) => id),
+			).toEqual(["M_SEMANTIC"]);
+			expect(
+				database.messages
+					.listPage(channel.id, { inclusive: true, limit: 10, oldest: wide.ts })
+					.map(({ id }) => id),
+			).toEqual(["M_SEMANTIC", "M1000000"]);
+			expect(
+				database.messages.listPage(channel.id, { latest: wide.ts, limit: 10 }).map(({ id }) => id),
+			).toEqual(["M999999"]);
+			expect(
+				database.messages
+					.listPage(channel.id, { inclusive: true, latest: wide.ts, limit: 10 })
+					.map(({ id }) => id),
+			).toEqual(["M1000000", "M999999"]);
+		} finally {
+			database.close();
+		}
+	});
+
 	it("reconciles explicit numeric user and channel IDs without consuming semantic IDs", async () => {
 		const database = await migratedDatabase();
 		try {
