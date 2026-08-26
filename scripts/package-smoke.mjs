@@ -158,6 +158,7 @@ import { defineOperation, definePlugin } from "localhost2137";
 import { connectRuntime } from "localhost2137/client";
 import { createTestRuntime } from "localhost2137/testing";
 import { createPluginContractCases } from "@localhost2137/plugin-testkit";
+import { slack } from "@localhost2137/slack";
 import { z } from "zod";
 
 if (typeof connectRuntime !== "function" || typeof createTestRuntime !== "function") {
@@ -165,6 +166,9 @@ if (typeof connectRuntime !== "function" || typeof createTestRuntime !== "functi
 }
 if (typeof createPluginContractCases !== "function") {
 	throw new Error("Packed plugin testkit entry point is incomplete");
+}
+if (typeof slack !== "function") {
+	throw new Error("Packed Slack plugin entry point is incomplete");
 }
 const testkitEntryPath = fileURLToPath(import.meta.resolve("@localhost2137/plugin-testkit"));
 const testkitSupervisorPath = join(dirname(testkitEntryPath), "durability-supervisor.js");
@@ -239,6 +243,33 @@ const resolved = resolveConfig(
 if (resolved.services.packed.operations.verifyPeer.cli.kind !== "flags") {
 	throw new Error("Packed consumer ZodObject did not retain host constructor identity");
 }
+
+const packedSlackRuntime = await createTestRuntime({
+	config: {
+		services: {
+			slack: slack({
+				config: {
+					botToken: "xoxb-packed-smoke",
+					eventsUrl: null,
+					signingSecret: "packed-smoke-secret",
+					workspaceName: "Packed Smoke",
+				},
+			}),
+		},
+	},
+	port: 0,
+	storage: "temporary",
+});
+const packedSlackInstance = await packedSlackRuntime.createInstance();
+try {
+	const packedUser = await packedSlackInstance.slack.createUser({ name: "Packed Ada" });
+	if (packedUser.id !== "U000001") {
+		throw new Error("Packed Slack native persistence did not execute");
+	}
+} finally {
+	await packedSlackInstance.destroy();
+	await packedSlackRuntime.close();
+}
 `;
 		const typedAuthoringSmoke = `
 import { Hono } from "hono";
@@ -311,6 +342,10 @@ void packedPlugin({ config: { token: "fixture" } });
 			`${imports.join("\n")}\n${runtimeAuthoringSmoke}\nfor (const module of [${bindings}]) {\n\tif (typeof module !== "object") throw new Error("Package import did not return a module namespace");\n}\n`,
 		);
 		await writeFile(
+			join(consumerDirectory, "pnpm-workspace.yaml"),
+			"allowBuilds:\n  better-sqlite3: true\n  esbuild: true\n",
+		);
+		await writeFile(
 			join(consumerDirectory, "consumer.ts"),
 			`${imports.join("\n")}\n${typedAuthoringSmoke}\nconst modules: readonly object[] = [${bindings}];\nvoid modules;\n`,
 		);
@@ -334,10 +369,7 @@ void packedPlugin({ config: { token: "fixture" } });
 			)}\n`,
 		);
 
-		runPnpm(
-			["install", "--store-dir", consumerStoreDirectory, "--ignore-scripts"],
-			consumerDirectory,
-		);
+		runPnpm(["install", "--store-dir", consumerStoreDirectory], consumerDirectory);
 		const installedResult = runPnpm(["list", "--depth", "0", "--json"], consumerDirectory, [
 			"ignore",
 			"pipe",

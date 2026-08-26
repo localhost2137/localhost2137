@@ -109,6 +109,9 @@ importers:
 
   plugins/slack:
     dependencies:
+      '@types/better-sqlite3':
+        specifier: 7.6.13
+        version: 7.6.13
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
@@ -122,9 +125,6 @@ importers:
       '@localhost2137/plugin-testkit':
         specifier: workspace:*
         version: link:../../packages/plugin-testkit
-      '@types/better-sqlite3':
-        specifier: 7.6.13
-        version: 7.6.13
       localhost2137:
         specifier: workspace:*
         version: link:../../packages/localhost2137
