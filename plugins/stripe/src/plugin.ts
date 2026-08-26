@@ -30,7 +30,7 @@ export type StripePluginFactory = PluginFactory<
 export function createStripePlugin(
 	dependencies: StripePluginDependencies = {},
 ): StripePluginFactory {
-	const stateVersion = dependencies.stateVersion ?? 2;
+	const stateVersion = dependencies.stateVersion ?? 3;
 	if (!Number.isSafeInteger(stateVersion) || stateVersion < 1) {
 		throw new TypeError("Stripe plugin stateVersion must be a positive safe integer.");
 	}

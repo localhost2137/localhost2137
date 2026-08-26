@@ -51,52 +51,33 @@ export class EventRepository {
 	}
 
 	get(id: EventId): StripeEvent {
-		const row = this.#database
-			.prepare("SELECT id, type, invoice_id, created_at_ms, advance_id FROM events WHERE id = ?")
-			.get(id) as EventRow | undefined;
-		if (!row) throw new Error(`Stripe event ${id} is missing after persistence.`);
-		return toEvent(row);
+		const event = this.find(id);
+		if (!event) throw new Error(`Stripe event ${id} is missing after persistence.`);
+		return event;
+	}
+
+	find(id: EventId): StripeEvent | undefined {
+		const row = this.#database.prepare(`${eventSelect} WHERE e.id = ?`).get(id) as
+			| EventRow
+			| undefined;
+		return row ? toEvent(row) : undefined;
 	}
 
 	list(input: Readonly<{ type?: StripeEvent["type"] }> = {}): readonly StripeEvent[] {
 		const rows = (
 			input.type
 				? this.#database
-						.prepare(
-							`SELECT id, type, invoice_id, created_at_ms, advance_id
-							 FROM events WHERE type = ? ORDER BY id`,
-						)
+						.prepare(`${eventSelect} WHERE e.type = ? ORDER BY o.ordinal`)
 						.all(input.type)
-				: this.#database
-						.prepare(
-							"SELECT id, type, invoice_id, created_at_ms, advance_id FROM events ORDER BY id",
-						)
-						.all()
+				: this.#database.prepare(`${eventSelect} ORDER BY o.ordinal`).all()
 		) as EventRow[];
 		return Object.freeze(rows.map(toEvent));
 	}
-
-	pendingIds(input: Readonly<{ advanceId?: string }> = {}): readonly EventId[] {
-		const rows = (
-			input.advanceId
-				? this.#database
-						.prepare(
-							`SELECT e.id FROM events e
-							 JOIN webhook_deliveries d ON d.event_id = e.id
-							 WHERE d.status = 'pending' AND e.advance_id = ? ORDER BY e.id`,
-						)
-						.all(input.advanceId)
-				: this.#database
-						.prepare(
-							`SELECT e.id FROM events e
-							 JOIN webhook_deliveries d ON d.event_id = e.id
-							 WHERE d.status = 'pending' ORDER BY e.id`,
-						)
-						.all()
-		) as Array<{ id: string }>;
-		return Object.freeze(rows.map(({ id }) => id));
-	}
 }
+
+const eventSelect = `SELECT e.id, e.type, e.invoice_id, e.created_at_ms, e.advance_id
+FROM events e
+JOIN resource_creation_order o ON o.kind = 'event' AND o.resource_id = e.id`;
 
 function toEvent(row: EventRow): StripeEvent {
 	return Object.freeze({

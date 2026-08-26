@@ -2,6 +2,8 @@ export type StripeErrorCode =
 	| "advance_conflict"
 	| "customer_missing"
 	| "invalid_argument"
+	| "invalid_api_key"
+	| "invoice_missing"
 	| "price_missing"
 	| "product_missing"
 	| "subscription_canceled"

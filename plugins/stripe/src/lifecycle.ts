@@ -6,6 +6,7 @@ import { StripeDatabase } from "./persistence/database.js";
 import { assertCurrentDatabaseVersion, migrateDatabase } from "./persistence/migrations.js";
 import type { StripePluginDependencies } from "./plugin-dependencies.js";
 import type { StripeState } from "./state.js";
+import { StripeWebhookDispatcher } from "./webhooks/webhook-dispatcher.js";
 
 type StripeLifecycle = Lifecycle<StripeState, StripeConfig> & {
 	readonly onTimeAdvanced: (
@@ -28,8 +29,9 @@ export function createStripeLifecycle(dependencies: StripePluginDependencies): S
 			});
 		},
 		async onTimeAdvanced(context, advance) {
-			context.state.services.billing.reconcileTimeAdvance(advance);
+			const eventIds = context.state.services.billing.reconcileTimeAdvance(advance);
 			await dependencies.afterTimeReconciled?.(context, advance);
+			await context.state.webhooks.reconcile(context, eventIds);
 		},
 		seed(context, seed) {
 			dependencies.recordLifecycle?.("seed");
@@ -45,6 +47,11 @@ export function createStripeLifecycle(dependencies: StripePluginDependencies): S
 				return Object.freeze({
 					database,
 					services: createStripeServices(database, context.config),
+					webhooks: new StripeWebhookDispatcher(database, context.config, {
+						...(dependencies.webhookDeliveryTimeoutMs === undefined
+							? {}
+							: { timeoutMs: dependencies.webhookDeliveryTimeoutMs }),
+					}),
 				});
 			} catch (cause) {
 				database.close();
@@ -53,6 +60,7 @@ export function createStripeLifecycle(dependencies: StripePluginDependencies): S
 		},
 		stop(context) {
 			dependencies.recordLifecycle?.("stop");
+			dependencies.beforeStop?.(context);
 			context.state.database.close();
 		},
 		update(context, version) {

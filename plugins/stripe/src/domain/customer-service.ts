@@ -24,6 +24,7 @@ export class CustomerService {
 	}
 
 	list(input?: Readonly<{ afterId?: string; limit: number }>): readonly StripeCustomer[] {
+		if (input?.afterId) this.require(input.afterId);
 		return this.#database.customers.list(input);
 	}
 

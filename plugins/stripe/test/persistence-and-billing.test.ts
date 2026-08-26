@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,7 +28,7 @@ describe("Stripe persistence and billing", () => {
 				CURRENT_DATABASE_VERSION,
 			);
 			database.raw().pragma(`user_version = ${CURRENT_DATABASE_VERSION + 1}`);
-			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 2/);
+			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 3/);
 		} finally {
 			database.close();
 		}
@@ -61,6 +61,106 @@ describe("Stripe persistence and billing", () => {
 				});
 			} finally {
 				restarted.close();
+			}
+		} finally {
+			database.close();
+		}
+	});
+
+	it("orders opaque and width-crossing IDs by durable creation order", async () => {
+		const { database, services } = await billingFixture();
+		try {
+			services.customers.create({ id: "cus_opaque", name: "Opaque", now });
+			setSequence(database, "customer", 999_998);
+			services.customers.create({ name: "Before width", now });
+			services.customers.create({ name: "After width", now });
+			expect(services.customers.list({ limit: 10 }).map(({ id }) => id)).toEqual([
+				"cus_opaque",
+				"cus_999999",
+				"cus_1000000",
+			]);
+			expect(
+				services.customers.list({ afterId: "cus_999999", limit: 10 }).map(({ id }) => id),
+			).toEqual(["cus_1000000"]);
+
+			services.catalog.createProduct({ id: "prod_opaque", name: "Opaque", now });
+			setSequence(database, "product", 999_998);
+			services.catalog.createProduct({ name: "Before width", now });
+			services.catalog.createProduct({ name: "After width", now });
+			expect(services.catalog.listProducts({ limit: 10 }).map(({ id }) => id)).toEqual([
+				"prod_opaque",
+				"prod_999999",
+				"prod_1000000",
+			]);
+
+			services.catalog.createPrice({
+				currency: "usd",
+				id: "price_opaque",
+				now,
+				productId: "prod_opaque",
+				unitAmount: 1,
+			});
+			setSequence(database, "price", 999_998);
+			for (const unitAmount of [2, 3]) {
+				services.catalog.createPrice({
+					currency: "usd",
+					now,
+					productId: "prod_opaque",
+					unitAmount,
+				});
+			}
+			expect(services.catalog.listPrices({ limit: 10 }).map(({ id }) => id)).toEqual([
+				"price_opaque",
+				"price_999999",
+				"price_1000000",
+			]);
+
+			setSequence(database, "invoice", 999_998);
+			setSequence(database, "event", 999_998);
+			const subscription = services.billing.createSubscription({
+				customerId: "cus_opaque",
+				now,
+				priceId: "price_opaque",
+			}).subscription;
+			services.billing.reconcileTimeAdvance(
+				timeAdvance("ordered_advance", now, new Date(now.getTime() + BILLING_PERIOD_MS)),
+			);
+			expect(
+				services.billing.listInvoices({ subscriptionId: subscription.id }).map(({ id }) => id),
+			).toEqual(["in_999999", "in_1000000"]);
+			expect(services.billing.listEvents().map(({ id }) => id)).toEqual([
+				"evt_999999",
+				"evt_1000000",
+			]);
+		} finally {
+			database.close();
+		}
+	});
+
+	it("backfills durable creation order from a real version-2 database", async () => {
+		const { database, path, services } = await billingFixture();
+		try {
+			services.customers.create({ id: "cus_z", name: "First", now });
+			services.customers.create({ id: "cus_a", name: "Second", now });
+			database
+				.raw()
+				.exec(
+					await readFile(new URL("./fixtures/schema-v2-downgrade.sql", import.meta.url), "utf8"),
+				);
+			database.close();
+
+			const upgraded = new StripeDatabase(path);
+			try {
+				expect(upgraded.raw().pragma("user_version", { simple: true })).toBe(2);
+				migrateDatabase(upgraded.raw());
+				expect(upgraded.raw().pragma("user_version", { simple: true })).toBe(3);
+				const restarted = createStripeServices(upgraded, config);
+				expect(restarted.customers.list({ limit: 10 }).map(({ id }) => id)).toEqual([
+					"cus_z",
+					"cus_a",
+				]);
+			} finally {
+				upgraded.close();
 			}
 		} finally {
 			database.close();
@@ -245,6 +345,16 @@ async function fixtureDatabase(): Promise<StripeDatabase> {
 
 function timeAdvance(advanceId: string, from: Date, to: Date) {
 	return { advanceId, from, to };
+}
+
+function setSequence(database: StripeDatabase, kind: string, value: number): void {
+	database
+		.raw()
+		.prepare(
+			`INSERT INTO counters(kind, value) VALUES (?, ?)
+			 ON CONFLICT(kind) DO UPDATE SET value = excluded.value`,
+		)
+		.run(kind, value);
 }
 
 const config = Object.freeze({

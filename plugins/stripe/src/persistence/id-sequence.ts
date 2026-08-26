@@ -23,25 +23,30 @@ export function insertStripeId(
 	explicitId: string | undefined,
 	insert: (id: string) => void,
 ): string {
-	if (explicitId) {
-		insert(explicitId);
-		reconcileStripeId(database, kind, explicitId);
-		return explicitId;
-	}
-	const current = database.prepare("SELECT value FROM counters WHERE kind = ?").get(kind) as
-		| { value: number }
-		| undefined;
-	const next = (current?.value ?? 0) + 1;
-	if (!Number.isSafeInteger(next)) throw new RangeError(`Stripe ${kind} ID sequence is exhausted.`);
-	database
-		.prepare(
-			`INSERT INTO counters(kind, value) VALUES (?, ?)
-			 ON CONFLICT(kind) DO UPDATE SET value = excluded.value`,
-		)
-		.run(kind, next);
-	const id = `${prefixes[kind]}${String(next).padStart(6, "0")}`;
-	insert(id);
-	return id;
+	return database.transaction(() => {
+		if (explicitId) {
+			insert(explicitId);
+			reconcileStripeId(database, kind, explicitId);
+			recordCreationOrder(database, kind, explicitId);
+			return explicitId;
+		}
+		const current = database.prepare("SELECT value FROM counters WHERE kind = ?").get(kind) as
+			| { value: number }
+			| undefined;
+		const next = (current?.value ?? 0) + 1;
+		if (!Number.isSafeInteger(next))
+			throw new RangeError(`Stripe ${kind} ID sequence is exhausted.`);
+		database
+			.prepare(
+				`INSERT INTO counters(kind, value) VALUES (?, ?)
+				 ON CONFLICT(kind) DO UPDATE SET value = excluded.value`,
+			)
+			.run(kind, next);
+		const id = `${prefixes[kind]}${String(next).padStart(6, "0")}`;
+		insert(id);
+		recordCreationOrder(database, kind, id);
+		return id;
+	})();
 }
 
 export function reconcileStripeId(
@@ -61,4 +66,24 @@ export function reconcileStripeId(
 			 ON CONFLICT(kind) DO UPDATE SET value = MAX(value, excluded.value)`,
 		)
 		.run(kind, value);
+}
+
+function recordCreationOrder(
+	database: Database.Database,
+	kind: StripeSequenceKind,
+	id: string,
+): void {
+	const row = database
+		.prepare(
+			`INSERT INTO creation_order_counters(kind, value) VALUES (?, 1)
+			 ON CONFLICT(kind) DO UPDATE SET value = value + 1
+			 RETURNING value`,
+		)
+		.get(kind) as { value: number } | undefined;
+	if (!row || !Number.isSafeInteger(row.value)) {
+		throw new RangeError(`Stripe ${kind} creation order is exhausted.`);
+	}
+	database
+		.prepare("INSERT INTO resource_creation_order(kind, resource_id, ordinal) VALUES (?, ?, ?)")
+		.run(kind, id, row.value);
 }

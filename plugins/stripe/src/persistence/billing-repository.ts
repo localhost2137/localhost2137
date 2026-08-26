@@ -142,14 +142,14 @@ export class BillingRepository {
 	}
 
 	findInvoice(id: string): StripeInvoice | undefined {
-		const row = this.#database.prepare(`${invoiceSelect} WHERE id = ?`).get(id) as
+		const row = this.#database.prepare(`${invoiceSelect} WHERE i.id = ?`).get(id) as
 			| InvoiceRow
 			| undefined;
 		return row ? toInvoice(row) : undefined;
 	}
 
 	findSubscription(id: string): StripeSubscription | undefined {
-		const row = this.#database.prepare(`${subscriptionSelect} WHERE id = ?`).get(id) as
+		const row = this.#database.prepare(`${subscriptionSelect} WHERE s.id = ?`).get(id) as
 			| SubscriptionRow
 			| undefined;
 		return row ? toSubscription(row) : undefined;
@@ -180,30 +180,45 @@ export class BillingRepository {
 		const rows = this.#database
 			.prepare(
 				`${subscriptionSelect}
-				 WHERE status = 'active' AND current_period_end_ms <= ?
-				 ORDER BY current_period_end_ms, id`,
+				 WHERE s.status = 'active' AND s.current_period_end_ms <= ?
+				 ORDER BY s.current_period_end_ms, o.ordinal`,
 			)
 			.all(through.getTime()) as SubscriptionRow[];
 		return Object.freeze(rows.map(toSubscription));
 	}
 
 	listInvoices(
-		input: Readonly<{ customerId?: string; subscriptionId?: string }> = {},
+		input: Readonly<{
+			afterId?: string;
+			customerId?: string;
+			limit?: number;
+			subscriptionId?: string;
+		}> = {},
 	): readonly StripeInvoice[] {
 		const conditions: string[] = [];
-		const parameters: string[] = [];
+		const parameters: Array<number | string> = [];
 		if (input.customerId) {
-			conditions.push("customer_id = ?");
+			conditions.push("i.customer_id = ?");
 			parameters.push(input.customerId);
 		}
 		if (input.subscriptionId) {
-			conditions.push("subscription_id = ?");
+			conditions.push("i.subscription_id = ?");
 			parameters.push(input.subscriptionId);
 		}
+		if (input.afterId) {
+			conditions.push(
+				`o.ordinal > (
+					SELECT ordinal FROM resource_creation_order
+					WHERE kind = 'invoice' AND resource_id = ?
+				)`,
+			);
+			parameters.push(input.afterId);
+		}
+		if (input.limit !== undefined) parameters.push(input.limit);
 		const rows = this.#database
 			.prepare(
 				`${invoiceSelect}${conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : ""}
-				 ORDER BY id`,
+				 ORDER BY o.ordinal${input.limit === undefined ? "" : " LIMIT ?"}`,
 			)
 			.all(...parameters) as InvoiceRow[];
 		return Object.freeze(rows.map(toInvoice));
@@ -251,14 +266,16 @@ export class BillingRepository {
 }
 
 const subscriptionSelect = `SELECT
-	id, item_id, customer_id, price_id, status, current_period_start_ms,
-	current_period_end_ms, latest_invoice_id, created_at_ms, canceled_at_ms
-FROM subscriptions`;
+	s.id, s.item_id, s.customer_id, s.price_id, s.status, s.current_period_start_ms,
+	s.current_period_end_ms, s.latest_invoice_id, s.created_at_ms, s.canceled_at_ms
+FROM subscriptions s
+JOIN resource_creation_order o ON o.kind = 'subscription' AND o.resource_id = s.id`;
 
 const invoiceSelect = `SELECT
-	id, subscription_id, customer_id, price_id, currency, amount_due, amount_paid,
-	status, period_start_ms, period_end_ms, created_at_ms, paid_at_ms
-FROM invoices`;
+	i.id, i.subscription_id, i.customer_id, i.price_id, i.currency, i.amount_due, i.amount_paid,
+	i.status, i.period_start_ms, i.period_end_ms, i.created_at_ms, i.paid_at_ms
+FROM invoices i
+JOIN resource_creation_order o ON o.kind = 'invoice' AND o.resource_id = i.id`;
 
 function toSubscription(row: SubscriptionRow): StripeSubscription {
 	return Object.freeze({

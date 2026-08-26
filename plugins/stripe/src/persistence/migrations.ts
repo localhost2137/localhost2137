@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_DATABASE_VERSION = 2;
+export const CURRENT_DATABASE_VERSION = 3;
 
 interface Migration {
 	readonly version: number;
@@ -118,6 +118,38 @@ const migrations: readonly Migration[] = [
 					processed_at_ms INTEGER NOT NULL,
 					CHECK (to_ms > from_ms)
 				);
+			`);
+		},
+	},
+	{
+		version: 3,
+		apply(database) {
+			database.exec(`
+				CREATE TABLE creation_order_counters (
+					kind TEXT PRIMARY KEY,
+					value INTEGER NOT NULL CHECK (value >= 0)
+				);
+				CREATE TABLE resource_creation_order (
+					kind TEXT NOT NULL,
+					resource_id TEXT NOT NULL,
+					ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+					PRIMARY KEY (kind, resource_id),
+					UNIQUE (kind, ordinal)
+				);
+				INSERT INTO resource_creation_order(kind, resource_id, ordinal)
+					SELECT 'customer', id, ROW_NUMBER() OVER (ORDER BY rowid) FROM customers;
+				INSERT INTO resource_creation_order(kind, resource_id, ordinal)
+					SELECT 'product', id, ROW_NUMBER() OVER (ORDER BY rowid) FROM products;
+				INSERT INTO resource_creation_order(kind, resource_id, ordinal)
+					SELECT 'price', id, ROW_NUMBER() OVER (ORDER BY rowid) FROM prices;
+				INSERT INTO resource_creation_order(kind, resource_id, ordinal)
+					SELECT 'subscription', id, ROW_NUMBER() OVER (ORDER BY rowid) FROM subscriptions;
+				INSERT INTO resource_creation_order(kind, resource_id, ordinal)
+					SELECT 'invoice', id, ROW_NUMBER() OVER (ORDER BY rowid) FROM invoices;
+				INSERT INTO resource_creation_order(kind, resource_id, ordinal)
+					SELECT 'event', id, ROW_NUMBER() OVER (ORDER BY rowid) FROM events;
+				INSERT INTO creation_order_counters(kind, value)
+					SELECT kind, MAX(ordinal) FROM resource_creation_order GROUP BY kind;
 			`);
 		},
 	},

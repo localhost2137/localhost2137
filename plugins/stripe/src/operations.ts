@@ -242,15 +242,15 @@ export function createStripeOperations(
 		input: createSubscriptionInput,
 		output: subscriptionOutput,
 		run: (context, input) =>
-			runStripeOperation(dependencies, "createSubscription", context, () =>
-				subscriptionDto(
-					context.state.services.billing.createSubscription({
-						customerId: input.customerId,
-						now: context.clock.now(),
-						priceId: input.priceId,
-					}).subscription,
-				),
-			),
+			runStripeOperation(dependencies, "createSubscription", context, () => {
+				const created = context.state.services.billing.createSubscription({
+					customerId: input.customerId,
+					now: context.clock.now(),
+					priceId: input.priceId,
+				});
+				context.state.webhooks.schedule(context, created.event.id);
+				return subscriptionDto(created.subscription);
+			}),
 	});
 
 	const listInvoices = bindOperation({

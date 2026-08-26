@@ -73,13 +73,19 @@ export class BillingService {
 	}
 
 	listInvoices(
-		input?: Readonly<{ customerId?: string; subscriptionId?: string }>,
+		input?: Readonly<{
+			afterId?: string;
+			customerId?: string;
+			limit?: number;
+			subscriptionId?: string;
+		}>,
 	): readonly StripeInvoice[] {
+		if (input?.afterId) this.requireInvoice(input.afterId);
 		return this.#database.billing.listInvoices(input);
 	}
 
 	pendingWebhookEventIds(input?: Readonly<{ advanceId?: string }>): readonly string[] {
-		return this.#database.events.pendingIds(input);
+		return this.#database.webhooks.pendingIds(input);
 	}
 
 	reconcileTimeAdvance(advance: StripeTimeAdvance): readonly string[] {
@@ -101,7 +107,7 @@ export class BillingService {
 						`Stripe time advance ${advance.advanceId} was already processed with a different range.`,
 					);
 				}
-				return this.#database.events.pendingIds({ advanceId: advance.advanceId });
+				return this.#database.webhooks.pendingIds({ advanceId: advance.advanceId });
 			}
 
 			for (const due of this.#database.billing.listDueSubscriptions(advance.to)) {
@@ -126,13 +132,13 @@ export class BillingService {
 				processedAt: advance.to,
 				toMs,
 			});
-			return this.#database.events.pendingIds({ advanceId: advance.advanceId });
+			return this.#database.webhooks.pendingIds({ advanceId: advance.advanceId });
 		});
 	}
 
 	requireInvoice(id: string): StripeInvoice {
 		const invoice = this.#database.billing.findInvoice(id);
-		if (!invoice) throw new StripeError("invalid_argument", `No such invoice: '${id}'.`, "invoice");
+		if (!invoice) throw new StripeError("invoice_missing", `No such invoice: '${id}'.`, "invoice");
 		return invoice;
 	}
 

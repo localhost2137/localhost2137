@@ -1,9 +1,11 @@
 {
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
+		"composite": false,
+		"declaration": false,
+		"isolatedDeclarations": false,
 		"noEmit": true,
 		"types": ["node", "vitest/globals"]
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts"],
-	"references": [{ "path": "../../packages/localhost2137" }]
+	"include": ["src/**/*.ts", "test/**/*.ts"]
 }

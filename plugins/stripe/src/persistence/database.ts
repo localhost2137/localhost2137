@@ -3,12 +3,14 @@ import { BillingRepository } from "./billing-repository.js";
 import { CatalogRepository } from "./catalog-repository.js";
 import { CustomerRepository } from "./customer-repository.js";
 import { EventRepository } from "./event-repository.js";
+import { WebhookRepository } from "./webhook-repository.js";
 
 export class StripeDatabase {
 	readonly billing: BillingRepository;
 	readonly catalog: CatalogRepository;
 	readonly customers: CustomerRepository;
 	readonly events: EventRepository;
+	readonly webhooks: WebhookRepository;
 	readonly #database: Database.Database;
 	#closed = false;
 
@@ -21,6 +23,7 @@ export class StripeDatabase {
 		this.catalog = new CatalogRepository(this.#database);
 		this.customers = new CustomerRepository(this.#database);
 		this.events = new EventRepository(this.#database);
+		this.webhooks = new WebhookRepository(this.#database);
 	}
 
 	close(): void {

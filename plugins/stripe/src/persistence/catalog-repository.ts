@@ -89,15 +89,14 @@ export class CatalogRepository {
 			input.afterId
 				? this.#database
 						.prepare(
-							`SELECT id, product_id, currency, unit_amount, active, created_at_ms
-							 FROM prices WHERE id > ? ORDER BY id LIMIT ?`,
+							`${priceSelect}
+							 WHERE o.ordinal > (
+								SELECT ordinal FROM resource_creation_order
+								WHERE kind = 'price' AND resource_id = ?
+							 ) ORDER BY o.ordinal LIMIT ?`,
 						)
 						.all(input.afterId, input.limit)
-				: this.#database
-						.prepare(
-							"SELECT id, product_id, currency, unit_amount, active, created_at_ms FROM prices ORDER BY id LIMIT ?",
-						)
-						.all(input.limit)
+				: this.#database.prepare(`${priceSelect} ORDER BY o.ordinal LIMIT ?`).all(input.limit)
 		) as PriceRow[];
 		return Object.freeze(rows.map(toPrice));
 	}
@@ -109,16 +108,26 @@ export class CatalogRepository {
 			input.afterId
 				? this.#database
 						.prepare(
-							"SELECT id, name, active, created_at_ms FROM products WHERE id > ? ORDER BY id LIMIT ?",
+							`${productSelect}
+							 WHERE o.ordinal > (
+								SELECT ordinal FROM resource_creation_order
+								WHERE kind = 'product' AND resource_id = ?
+							 ) ORDER BY o.ordinal LIMIT ?`,
 						)
 						.all(input.afterId, input.limit)
-				: this.#database
-						.prepare("SELECT id, name, active, created_at_ms FROM products ORDER BY id LIMIT ?")
-						.all(input.limit)
+				: this.#database.prepare(`${productSelect} ORDER BY o.ordinal LIMIT ?`).all(input.limit)
 		) as ProductRow[];
 		return Object.freeze(rows.map(toProduct));
 	}
 }
+
+const priceSelect = `SELECT p.id, p.product_id, p.currency, p.unit_amount, p.active, p.created_at_ms
+FROM prices p
+JOIN resource_creation_order o ON o.kind = 'price' AND o.resource_id = p.id`;
+
+const productSelect = `SELECT p.id, p.name, p.active, p.created_at_ms
+FROM products p
+JOIN resource_creation_order o ON o.kind = 'product' AND o.resource_id = p.id`;
 
 function toPrice(row: PriceRow): StripePrice {
 	return Object.freeze({

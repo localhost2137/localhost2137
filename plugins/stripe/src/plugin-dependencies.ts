@@ -15,7 +15,9 @@ export interface StripePluginDependencies {
 		operation: string,
 		context: RunningPluginContext<StripeState, StripeConfig>,
 	) => void;
+	readonly beforeStop?: (context: RunningPluginContext<StripeState, StripeConfig>) => void;
 	readonly recordLifecycle?: (event: StripeLifecycleEvent) => void;
 	readonly stateVersion?: number;
+	readonly webhookDeliveryTimeoutMs?: number;
 	transformOperationResult?<Value>(operation: string, value: Value): Value;
 }

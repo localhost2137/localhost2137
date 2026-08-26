@@ -50,10 +50,12 @@ export class CatalogService {
 	}
 
 	listPrices(input?: Readonly<{ afterId?: string; limit: number }>): readonly StripePrice[] {
+		if (input?.afterId) this.requirePrice(input.afterId);
 		return this.#database.catalog.listPrices(input);
 	}
 
 	listProducts(input?: Readonly<{ afterId?: string; limit: number }>): readonly StripeProduct[] {
+		if (input?.afterId) this.requireProduct(input.afterId);
 		return this.#database.catalog.listProducts(input);
 	}
 

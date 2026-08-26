@@ -47,16 +47,22 @@ export class CustomerRepository {
 			input.afterId
 				? this.#database
 						.prepare(
-							"SELECT id, name, email, created_at_ms FROM customers WHERE id > ? ORDER BY id LIMIT ?",
+							`${customerSelect}
+							 WHERE o.ordinal > (
+								SELECT ordinal FROM resource_creation_order
+								WHERE kind = 'customer' AND resource_id = ?
+							 ) ORDER BY o.ordinal LIMIT ?`,
 						)
 						.all(input.afterId, input.limit)
-				: this.#database
-						.prepare("SELECT id, name, email, created_at_ms FROM customers ORDER BY id LIMIT ?")
-						.all(input.limit)
+				: this.#database.prepare(`${customerSelect} ORDER BY o.ordinal LIMIT ?`).all(input.limit)
 		) as CustomerRow[];
 		return Object.freeze(rows.map(toCustomer));
 	}
 }
+
+const customerSelect = `SELECT c.id, c.name, c.email, c.created_at_ms
+FROM customers c
+JOIN resource_creation_order o ON o.kind = 'customer' AND o.resource_id = c.id`;
 
 function toCustomer(row: CustomerRow): StripeCustomer {
 	return Object.freeze({
