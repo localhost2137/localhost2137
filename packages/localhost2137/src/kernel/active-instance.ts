@@ -169,7 +169,7 @@ export class ActiveInstanceFactory {
 			await reconcileServices(services, this.#reconciliationStore(instanceId), signal);
 			await lifecycle.start(signal);
 			await timeAdvancement.recover(signal);
-			await tasks.quiesce({ signal, timeoutMs: options.remainingMs() });
+			await tasks.idle({ signal, timeoutMs: options.remainingMs() });
 			return active;
 		} catch (cause) {
 			const cleanupFailures: unknown[] = [];

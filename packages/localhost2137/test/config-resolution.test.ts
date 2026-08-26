@@ -276,7 +276,12 @@ describe("config resolution", () => {
 
 	it("validates every present optional lifecycle hook and seed property", () => {
 		const descriptor = untypedConfiguredService({
-			lifecycle: { seed: undefined, stop: "not-a-function", update: null },
+			lifecycle: {
+				onStarted: "not-a-function",
+				seed: undefined,
+				stop: "not-a-function",
+				update: null,
+			},
 		});
 		let error: ConfigError | undefined;
 		try {
@@ -286,6 +291,7 @@ describe("config resolution", () => {
 		}
 
 		expect(error?.details.issues?.map((issue) => issue.code)).toEqual([
+			"invalid_lifecycle_hook",
 			"invalid_lifecycle_hook",
 			"invalid_lifecycle_hook",
 			"invalid_lifecycle_hook",

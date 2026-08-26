@@ -37,6 +37,8 @@ export interface PluginTimeAdvance {
 
 export interface Lifecycle<State, Config> {
 	readonly create: (context: BasePluginContext<Config>) => Promise<void> | void;
+	/** Reconcile durable running-state work after every service starts and before readiness. */
+	readonly onStarted?: (context: RunningPluginContext<State, Config>) => Promise<void> | void;
 	/** Reconcile time-derived durable state idempotently for the supplied advance ID and window. */
 	readonly onTimeAdvanced?: (
 		context: RunningPluginContext<State, Config>,

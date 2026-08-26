@@ -20,6 +20,7 @@ function createServiceTemplate(service: ResolvedServiceConfig): InstanceServiceT
 	const create = requiredHook(lifecycle, "create");
 	const start = requiredHook(lifecycle, "start");
 	const seed = optionalHook(lifecycle, "seed");
+	const onStarted = optionalHook(lifecycle, "onStarted");
 	const onTimeAdvanced = optionalHook(lifecycle, "onTimeAdvanced");
 	const stop = optionalHook(lifecycle, "stop");
 	const update = optionalHook(lifecycle, "update");
@@ -27,6 +28,13 @@ function createServiceTemplate(service: ResolvedServiceConfig): InstanceServiceT
 		create: async (context: BasePluginContext<unknown>) => {
 			await invoke(create, [context]);
 		},
+		...(onStarted
+			? {
+					onStarted: async (context: RunningPluginContext<unknown, unknown>) => {
+						await invoke(onStarted, [context]);
+					},
+				}
+			: {}),
 		...(onTimeAdvanced
 			? {
 					onTimeAdvanced: async (

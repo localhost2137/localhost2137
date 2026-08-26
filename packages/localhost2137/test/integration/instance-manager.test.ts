@@ -29,6 +29,7 @@ import {
 	type ScheduledTask,
 	type TaskScheduler,
 	TaskTrackerClosedError,
+	TrackedTaskFailuresError,
 } from "../../src/kernel/task-tracker.js";
 import { NodeInstanceStorage } from "../../src/node/instance-storage.js";
 import { nodeMonotonicClock } from "../../src/node/monotonic-clock.js";
@@ -49,6 +50,35 @@ afterEach(async () => {
 });
 
 describe("InstanceManager with durable Node storage", () => {
+	it("does not expose readiness when post-start tracked recovery work rejects", async () => {
+		const events: string[] = [];
+		const recoveryFailure = new Error("startup delivery failed");
+		const fixture = await managerFixture(
+			instanceTemplate({
+				onStarted: (context) => {
+					events.push("onStarted");
+					void context.tasks
+						.track("startup recovery", Promise.reject(recoveryFailure))
+						.catch(() => undefined);
+				},
+				stopBarrier: async () => void events.push("stop"),
+			}),
+		);
+
+		const failure = await fixture.manager
+			.create({ id: "dev", persistence: "persistent", seed: false })
+			.catch((cause: unknown) => cause);
+
+		expect(failure).toBeInstanceOf(InstanceCreationError);
+		expect(
+			collectErrors(failure).some(
+				(cause) =>
+					cause instanceof TrackedTaskFailuresError && cause.failures[0]?.cause === recoveryFailure,
+			),
+		).toBe(true);
+		expect(events).toEqual(["onStarted", "stop"]);
+	});
+
 	it("persists two independent plugin states across a kernel restart", async () => {
 		const fixture = await managerFixture(instanceTemplate());
 		await fixture.manager.create({ id: "first", persistence: "persistent", seed: false });
@@ -848,6 +878,7 @@ interface TemplateOptions {
 	readonly beforeCreate?: (instanceId: string) => void;
 	readonly configuredSeed?: string;
 	readonly createBarrier?: (context: BasePluginContext<unknown>) => Promise<void>;
+	readonly onStarted?: (context: RunningPluginContext<unknown, unknown>) => Promise<void> | void;
 	readonly pluginId?: string;
 	readonly seedBarrier?: (context: RunningPluginContext<unknown, unknown>) => Promise<void>;
 	readonly seedCalls?: string[];
@@ -872,6 +903,7 @@ function instanceTemplate(options: TemplateOptions = {}): InstanceTemplate {
 				JSON.stringify({ value: `${context.instanceId}:${attempt}` }),
 			);
 		},
+		onStarted: async (context) => options.onStarted?.(context),
 		seed: async (context: RunningPluginContext<unknown, unknown>, value: unknown) => {
 			if (options.seedFailure) throw options.seedFailure;
 			await options.seedBarrier?.(context);

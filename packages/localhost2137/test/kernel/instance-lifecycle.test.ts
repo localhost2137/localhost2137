@@ -57,6 +57,39 @@ describe("InstanceLifecycle", () => {
 		expect(lifecycle.status()).toBe("stopped");
 	});
 
+	it("starts every service before post-start hooks and cleans up their failures in reverse", async () => {
+		const events: string[] = [];
+		const services = [
+			await stoppedService("first", {
+				onStarted: () => events.push("onStarted:first"),
+				start: () => events.push("start:first"),
+				stop: () => events.push("stop:first"),
+			}),
+			await stoppedService("second", {
+				onStarted: () => {
+					events.push("onStarted:second");
+					throw new Error("recovery failed");
+				},
+				start: () => events.push("start:second"),
+				stop: () => events.push("stop:second"),
+			}),
+		];
+		const lifecycle = instance(services);
+
+		await expect(lifecycle.start()).rejects.toMatchObject({
+			startFailure: { hook: "onStarted", serviceKey: "second" },
+		});
+		expect(events).toEqual([
+			"start:first",
+			"start:second",
+			"onStarted:first",
+			"onStarted:second",
+			"stop:second",
+			"stop:first",
+		]);
+		expect(lifecycle.status()).toBe("stopped");
+	});
+
 	it("reports cleanup failure after partial start without retrying stop", async () => {
 		const stopFailure = new Error("close failed");
 		const services = [

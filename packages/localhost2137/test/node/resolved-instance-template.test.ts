@@ -23,6 +23,7 @@ describe("createInstanceTemplate", () => {
 			id: "fixture",
 			lifecycle: {
 				create: (context) => events.push(["create", context.config.label]),
+				onStarted: (context) => events.push(["onStarted", context.state.ready]),
 				seed: (context, seed) => events.push(["seed", context.state.ready, seed.label]),
 				start: (context): State => {
 					events.push(["start", context.instanceId]);
@@ -52,6 +53,7 @@ describe("createInstanceTemplate", () => {
 		await service.hooks.update?.(base, { from: 1, to: 2 });
 		const state = await service.hooks.start(base);
 		const running = runningContext(base, state);
+		await service.hooks.onStarted?.(running);
 		await service.hooks.seed?.(running, service.configuredSeed);
 		await service.hooks.stop?.(running);
 
@@ -59,6 +61,7 @@ describe("createInstanceTemplate", () => {
 			["create", "configured"],
 			["update", 1, 2],
 			["start", "dev"],
+			["onStarted", true],
 			["seed", true, "seeded"],
 			["stop", "fixture"],
 		]);

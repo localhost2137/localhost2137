@@ -12,6 +12,7 @@ import {
 	type ReservedOperationKey,
 	type ReservedServiceKey,
 	type ScenarioFacade,
+	type TaskTracker,
 } from "localhost2137";
 import { z } from "zod";
 
@@ -90,6 +91,12 @@ const slack = definePlugin({
 	id: "slack",
 	lifecycle: {
 		create: (_context) => undefined,
+		onStarted: (context) => {
+			const started: true = context.state.started;
+			const tasks: TaskTracker = context.tasks;
+			void started;
+			void tasks;
+		},
 		onTimeAdvanced: (context, advance) => {
 			const received: PluginTimeAdvance = advance;
 			const started: true = context.state.started;

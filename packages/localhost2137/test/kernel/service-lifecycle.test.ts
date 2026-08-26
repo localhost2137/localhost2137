@@ -28,6 +28,9 @@ describe("ServiceLifecycle", () => {
 				events.push("start");
 				return state;
 			},
+			onStarted: (context) => {
+				events.push(`onStarted:${context.state === state}`);
+			},
 			stop: (context) => {
 				events.push(`stop:${context.state === state}`);
 			},
@@ -35,9 +38,10 @@ describe("ServiceLifecycle", () => {
 
 		await expect(service.reconcile()).resolves.toEqual({ kind: "created", stateVersion: 2 });
 		await service.start();
+		await service.onStarted();
 		expect(service.runningContext().state).toBe(state);
 		await service.stop();
-		expect(events).toEqual(["create", "start", "stop:true"]);
+		expect(events).toEqual(["create", "start", "onStarted:true", "stop:true"]);
 		await expect(service.stop()).rejects.toMatchObject({ owner: "service", status: "stopped" });
 	});
 
@@ -91,6 +95,19 @@ describe("ServiceLifecycle", () => {
 			correlationId: "correlation-1",
 			hook: "start",
 			instanceId: "dev",
+			serviceKey: "service-a",
+		});
+	});
+
+	it("wraps post-start failures with their exact lifecycle phase", async () => {
+		const failure = new Error("recovery failed");
+		const service = fixtureService({ onStarted: () => Promise.reject(failure) });
+		await service.reconcile();
+		await service.start();
+
+		await expect(service.onStarted()).rejects.toMatchObject({
+			cause: failure,
+			hook: "onStarted",
 			serviceKey: "service-a",
 		});
 	});

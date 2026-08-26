@@ -133,6 +133,11 @@ export class InstanceLifecycle {
 				started.push(service);
 				phaseSignal.throwIfAborted();
 			}
+			for (const service of started) {
+				phaseSignal.throwIfAborted();
+				await service.onStarted(phaseSignal);
+				phaseSignal.throwIfAborted();
+			}
 			this.#state.startFinished(true);
 			if (this.#seedState.status === "seed_failed") this.#state.restoreSeedFailure();
 		} catch (startFailure) {
