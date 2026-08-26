@@ -43,6 +43,7 @@ export class SlackEventDispatcher {
 		const url = this.#config.eventsUrl;
 		if (!url) return;
 		for (;;) {
+			context.signal.throwIfAborted();
 			const attempt = this.#database.deliveries.dueAttempt(through);
 			if (!attempt) return;
 			const delivery = this.#database.deliveries.get(attempt.eventId);
@@ -113,7 +114,8 @@ export class SlackEventDispatcher {
 				method: "POST",
 				signal: attemptSignal,
 			});
-		} catch {
+		} catch (cause) {
+			if (!surfaceCallbackFailure && context.signal.aborted) throw cause;
 			const error = attemptTimedOut(attemptSignal, timeout) ? "timeout" : "transport_error";
 			this.#completeFailure(context, attempt, { error });
 			// ctx.fetch owns transport failure reporting. The outer tracked task
@@ -126,6 +128,7 @@ export class SlackEventDispatcher {
 			await discardResponseBody(response.body, attemptSignal);
 		} catch (cause) {
 			const interrupted = cause instanceof DeliveryAttemptInterruptedError;
+			if (!surfaceCallbackFailure && interrupted && context.signal.aborted) throw cause;
 			const error = interrupted
 				? attemptTimedOut(attemptSignal, timeout)
 					? "timeout"

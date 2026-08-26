@@ -32,12 +32,26 @@ export class TimeAdvanceServiceMissingError extends Error {
 }
 
 export class TimeAdvanceCommittedError extends AggregateError {
-	readonly result: InstanceClockAdvanceResult;
+	declare readonly reconciliationPending: boolean;
+	declare readonly result: InstanceClockAdvanceResult;
 
-	constructor(result: InstanceClockAdvanceResult, causes: readonly unknown[]) {
+	constructor(
+		result: InstanceClockAdvanceResult,
+		causes: readonly unknown[],
+		reconciliationPending: boolean,
+	) {
 		super(causes, `Clock advance ${result.advanceId} committed but did not finish cleanly.`);
 		this.name = "TimeAdvanceCommittedError";
-		this.result = result;
+		const ownedResult = Object.freeze({ ...result });
+		Object.defineProperties(this, {
+			reconciliationPending: {
+				configurable: false,
+				enumerable: true,
+				value: reconciliationPending,
+				writable: false,
+			},
+			result: { configurable: false, enumerable: true, value: ownedResult, writable: false },
+		});
 	}
 }
 
@@ -110,10 +124,7 @@ export class DurableTimeAdvancement {
 		if (pending) {
 			const warnings = await this.#resume(pending, signal);
 			if (warnings.length > 0) {
-				throw new TimeAdvanceCommittedError(
-					resultFor(pending, this.#getManifest().clock.mode),
-					warnings,
-				);
+				throw this.#committedError(resultFor(pending, this.#getManifest().clock.mode), warnings);
 			}
 		}
 	}
@@ -126,11 +137,11 @@ export class DurableTimeAdvancement {
 		const result = resultFor(pending, this.#getManifest().clock.mode);
 		try {
 			const warnings = [...initialWarnings, ...(await this.#resume(pending, signal))];
-			if (warnings.length > 0) throw new TimeAdvanceCommittedError(result, warnings);
+			if (warnings.length > 0) throw this.#committedError(result, warnings);
 			return result;
 		} catch (cause) {
 			if (cause instanceof TimeAdvanceCommittedError) throw cause;
-			throw new TimeAdvanceCommittedError(result, [cause]);
+			throw this.#committedError(result, [cause]);
 		}
 	}
 
@@ -169,12 +180,24 @@ export class DurableTimeAdvancement {
 			);
 			if (warning) warnings.push(warning);
 		}
+		signal?.throwIfAborted();
 		const current = this.#getManifest();
 		if (current.timeAdvance?.id !== pending.id) return Object.freeze(warnings);
 		const { timeAdvance: _completed, ...completed } = current;
 		const warning = await this.#write(ownInstanceManifest(completed));
 		if (warning) warnings.push(warning);
 		return Object.freeze(warnings);
+	}
+
+	#committedError(
+		result: InstanceClockAdvanceResult,
+		causes: readonly unknown[],
+	): TimeAdvanceCommittedError {
+		return new TimeAdvanceCommittedError(
+			result,
+			causes,
+			this.#getManifest().timeAdvance?.id === result.advanceId,
+		);
 	}
 
 	async #write(manifest: InstanceManifest): Promise<StorageWriteCommittedError | undefined> {

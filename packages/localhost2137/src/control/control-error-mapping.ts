@@ -123,16 +123,19 @@ export function mapControlError(cause: unknown, correlationId: string): Localhos
 	if (cause instanceof TimeAdvanceCommittedError) {
 		return new LocalhostError(
 			"INSTANCE_MUTATION_COMMITTED",
-			"The clock moved, but time reconciliation did not complete cleanly.",
+			cause.reconciliationPending
+				? "The clock moved, but time reconciliation remains pending."
+				: "The clock moved and time reconciliation completed, but a durability check failed.",
 			{
 				correlationId,
 				details: {
 					advanceId: cause.result.advanceId,
 					from: cause.result.from,
 					mode: cause.result.mode,
+					reconciliationPending: cause.reconciliationPending,
 					to: cause.result.to,
 				},
-				retryable: true,
+				retryable: cause.reconciliationPending,
 				status: 500,
 			},
 		);

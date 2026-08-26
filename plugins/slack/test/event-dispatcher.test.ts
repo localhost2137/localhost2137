@@ -520,6 +520,118 @@ describe("Slack event retries", () => {
 			fixture.database.close();
 		}
 	});
+
+	it("does not consume due retries when reconciliation is already cancelled", async () => {
+		const fixture = await deliveryFixture();
+		try {
+			const current = { value: now };
+			let calls = 0;
+			const tracked = trackedTasks();
+			const context = eventContext(current, tracked.tasks, async () => {
+				calls += 1;
+				return new Response(null, { status: 503 });
+			});
+			fixture.dispatcher.schedule(context, fixture.event);
+			await expect(tracked.only()).rejects.toThrow("HTTP 503");
+
+			const cancellation = new AbortController();
+			cancellation.abort(new Error("cancelled before reconciliation"));
+			current.value = new Date(now.getTime() + 10 * 60_000);
+			await expect(
+				fixture.dispatcher.reconcileThrough(
+					eventContext(current, tracked.tasks, context.fetch, cancellation.signal),
+					current.value,
+				),
+			).rejects.toThrow("cancelled before reconciliation");
+
+			expect(calls).toBe(1);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				attemptCount: 1,
+				nextAttemptAt: now,
+				status: "retry_scheduled",
+			});
+		} finally {
+			fixture.database.close();
+		}
+	});
+
+	it.each(["fetch", "response cleanup"] as const)(
+		"leaves a retry incomplete when lifecycle cancellation interrupts $mode",
+		async (mode) => {
+			const fixture = await deliveryFixture();
+			try {
+				const current = { value: now };
+				const initialTasks = trackedTasks();
+				const initialContext = eventContext(
+					current,
+					initialTasks.tasks,
+					async () => new Response(null, { status: 503 }),
+				);
+				fixture.dispatcher.schedule(initialContext, fixture.event);
+				await expect(initialTasks.only()).rejects.toThrow("HTTP 503");
+
+				const retryHeaders: Headers[] = [];
+				const cancellation = new AbortController();
+				const cancelledContext = eventContext(
+					current,
+					trackedTasks().tasks,
+					async (_url, init) => {
+						retryHeaders.push(new Headers(init?.headers));
+						if (mode === "fetch") {
+							const cause = new Error("cancelled retry fetch");
+							cancellation.abort(cause);
+							throw cause;
+						}
+						return new Response(
+							new ReadableStream<Uint8Array>({
+								cancel() {
+									cancellation.abort(new Error("cancelled retry response cleanup"));
+									return new Promise<void>(() => undefined);
+								},
+								start(stream) {
+									stream.enqueue(new TextEncoder().encode("partial"));
+								},
+							}),
+							{ status: 503 },
+						);
+					},
+					cancellation.signal,
+				);
+				current.value = new Date(now.getTime() + 10 * 60_000);
+				await expect(
+					fixture.dispatcher.reconcileThrough(cancelledContext, current.value),
+				).rejects.toThrow(/cancelled retry fetch|delivery attempt was interrupted/);
+				expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+					attemptCount: 2,
+					nextAttemptAt: now,
+					status: "retry_scheduled",
+				});
+
+				const recoveryContext = eventContext(current, trackedTasks().tasks, async (_url, init) => {
+					retryHeaders.push(new Headers(init?.headers));
+					return new Response(null, { status: 204 });
+				});
+				await fixture.dispatcher.reconcileThrough(recoveryContext, current.value);
+
+				expect(retryHeaders).toHaveLength(2);
+				expect(
+					retryHeaders.map((headers) => ({
+						num: headers.get("x-slack-retry-num"),
+						reason: headers.get("x-slack-retry-reason"),
+					})),
+				).toEqual([
+					{ num: "1", reason: "http_error" },
+					{ num: "1", reason: "http_error" },
+				]);
+				expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+					attemptCount: 2,
+					status: "succeeded",
+				});
+			} finally {
+				fixture.database.close();
+			}
+		},
+	);
 });
 
 async function deliveryFixture(
@@ -573,12 +685,13 @@ function eventContext(
 	clock: { value: Date },
 	tasks: TaskTracker,
 	fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+	signal: AbortSignal = new AbortController().signal,
 ) {
 	return {
 		clock: { now: () => clock.value },
 		fetch,
 		log: capturedLogs().logger,
-		signal: new AbortController().signal,
+		signal,
 		tasks,
 	};
 }

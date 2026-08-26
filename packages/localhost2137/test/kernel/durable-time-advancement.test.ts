@@ -8,11 +8,36 @@ import {
 } from "../../src/kernel/durable-time-advancement.js";
 import { parseInstanceId } from "../../src/kernel/identifiers.js";
 import { InstanceClock } from "../../src/kernel/instance-clock.js";
+import { StorageWriteCommittedError } from "../../src/kernel/instance-storage.js";
 import type { InstanceManifest } from "../../src/kernel/manifests.js";
 import type { AnyServiceLifecycle } from "../../src/kernel/service-lifecycle.js";
 import type { PluginTimeAdvanceInput } from "../../src/kernel/time-advance.js";
 
 describe("durable time advancement", () => {
+	it("does not report an uncommitted initial manifest failure as a moved clock", async () => {
+		let manifest = fixtureManifest(["stripe"]);
+		let hookCalls = 0;
+		const advance = coordinator(
+			() => manifest,
+			(next) => (manifest = next),
+			[service("stripe", () => (hookCalls += 1))],
+			manifestStore(() => {
+				throw new Error("initial write did not commit");
+			}),
+		);
+
+		const failure = await advance.advance(1_000).catch((cause: unknown) => cause);
+
+		expect(failure).toMatchObject({ message: "initial write did not commit" });
+		expect(failure).not.toBeInstanceOf(TimeAdvanceCommittedError);
+		expect(hookCalls).toBe(0);
+		expect(manifest.clock).toEqual({
+			instantMs: Date.parse("2026-01-01T00:00:00.000Z"),
+			mode: "pinned",
+		});
+		expect(manifest.timeAdvance).toBeUndefined();
+	});
+
 	it("persists the moved clock first and resumes only the unacknowledged service suffix", async () => {
 		let manifest = fixtureManifest();
 		const calls: string[] = [];
@@ -34,6 +59,7 @@ describe("durable time advancement", () => {
 
 		await expect(first.advance(86_400_000)).rejects.toMatchObject({
 			name: "TimeAdvanceCommittedError",
+			reconciliationPending: true,
 			result: { advanceId: "advance_token" },
 		});
 		expect(manifest.clock).toEqual({
@@ -77,7 +103,9 @@ describe("durable time advancement", () => {
 			services,
 			failingStore,
 		);
-		await expect(first.advance(1_000)).rejects.toBeInstanceOf(TimeAdvanceCommittedError);
+		await expect(first.advance(1_000)).rejects.toMatchObject({
+			reconciliationPending: true,
+		});
 		expect(manifest.timeAdvance?.acknowledgedServices).toEqual([]);
 
 		const restarted = coordinator(
@@ -132,7 +160,9 @@ describe("durable time advancement", () => {
 			}),
 		);
 
-		await expect(first.advance(1_000)).rejects.toBeInstanceOf(TimeAdvanceCommittedError);
+		await expect(first.advance(1_000)).rejects.toMatchObject({
+			reconciliationPending: true,
+		});
 		expect(calls).toBe(1);
 		expect(manifest.timeAdvance?.acknowledgedServices).toEqual(["stripe"]);
 
@@ -173,6 +203,83 @@ describe("durable time advancement", () => {
 			advanceId: "advance_existing",
 		});
 		expect(calls).toBe(1);
+	});
+
+	it.each([
+		{ name: "initial clock and pending record", warningWrite: 1 },
+		{ name: "service acknowledgement", warningWrite: 2 },
+		{ name: "final pending-record clear", warningWrite: 3 },
+	] as const)(
+		"reports a committed warning at the $name as completed and non-resumable",
+		async ({ warningWrite }) => {
+			let manifest = fixtureManifest(["stripe"]);
+			let writes = 0;
+			const advance = coordinator(
+				() => manifest,
+				(next) => (manifest = next),
+				[service("stripe", () => undefined)],
+				manifestStore((next) => {
+					writes += 1;
+					if (writes === warningWrite) {
+						throw new StorageWriteCommittedError(
+							"write_instance",
+							next,
+							new Error("injected post-commit durability warning"),
+						);
+					}
+					manifest = next;
+				}),
+			);
+
+			const failure = await advance.advance(1_000).catch((cause: unknown) => cause);
+
+			expect(failure).toMatchObject({
+				name: "TimeAdvanceCommittedError",
+				reconciliationPending: false,
+			});
+			expect(manifest.timeAdvance).toBeUndefined();
+			expect(Object.getOwnPropertyDescriptor(failure, "reconciliationPending")).toMatchObject({
+				configurable: false,
+				writable: false,
+			});
+		},
+	);
+
+	it("checks cancellation before final clear and resumes without rerunning an acknowledged hook", async () => {
+		let manifest = fixtureManifest(["stripe"]);
+		let calls = 0;
+		let writes = 0;
+		const cancellation = new AbortController();
+		const services = [
+			service("stripe", () => {
+				calls += 1;
+				cancellation.abort(new Error("cancel before final clear"));
+			}),
+		];
+		const store = manifestStore((next) => {
+			writes += 1;
+			manifest = next;
+		});
+
+		await expect(
+			coordinator(
+				() => manifest,
+				(next) => (manifest = next),
+				services,
+				store,
+			).advance(1_000, cancellation.signal),
+		).rejects.toMatchObject({ reconciliationPending: true });
+		expect(writes).toBe(2);
+		expect(manifest.timeAdvance?.acknowledgedServices).toEqual(["stripe"]);
+
+		await coordinator(
+			() => manifest,
+			(next) => (manifest = next),
+			services,
+			store,
+		).recover();
+		expect(calls).toBe(1);
+		expect(manifest.timeAdvance).toBeUndefined();
 	});
 
 	it("gives each service fresh Date objects", async () => {
