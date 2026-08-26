@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { InstanceHandle, RuntimeConfig, ServiceRecord } from "../authoring/config.js";
+import type { RuntimeClient } from "../client/runtime-client.js";
 import { type ResolvedConfig, resolveConfig } from "../config/config-resolution.js";
 import { type ControlClient, connectRuntime } from "../control/control-client.js";
 import { NodeInstanceStorage } from "../node/instance-storage.js";
@@ -9,6 +10,7 @@ import { createProjectRuntime, type ProjectRuntimeComposition } from "../node/pr
 import { NodeRuntimeTime } from "../node/runtime-time.js";
 import { nodeTaskScheduler } from "../node/task-scheduler.js";
 import { TemporaryRuntimeStorage } from "./temporary-runtime-storage.js";
+import { createTestControlClient } from "./test-control-client.js";
 import { createTestInstanceHandle, type TestRuntimeGate } from "./test-instance-handle.js";
 import { TestRuntimeCleanupError, TestRuntimeClosedError } from "./test-runtime-errors.js";
 
@@ -22,7 +24,8 @@ export interface CreateTestRuntimeOptions<Services extends ServiceRecord> {
 }
 
 export interface TestRuntime<Services extends ServiceRecord> {
-	readonly url: string;
+	readonly connection: Readonly<{ token: string; url: string }>;
+	readonly control: RuntimeClient;
 	close(): Promise<void>;
 	createInstance(options?: Readonly<{ seed?: boolean }>): Promise<InstanceHandle<Services>>;
 }
@@ -68,6 +71,7 @@ export async function createTestRuntimeWithDependencies<Services extends Service
 			composition,
 			client,
 			storage,
+			controlToken,
 			address.url,
 		).facade();
 	} catch (cause) {
@@ -90,6 +94,7 @@ class TestRuntimeOwner<Services extends ServiceRecord> implements TestRuntimeGat
 	readonly #config: ResolvedConfig;
 	#phase: "closed" | "closing" | "open" = "open";
 	readonly #storage: TemporaryRuntimeStorage;
+	readonly #token: string;
 	readonly #url: string;
 
 	constructor(
@@ -97,12 +102,14 @@ class TestRuntimeOwner<Services extends ServiceRecord> implements TestRuntimeGat
 		composition: ProjectRuntimeComposition,
 		client: ControlClient,
 		storage: TemporaryRuntimeStorage,
+		token: string,
 		url: string,
 	) {
 		this.#client = client;
 		this.#composition = composition;
 		this.#config = config;
 		this.#storage = storage;
+		this.#token = token;
 		this.#url = url;
 	}
 
@@ -113,8 +120,9 @@ class TestRuntimeOwner<Services extends ServiceRecord> implements TestRuntimeGat
 	facade(): TestRuntime<Services> {
 		return Object.freeze({
 			close: () => this.close(),
+			connection: Object.freeze({ token: this.#token, url: this.#url }),
+			control: createTestControlClient(this.#client, this),
 			createInstance: (options?: Readonly<{ seed?: boolean }>) => this.createInstance(options),
-			url: this.#url,
 		});
 	}
 

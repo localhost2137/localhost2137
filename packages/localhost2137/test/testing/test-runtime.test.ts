@@ -29,7 +29,7 @@ describe("test runtime", () => {
 		const second = await runtime.createInstance();
 
 		try {
-			expect(new URL(runtime.url).port).not.toBe("0");
+			expect(new URL(runtime.connection.url).port).not.toBe("0");
 			expect(Object.keys(first).sort()).toEqual([
 				"clock",
 				"destroy",
@@ -45,7 +45,7 @@ describe("test runtime", () => {
 
 			expect(await first.fixture.increment({ by: 3 })).toEqual({ label: "isolated", value: 3 });
 			expect(await second.fixture.read({})).toEqual({ value: 0 });
-			expect(first.fixture.connection.apiUrl).toContain(`${runtime.url}/test-`);
+			expect(first.fixture.connection.apiUrl).toContain(`${runtime.connection.url}/test-`);
 			expect(first.env.FIXTURE_API_URL).toBe(first.fixture.connection.apiUrl);
 
 			const publicResponse = await fetch(`${first.fixture.connection.apiUrl}/value`);
@@ -99,6 +99,7 @@ describe("test runtime", () => {
 		expect(secondClose).toBe(firstClose);
 		await firstClose;
 		await expect(runtime.createInstance()).rejects.toBeInstanceOf(TestRuntimeClosedError);
+		await expect(runtime.control.listInstances()).rejects.toBeInstanceOf(TestRuntimeClosedError);
 	});
 
 	it("removes owned storage even when the test body throws", async () => {

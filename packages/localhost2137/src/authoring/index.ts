@@ -5,6 +5,7 @@ export {
 	type ReservedServiceKey,
 	type RuntimeConfig,
 	type ScenarioFacade,
+	type ServiceRecord,
 } from "./config.js";
 export type {
 	BasePluginContext,
