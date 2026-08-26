@@ -150,6 +150,89 @@ describe("Slack persistence", () => {
 			database.close();
 		}
 	});
+
+	it.each(["failure", "success"] as const)(
+		"rolls back both delivery records when injected attempt %s completion fails",
+		async (outcome) => {
+			const database = await migratedDatabase();
+			try {
+				const service = new SlackService(database);
+				service.initialize(config(), now);
+				const channel = service.createChannel({ name: "general", now });
+				const created = service.postMessage({
+					channel: channel.id,
+					emitEvent: true,
+					now,
+					text: "ping",
+					user: "U000000",
+				});
+				const eventId = created.deliveryEventId;
+				if (!eventId) throw new TypeError("Expected an event delivery fixture.");
+				database.deliveries.startAttempt(eventId, now);
+				database.raw().exec(`
+					CREATE TRIGGER reject_delivery_attempt_completion
+					BEFORE UPDATE OF completed_at_ms ON event_delivery_attempts
+					BEGIN
+						SELECT RAISE(ABORT, 'injected attempt completion failure');
+					END;
+				`);
+
+				expect(() => {
+					if (outcome === "success") {
+						database.deliveries.completeSuccess(eventId, { now, statusCode: 204 });
+					} else {
+						database.deliveries.completeFailure(eventId, {
+							error: "transport_error",
+							now,
+						});
+					}
+				}).toThrow(/injected attempt completion failure/);
+				expect(database.deliveries.get(eventId)).toMatchObject({
+					completedAt: null,
+					error: null,
+					status: "pending",
+					statusCode: null,
+				});
+				expect(
+					database
+						.raw()
+						.prepare(
+							"SELECT completed_at_ms, error, status_code FROM event_delivery_attempts WHERE event_id = ?",
+						)
+						.get(eventId),
+				).toEqual({ completed_at_ms: null, error: null, status_code: null });
+			} finally {
+				database.close();
+			}
+		},
+	);
+
+	it("rejects delivery completion without an active attempt and preserves pending state", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			const eventId = service.postMessage({
+				channel: channel.id,
+				emitEvent: true,
+				now,
+				text: "ping",
+				user: "U000000",
+			}).deliveryEventId;
+			if (!eventId) throw new TypeError("Expected an event delivery fixture.");
+
+			expect(() => database.deliveries.completeSuccess(eventId, { now, statusCode: 204 })).toThrow(
+				/no active first attempt/,
+			);
+			expect(database.deliveries.get(eventId)).toMatchObject({
+				completedAt: null,
+				status: "pending",
+			});
+		} finally {
+			database.close();
+		}
+	});
 });
 
 async function fixtureDatabase(): Promise<SlackDatabase> {

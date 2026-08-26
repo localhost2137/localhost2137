@@ -23,33 +23,21 @@ export class DeliveryRepository {
 		eventId: EventId,
 		input: Readonly<{ error: string; now: Date; statusCode?: number }>,
 	): void {
-		this.#database
-			.prepare(
-				`UPDATE event_deliveries SET status = 'failed', completed_at_ms = ?, status_code = ?, error = ?
-				 WHERE event_id = ?`,
-			)
-			.run(input.now.getTime(), input.statusCode ?? null, input.error, eventId);
-		this.#database
-			.prepare(
-				`UPDATE event_delivery_attempts SET completed_at_ms = ?, status_code = ?, error = ?
-				 WHERE event_id = ? AND attempt = 1`,
-			)
-			.run(input.now.getTime(), input.statusCode ?? null, input.error, eventId);
+		this.#complete(eventId, {
+			error: input.error,
+			now: input.now,
+			status: "failed",
+			statusCode: input.statusCode ?? null,
+		});
 	}
 
 	completeSuccess(eventId: EventId, input: Readonly<{ now: Date; statusCode: number }>): void {
-		this.#database
-			.prepare(
-				`UPDATE event_deliveries SET status = 'succeeded', completed_at_ms = ?, status_code = ?, error = NULL
-				 WHERE event_id = ?`,
-			)
-			.run(input.now.getTime(), input.statusCode, eventId);
-		this.#database
-			.prepare(
-				`UPDATE event_delivery_attempts SET completed_at_ms = ?, status_code = ?, error = NULL
-				 WHERE event_id = ? AND attempt = 1`,
-			)
-			.run(input.now.getTime(), input.statusCode, eventId);
+		this.#complete(eventId, {
+			error: null,
+			now: input.now,
+			status: "succeeded",
+			statusCode: input.statusCode,
+		});
 	}
 
 	enqueue(messageId: MessageId, now: Date): EventDelivery {
@@ -82,6 +70,38 @@ export class DeliveryRepository {
 				 VALUES (?, 1, ?)`,
 			)
 			.run(eventId, now.getTime());
+	}
+
+	#complete(
+		eventId: EventId,
+		input: Readonly<{
+			error: string | null;
+			now: Date;
+			status: "failed" | "succeeded";
+			statusCode: number | null;
+		}>,
+	): void {
+		this.#database.transaction(() => {
+			const completedAt = input.now.getTime();
+			const delivery = this.#database
+				.prepare(
+					`UPDATE event_deliveries SET status = ?, completed_at_ms = ?, status_code = ?, error = ?
+					 WHERE event_id = ? AND status = 'pending'`,
+				)
+				.run(input.status, completedAt, input.statusCode, input.error, eventId);
+			if (delivery.changes !== 1) {
+				throw new Error(`Slack event delivery ${eventId} is not pending.`);
+			}
+			const attempt = this.#database
+				.prepare(
+					`UPDATE event_delivery_attempts SET completed_at_ms = ?, status_code = ?, error = ?
+					 WHERE event_id = ? AND attempt = 1 AND completed_at_ms IS NULL`,
+				)
+				.run(completedAt, input.statusCode, input.error, eventId);
+			if (attempt.changes !== 1) {
+				throw new Error(`Slack event delivery ${eventId} has no active first attempt.`);
+			}
+		})();
 	}
 }
 
