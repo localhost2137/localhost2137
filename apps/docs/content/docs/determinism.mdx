@@ -1,0 +1,113 @@
+---
+title: What determinism means
+description: Separate repeatability, isolation, control, and provider compatibility when reasoning about local service tests.
+---
+
+“Deterministic” is easy to overclaim. Running a service locally removes some sources of variation;
+it does not make the application, plugin, operating system, or provider model deterministic by
+itself. There is no switch in localhost2137 that makes an entire test repeatable.
+
+The useful goal is narrower: identify which inputs and asynchronous boundaries affect a claim, then
+control the ones that matter. A repeatable result is valuable, but it is not evidence that the local
+behavior matches everything the external provider does.
+
+## Four independent questions
+
+These properties answer different questions:
+
+| Property | Question |
+| --- | --- |
+| Repeatability | Given the same starting world and actions, does the scenario produce the same observable result? |
+| Isolation | Can this scenario change its state without changing another scenario's state? |
+| Control | Can the test arrange the state, event, failure, or time transition needed for its claim? |
+| Compatibility | Does the installed plugin behave like the provider for the particular API and semantics under test? |
+
+An in-process fake may be highly repeatable while bypassing HTTP transport. A real local service may
+run the actual service build while omitting hosted-only behavior or privileged controls. A provider
+sandbox may run provider-owned code while giving the test less control over account state. A
+localhost2137 plugin may offer isolation and explicit operations while implementing only a
+documented subset of the provider. None of those boundaries wins all four properties.
+
+[Choose the right test boundary](/test-boundaries) uses the defect a test must expose to choose
+among them. Locality can improve control; it does not supply compatibility automatically.
+
+## Runtime mechanisms have defined scopes
+
+localhost2137 provides a few mechanisms that remove specific kinds of uncertainty:
+
+| Mechanism | What it controls | What remains outside |
+| --- | --- | --- |
+| A new instance | Plugin state, service storage, clock state, logs, and tracked work for one local world. | Shared plugin configuration, callback destinations, application state, and other processes. |
+| A pinned clock | Time read through the plugin context and explicit time-advance hooks. | The application's clock, SDK wall-clock checks, and code that reads system time directly. |
+| Explicit seed and operations | The documented state and behavior those inputs arrange. | Plugin defaults and behavior the operation does not model. |
+| `idle()` | Completion or failure of plugin work registered with the instance task tracker. | Application work, untracked plugin promises, and the timing or content of external systems. |
+
+Pinned time is therefore not frozen machine time. A plugin must use `ctx.clock.now()` for emulator
+time and reconcile its documented time-derived behavior during advancement. The application still
+sees its normal clock unless it has its own clock seam. Some SDKs validate callback timestamps
+against wall time, which is why real clock mode can be the correct choice for a particular test.
+
+Likewise, `idle()` is not “wait until Node.js has nothing left to do.” It waits for work the plugin
+registered through runtime tracking, including nested tracked work, and surfaces failures from that
+scope. An arbitrary sleep controls neither completion nor failure reporting.
+
+## The plugin supplies the service semantics
+
+The runtime does not choose provider-shaped IDs, list ordering, pagination, transaction rules,
+signatures, retry schedules, or error responses. Each plugin owns those decisions. It also decides
+which operations exist and how time advancement changes its state.
+
+That separation matters when reading a test result. A pinned clock can ensure that a plugin sees the
+same instant, but it cannot make an unstable plugin algorithm stable. Isolated storage can prevent
+one instance from mutating another, but it cannot prove that either instance returns the response a
+real provider would return.
+
+localhost2137 currently provides no deterministic randomness facility. A plugin may generate stable
+identities when that is an intentional, documented compatibility choice, or it may use randomness
+when the modeled behavior requires it. Do not infer repeatable IDs or ordering from the runtime
+alone; read the plugin's support notes and semantic tests.
+
+The shared plugin contract tests prove lifecycle and runtime integration. Evidence of provider
+fidelity still comes from plugin-specific API, SDK, persistence, event, retry, and negative-case tests.
+[Building and testing plugins](/plugins/authoring#contract-and-semantic-tests) keeps those two kinds
+of evidence separate.
+
+## A repeatable scenario has explicit owners
+
+Consider the recurring-billing example in [Integration testing](/testing#in-process-typed-tests).
+The test starts a temporary runtime, creates a fresh instance under a pinned clock, arranges catalog
+data, uses the official SDK to create customer and subscription state, advances time, and inspects
+the resulting invoices.
+
+Different components make different parts of that scenario repeatable:
+
+- the test owns the runtime, instance, starting instant, inputs, and cleanup;
+- the runtime owns the isolated world, clock transition, and tracked-work boundary;
+- the Stripe plugin owns the 30-day interval, invoice transaction, IDs, events, webhook behavior,
+  and the response surface exercised by the SDK calls;
+- the application owns its adapter, callback handler, database, concurrency, and any system-time or
+  randomness it uses.
+
+If the test later adds webhook delivery, `idle()` can establish that tracked plugin delivery settled.
+It cannot establish that unrelated application jobs finished unless the application exposes its own
+synchronization boundary. If the same scenario passes twice, it proves repeatability only for the
+observed behavior and the installed versions involved.
+
+This ownership model also explains why two independent scenarios should normally create two
+instances instead of resetting one world concurrently. Instance isolation protects plugin state;
+it does not serialize a shared callback receiver or application database.
+
+## Repeatable does not mean correct
+
+A perfectly repeatable emulator can be perfectly wrong. It can omit a provider error, accept an
+invalid request, produce the wrong signature, or implement an old SDK contract in exactly the same
+way on every run.
+
+Treat repeatability as a way to make failures reproducible, not as a substitute for a compatibility
+claim. Keep the claim narrow enough to match the plugin's documented surface. Retain provider-facing
+checks for external credentials, account configuration, hosted-only behavior, and the small number
+of production contracts whose risk justifies them.
+
+For the concrete mechanisms, see [Instances and isolation](/instances),
+[Virtual time and asynchronous work](/virtual-time), and [Integration testing](/testing). For the
+boundaries those mechanisms cannot cross, see [Limitations and troubleshooting](/limitations).

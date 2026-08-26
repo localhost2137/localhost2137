@@ -13,6 +13,7 @@ const expectedPages = new Map([
 	["test-boundaries.mdx", "/test-boundaries"],
 	["operations-and-apis.mdx", "/operations-and-apis"],
 	["instances.mdx", "/instances"],
+	["determinism.mdx", "/determinism"],
 	["getting-started.mdx", "/getting-started"],
 	["existing-application.mdx", "/existing-application"],
 	["configuration.mdx", "/configuration"],

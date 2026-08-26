@@ -6,6 +6,7 @@
 		"test-boundaries",
 		"operations-and-apis",
 		"instances",
+		"determinism",
 		"getting-started",
 		"existing-application",
 		"configuration",
