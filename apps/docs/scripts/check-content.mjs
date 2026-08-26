@@ -12,6 +12,7 @@ const expectedPages = new Map([
 	["index.mdx", "/"],
 	["test-boundaries.mdx", "/test-boundaries"],
 	["operations-and-apis.mdx", "/operations-and-apis"],
+	["callbacks.mdx", "/callbacks"],
 	["instances.mdx", "/instances"],
 	["determinism.mdx", "/determinism"],
 	["getting-started.mdx", "/getting-started"],

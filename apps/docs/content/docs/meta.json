@@ -5,6 +5,7 @@
 		"index",
 		"test-boundaries",
 		"operations-and-apis",
+		"callbacks",
 		"instances",
 		"determinism",
 		"getting-started",

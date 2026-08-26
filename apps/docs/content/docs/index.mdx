@@ -23,6 +23,8 @@ test or agent ── typed operation / CLI ──┘
 Operations can also trigger external actors and events. The interface a test should use depends on
 the behavior it claims to verify. [Operations and emulated APIs](/operations-and-apis) follows that
 boundary through complete Slack and Stripe scenarios.
+[Callbacks and webhooks](/callbacks) explains the opposite HTTP direction: plugin delivery into the
+application, including signatures, retries, tracked work, and shared receiver constraints.
 
 The service key in `localhost.config.ts` is the route, storage, CLI, and typed-handle identity. The
 `dev` Slack URL, for example, begins at `http://127.0.0.1:2137/dev/slack`.
