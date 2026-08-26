@@ -159,6 +159,7 @@ import { connectRuntime } from "localhost2137/client";
 import { createTestRuntime } from "localhost2137/testing";
 import { createPluginContractCases } from "@localhost2137/plugin-testkit";
 import { slack } from "@localhost2137/slack";
+import { createStripeSdkFetch, stripe } from "@localhost2137/stripe";
 import { z } from "zod";
 
 if (typeof connectRuntime !== "function" || typeof createTestRuntime !== "function") {
@@ -169,6 +170,9 @@ if (typeof createPluginContractCases !== "function") {
 }
 if (typeof slack !== "function") {
 	throw new Error("Packed Slack plugin entry point is incomplete");
+}
+if (typeof stripe !== "function" || typeof createStripeSdkFetch !== "function") {
+	throw new Error("Packed Stripe plugin entry point is incomplete");
 }
 const testkitEntryPath = fileURLToPath(import.meta.resolve("@localhost2137/plugin-testkit"));
 const testkitSupervisorPath = join(dirname(testkitEntryPath), "durability-supervisor.js");
@@ -269,6 +273,53 @@ try {
 } finally {
 	await packedSlackInstance.destroy();
 	await packedSlackRuntime.close();
+}
+
+const packedStripeRuntime = await createTestRuntime({
+	config: {
+		clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+		services: {
+			stripe: stripe({
+				config: {
+					secretKey: "sk_test_packed_smoke",
+					webhookSecret: "whsec_packed_smoke",
+					webhookUrl: null,
+				},
+			}),
+		},
+	},
+	port: 0,
+	storage: "temporary",
+});
+const packedStripeInstance = await packedStripeRuntime.createInstance();
+try {
+	const customer = await packedStripeInstance.stripe.createCustomer({ name: "Packed Ada" });
+	const product = await packedStripeInstance.stripe.createProduct({ name: "Packed Pro" });
+	const price = await packedStripeInstance.stripe.createPrice({
+		productId: product.id,
+		unitAmount: 2500,
+	});
+	const subscription = await packedStripeInstance.stripe.createSubscription({
+		customerId: customer.id,
+		priceId: price.id,
+	});
+	await packedStripeInstance.clock.advance("30d");
+	const invoices = await packedStripeInstance.stripe.listInvoices({
+		subscriptionId: subscription.id,
+	});
+	if (
+		customer.id !== "cus_000001" ||
+		product.id !== "prod_000001" ||
+		price.id !== "price_000001" ||
+		subscription.id !== "sub_000001" ||
+		invoices.length !== 2 ||
+		invoices[1]?.id !== "in_000002"
+	) {
+		throw new Error("Packed Stripe native billing persistence did not execute");
+	}
+} finally {
+	await packedStripeInstance.destroy();
+	await packedStripeRuntime.close();
 }
 `;
 		const typedAuthoringSmoke = `

@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { access, copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,7 @@ afterEach(async () => {
 
 describe("localhost process transcript", () => {
 	it("uses one explicit, non-discoverable config for the complete CLI session", async () => {
-		const project = await mkdtemp(join(packageDirectory, "test/.tmp-cli-config-"));
+		const project = await temporaryProject("config");
 		temporaryDirectories.push(project);
 		const configPath = join(project, "custom.localhost.ts");
 		await copyFile(fixtureConfig, configPath);
@@ -99,7 +99,7 @@ describe("localhost process transcript", () => {
 	}, 30_000);
 
 	it("executes the non-Slack v0.1 command surface against one real daemon", async () => {
-		const project = await mkdtemp(join(packageDirectory, "test/.tmp-cli-process-"));
+		const project = await temporaryProject("process");
 		temporaryDirectories.push(project);
 		await copyFile(fixtureConfig, join(project, "localhost.config.ts"));
 		const port = await availablePort();
@@ -253,6 +253,12 @@ function processOptions(cwd: string) {
 		env: { ...process.env, LOCALHOST_INSTANCE: "" },
 		stdio: ["ignore", "pipe", "pipe"] as const,
 	};
+}
+
+async function temporaryProject(label: string): Promise<string> {
+	const cache = join(packageDirectory, "dist/test-cache");
+	await mkdir(cache, { recursive: true });
+	return mkdtemp(join(cache, `localhost2137-cli-${label}-`));
 }
 
 async function waitForReady(
