@@ -164,11 +164,11 @@ describe("plugin contract testkit API", () => {
 		);
 	});
 
-	it("rejects a fixture whose inventory omits a selected-plugin operation", async () => {
+	it("rejects a fixture whose inventory omits a declared contract operation", () => {
 		const candidate = mutableFixture();
 		candidate.operations = candidate.operations.slice(0, 2);
-		await expect(caseAt(candidate, 7).run()).rejects.toThrow(
-			"selected operation inventory differs from the declared fixture inventory",
+		expect(() => caseAt(candidate, 7)).toThrow(
+			"Contract call references undeclared operation read",
 		);
 	});
 
@@ -199,6 +199,17 @@ describe("plugin contract testkit API", () => {
 		);
 		expect(Date.now() - startedAt).toBeLessThan(2_500);
 		await expect(caseAt(mutableFixture(), 13).run()).resolves.toBeUndefined();
+	});
+
+	it("rejects arrangement calls outside the selected production inventory", () => {
+		const candidate = mutableFixture();
+		candidate.trackedFetch = {
+			...candidate.trackedFetch,
+			arrange: [{ input: {}, operation: "testOnlySetup" }],
+		};
+		expect(() => createPluginContractCases(candidate as never)).toThrow(
+			"Contract call references undeclared operation testOnlySetup",
+		);
 	});
 });
 

@@ -43,6 +43,7 @@ const fixture = {
 	authoring: { exportName: "config", module: new URL("./typed.config.js", import.meta.url) },
 	connection: { environmentName: "TYPED_URL", valueKey: "apiUrl" as const },
 	durability: {
+		arrange: [],
 		configModule: new URL("./typed.config.js", import.meta.url),
 		expectedInitial: { greeting: "Hello, Ada" },
 		expectedPersisted: { greeting: "Hello, Ada" },
@@ -112,6 +113,7 @@ const fixture = {
 	},
 	serviceKey: "typed" as const,
 	trackedFetch: {
+		arrange: [],
 		expected: { greeting: "Hello, dynamic" },
 		invoke: { input: { name: "dynamic" }, operation: "greet" as const },
 	},

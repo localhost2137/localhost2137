@@ -113,6 +113,8 @@ export interface ContractDurabilityFixture<
 	Services extends ServiceRecord,
 	ServiceKey extends ContractServiceKey<Services>,
 > {
+	/** Public operations run exactly once before the first daemon's baseline read/write. */
+	readonly arrange: readonly ContractOperationCall<Services, ServiceKey>[];
 	/** A file URL for a CLI config module using the documented contract-test environment variables. */
 	readonly configModule: URL;
 	readonly expectedInitial: unknown;
@@ -189,6 +191,7 @@ interface PluginContractFixtureBase<
 	}>;
 	readonly serviceKey: ServiceKey;
 	readonly trackedFetch: Readonly<{
+		readonly arrange: readonly ContractOperationCall<Services, ServiceKey>[];
 		readonly expected: unknown;
 		readonly invoke: ContractOperationCall<Services, ServiceKey>;
 	}>;

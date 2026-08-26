@@ -32,6 +32,14 @@ export function validateFixture<Services extends ServiceRecord>(
 		}
 		keys.add(operation.key);
 	}
+	for (const call of fixtureCalls(fixture)) {
+		if (!keys.has(call.operation)) {
+			throw new TypeError(`Contract call references undeclared operation ${call.operation}.`);
+		}
+		if (!isPlainRecord(call.input)) {
+			throw new TypeError(`Contract call ${call.operation} input must be a plain object.`);
+		}
+	}
 	if (!(fixture.authoring.module instanceof URL) || fixture.authoring.module.protocol !== "file:") {
 		throw new TypeError("Authoring module must be a file URL.");
 	}
@@ -51,6 +59,24 @@ export function validateFixture<Services extends ServiceRecord>(
 	if (!(old < current && current < future)) {
 		throw new TypeError("Durability versions must be strictly ordered old < current < future.");
 	}
+}
+
+function fixtureCalls<Services extends ServiceRecord>(fixture: PluginContractFixture<Services>) {
+	return [
+		...fixture.durability.arrange,
+		fixture.durability.read,
+		fixture.durability.write,
+		fixture.faults.invalidOutput,
+		fixture.faults.storageEscape,
+		fixture.hono.arrange.first.invoke,
+		fixture.hono.arrange.second.invoke,
+		fixture.isolation.mutate,
+		fixture.isolation.read,
+		fixture.reset.mutate,
+		fixture.reset.read,
+		...fixture.trackedFetch.arrange,
+		fixture.trackedFetch.invoke,
+	] as const;
 }
 
 export function collisionServiceKeys(selected: string): readonly [string, string] {

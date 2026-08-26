@@ -231,6 +231,9 @@ async function trackedFetchContract<Services extends ServiceRecord>(
 			{ caseName: name, count: 1, resources },
 			async ({ ids, runtime }) => {
 				const id = requireItem(ids, 0);
+				for (const call of fixture.trackedFetch.arrange) {
+					await execute(runtime.control, id, fixture, call);
+				}
 				const actual = await runtime.control.executeOperation(
 					id,
 					fixture.serviceKey,

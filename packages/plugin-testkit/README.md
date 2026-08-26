@@ -11,6 +11,12 @@ declarative. HTTP fixture callbacks may only build a request descriptor from the
 connection and normalize a semantic response body; the testkit performs the requests and
 assertions.
 
+Stateful delivery and durability scenarios declare public-operation `arrange` sequences. The
+testkit executes tracked-fetch arrangement before the delivery invocation. Durability arrangement
+runs exactly once on the first daemon before its baseline read/write and is deliberately not
+replayed after restart or update, so persisted state remains the observable proof. Arrangement
+cannot name operations outside the selected production inventory.
+
 ## Selected-plugin harness
 
 Keep one development-only harness beside the plugin. Every base, fault, and historical-version

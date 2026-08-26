@@ -18,10 +18,13 @@ export const minimalContractFixture = Object.freeze({
 		valueKey: "apiUrl" as const,
 	}),
 	durability: Object.freeze({
+		arrange: Object.freeze([
+			Object.freeze({ input: Object.freeze({ by: 1 }), operation: "increment" as const }),
+		]),
 		configModule: new URL("./durability-daemon.config.ts", import.meta.url),
-		expectedInitial: Object.freeze({ value: 0 }),
-		expectedPersisted: Object.freeze({ value: 41 }),
-		expectedWrite: Object.freeze({ label: "isolated", value: 41 }),
+		expectedInitial: Object.freeze({ value: 1 }),
+		expectedPersisted: Object.freeze({ value: 42 }),
+		expectedWrite: Object.freeze({ label: "isolated", value: 42 }),
 		read: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
 		versions: Object.freeze({ current: 2, future: 3, old: 1 }),
 		write: Object.freeze({ input: Object.freeze({ by: 41 }), operation: "increment" as const }),
@@ -131,6 +134,7 @@ export const minimalContractFixture = Object.freeze({
 	}),
 	serviceKey: "fixture" as const,
 	trackedFetch: Object.freeze({
+		arrange: Object.freeze([]),
 		expected: Object.freeze({ queued: true as const }),
 		invoke: Object.freeze({
 			input: Object.freeze({ message: "tracked delivery" }),

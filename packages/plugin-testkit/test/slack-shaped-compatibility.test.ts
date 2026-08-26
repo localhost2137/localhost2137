@@ -14,6 +14,7 @@ const slackShapedFixture = {
 	authoring: { exportName: "slackConfig", module: new URL(import.meta.url) },
 	connection: { environmentName: "SLACK_API_URL", valueKey: "apiUrl" as const },
 	durability: {
+		arrange: [],
 		configModule: new URL(import.meta.url),
 		expectedInitial: {},
 		expectedPersisted: {},
@@ -98,6 +99,12 @@ const slackShapedFixture = {
 	},
 	serviceKey: "slack" as const,
 	trackedFetch: {
+		arrange: [
+			{
+				input: { name: "general" },
+				operation: "createConversation" as const,
+			},
+		],
 		expected: { ok: true as const },
 		invoke: {
 			input: { channel: "C1", text: "tracked delivery" },
@@ -162,6 +169,13 @@ function createSlackShapedPlugin() {
 		input: z.object({ channel: z.string(), text: z.string() }),
 		output: z.object({ ok: z.literal(true) }),
 		run: (context, input): { readonly ok: true } => {
+			if (
+				!context.state.conversations.some(
+					(_conversation, index) => `C${index + 1}` === input.channel,
+				)
+			) {
+				throw new Error("channel must exist before sending");
+			}
 			const delivery = context
 				.fetch(context.config.eventsUrl, {
 					body: JSON.stringify(input),

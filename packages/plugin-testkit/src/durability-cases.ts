@@ -47,6 +47,7 @@ async function restartPersistenceCase<Services extends ServiceRecord>(
 	const name = "state persists across runtime restart";
 	await withDurabilityRoot(fixture, async (owner) => {
 		const first = await owner.start(fixture.durability.versions.current, false, name);
+		await arrange(first.client, fixture);
 		assertContractEqual(
 			await execute(first.client, fixture, fixture.durability.read),
 			fixture.durability.expectedInitial,
@@ -90,6 +91,7 @@ async function stateUpgradeCase<Services extends ServiceRecord>(
 	const name = "state-version upgrades preserve data";
 	await withDurabilityRoot(fixture, async (owner) => {
 		const old = await owner.start(fixture.durability.versions.old, false, name);
+		await arrange(old.client, fixture);
 		await execute(old.client, fixture, fixture.durability.write);
 		await old.stop();
 		const current = await owner.start(fixture.durability.versions.current, false, name);
@@ -113,6 +115,7 @@ async function updateRecoveryCase<Services extends ServiceRecord>(
 	const name = "update failure is recoverable";
 	await withDurabilityRoot(fixture, async (owner) => {
 		const old = await owner.start(fixture.durability.versions.old, false, name);
+		await arrange(old.client, fixture);
 		await execute(old.client, fixture, fixture.durability.write);
 		await old.stop();
 		const exitCode = await owner.expectFailure(fixture.durability.versions.current, true);
@@ -275,6 +278,13 @@ async function execute<Services extends ServiceRecord>(
 		call.operation,
 		call.input as never,
 	);
+}
+
+async function arrange<Services extends ServiceRecord>(
+	client: RuntimeClient,
+	fixture: PluginContractFixture<Services>,
+): Promise<void> {
+	for (const call of fixture.durability.arrange) await execute(client, fixture, call);
 }
 
 async function waitForDescriptor(
