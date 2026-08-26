@@ -13,11 +13,16 @@ export type {
 	ContractOperationKey,
 	ContractOperationOutput,
 	ContractServiceKey,
+	ContractTimeAdvanceDurabilityFixture,
 	OperationContractFixture,
 	PluginContractCase,
 	PluginContractFixture,
 	SelectedPluginHarness,
 } from "./contract-types.js";
+export {
+	CONTRACT_FAIL_TIME_ADVANCE_ENV,
+	CONTRACT_TIME_ADVANCE_EVENT_PREFIX,
+} from "./durability-fixture-protocol.js";
 export {
 	createPluginContractCases,
 	runPluginContract,

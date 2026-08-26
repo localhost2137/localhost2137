@@ -59,11 +59,14 @@ export function validateFixture<Services extends ServiceRecord>(
 	if (!(old < current && current < future)) {
 		throw new TypeError("Durability versions must be strictly ordered old < current < future.");
 	}
+	validateTimeAdvanceFixture(fixture);
 }
 
 function fixtureCalls<Services extends ServiceRecord>(fixture: PluginContractFixture<Services>) {
 	return [
 		...fixture.durability.arrange,
+		...(fixture.durability.timeAdvance?.arrange ?? []),
+		...(fixture.durability.timeAdvance?.observations.map(({ read }) => read) ?? []),
 		fixture.durability.read,
 		fixture.durability.write,
 		fixture.faults.invalidOutput,
@@ -77,6 +80,61 @@ function fixtureCalls<Services extends ServiceRecord>(fixture: PluginContractFix
 		...fixture.trackedFetch.arrange,
 		fixture.trackedFetch.invoke,
 	] as const;
+}
+
+function validateTimeAdvanceFixture<Services extends ServiceRecord>(
+	fixture: PluginContractFixture<Services>,
+): void {
+	const timeAdvance = fixture.durability.timeAdvance;
+	if (timeAdvance === undefined) return;
+	if (!isPlainRecord(timeAdvance)) {
+		throw new TypeError("Durability timeAdvance must be a plain object.");
+	}
+	if (!Array.isArray(timeAdvance.arrange)) {
+		throw new TypeError("Durability timeAdvance arrange must be an array.");
+	}
+	if (!Array.isArray(timeAdvance.observations) || timeAdvance.observations.length === 0) {
+		throw new TypeError("Durability timeAdvance must declare at least one observation.");
+	}
+	for (const observation of timeAdvance.observations) {
+		if (!isPlainRecord(observation) || !isPlainRecord(observation.read)) {
+			throw new TypeError("Durability timeAdvance observations must contain operation reads.");
+		}
+	}
+	if (!isCanonicalPositiveDuration(timeAdvance.duration)) {
+		throw new TypeError("Durability timeAdvance duration must be a positive canonical duration.");
+	}
+	if (!isPlainRecord(timeAdvance.deliveries)) {
+		throw new TypeError("Durability timeAdvance deliveries must be a plain object.");
+	}
+	const counts = [
+		timeAdvance.deliveries.afterArrange,
+		timeAdvance.deliveries.afterCommittedAdvance,
+		timeAdvance.deliveries.afterRecovery,
+	];
+	if (!counts.every((value) => Number.isSafeInteger(value) && value >= 0)) {
+		throw new TypeError("Durability timeAdvance delivery counts must be non-negative integers.");
+	}
+	const [afterArrange, afterCommittedAdvance, afterRecovery] = counts as [number, number, number];
+	if (afterArrange > afterCommittedAdvance || afterCommittedAdvance > afterRecovery) {
+		throw new TypeError("Durability timeAdvance delivery counts must be monotonic.");
+	}
+}
+
+function isCanonicalPositiveDuration(value: unknown): value is string {
+	if (typeof value !== "string") return false;
+	const match = /^([1-9]\d*)(ms|s|m|h|d|w)$/.exec(value);
+	if (!match) return false;
+	const unitMilliseconds = {
+		d: 86_400_000n,
+		h: 3_600_000n,
+		m: 60_000n,
+		ms: 1n,
+		s: 1_000n,
+		w: 604_800_000n,
+	} as const;
+	const unit = match[2] as keyof typeof unitMilliseconds;
+	return BigInt(match[1] ?? "0") * unitMilliseconds[unit] <= BigInt(Number.MAX_SAFE_INTEGER);
 }
 
 export function collisionServiceKeys(selected: string): readonly [string, string] {

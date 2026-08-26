@@ -49,6 +49,17 @@ const fixture = {
 		expectedPersisted: { greeting: "Hello, Ada" },
 		expectedWrite: { greeting: "Hello, Grace" },
 		read: { input: { name: "Ada" }, operation: "greet" as const },
+		timeAdvance: {
+			arrange: [{ input: { name: "Ada" }, operation: "greet" as const }],
+			deliveries: { afterArrange: 0, afterCommittedAdvance: 0, afterRecovery: 0 },
+			duration: "30d",
+			observations: [
+				{
+					expected: { greeting: "Hello, Ada" },
+					read: { input: { name: "Ada" }, operation: "greet" as const },
+				},
+			],
+		},
 		versions: { current: 2, future: 3, old: 1 },
 		write: { input: { name: "Grace" }, operation: "greet" as const },
 	},

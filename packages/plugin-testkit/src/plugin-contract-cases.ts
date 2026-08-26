@@ -32,6 +32,7 @@ export function createPluginContractCases<Services extends ServiceRecord>(
 		requireCase(durable, 1),
 		requireCase(durable, 2),
 		requireCase(durable, 3),
+		...durable.slice(4),
 	]);
 }
 

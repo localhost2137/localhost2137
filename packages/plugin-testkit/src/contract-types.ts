@@ -121,12 +121,37 @@ export interface ContractDurabilityFixture<
 	readonly expectedPersisted: unknown;
 	readonly expectedWrite: unknown;
 	readonly read: ContractOperationCall<Services, ServiceKey>;
+	/**
+	 * Optional real-process proof for plugins that reconcile durable state after virtual time moves.
+	 * The daemon config must use the exported time-advance fixture protocol when the fault is enabled.
+	 */
+	readonly timeAdvance?: ContractTimeAdvanceDurabilityFixture<Services, ServiceKey>;
 	readonly versions: Readonly<{
 		current: number;
 		future: number;
 		old: number;
 	}>;
 	readonly write: ContractOperationCall<Services, ServiceKey>;
+}
+
+export interface ContractTimeAdvanceDurabilityFixture<
+	Services extends ServiceRecord,
+	ServiceKey extends ContractServiceKey<Services>,
+> {
+	/** Public operations that create state due for reconciliation. */
+	readonly arrange: readonly ContractOperationCall<Services, ServiceKey>[];
+	/** Expected receiver call counts at each transaction/recovery boundary. */
+	readonly deliveries: Readonly<{
+		readonly afterArrange: number;
+		readonly afterCommittedAdvance: number;
+		readonly afterRecovery: number;
+	}>;
+	readonly duration: string;
+	/** Each observation is asserted after commit and again after restart to reject duplicate effects. */
+	readonly observations: readonly Readonly<{
+		readonly expected: unknown;
+		readonly read: ContractOperationCall<Services, ServiceKey>;
+	}>[];
 }
 
 export interface ContractHttpRequestDescriptor {

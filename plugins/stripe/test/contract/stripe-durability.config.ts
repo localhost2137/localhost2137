@@ -1,4 +1,8 @@
 import { appendFileSync, readFileSync } from "node:fs";
+import {
+	CONTRACT_FAIL_TIME_ADVANCE_ENV,
+	CONTRACT_TIME_ADVANCE_EVENT_PREFIX,
+} from "@localhost2137/plugin-testkit";
 import { defineConfig } from "localhost2137";
 import { createStripePlugin } from "../../src/plugin.js";
 
@@ -20,6 +24,20 @@ export default defineConfig({
 	clock: { mode: "pinned", startAt: "2026-01-02T03:04:05.000Z" },
 	services: {
 		stripe: createStripePlugin({
+			afterTimeReconciled(_context, advance) {
+				appendFileSync(
+					eventsPath,
+					`${CONTRACT_TIME_ADVANCE_EVENT_PREFIX}${JSON.stringify({
+						advanceId: advance.advanceId,
+						from: advance.from.toISOString(),
+						to: advance.to.toISOString(),
+					})}\n`,
+					"utf8",
+				);
+				if (process.env[CONTRACT_FAIL_TIME_ADVANCE_ENV] === "1") {
+					throw new Error("injected crash after Stripe renewal commit");
+				}
+			},
 			...(stateVersion === 2
 				? {
 						beforeStop(context) {

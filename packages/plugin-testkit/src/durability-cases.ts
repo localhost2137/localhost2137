@@ -7,9 +7,13 @@ import { fileURLToPath } from "node:url";
 import type { ServiceRecord } from "localhost2137";
 import { connectRuntime, type RuntimeClient } from "localhost2137/client";
 import { capture, finishCaptured } from "./cleanup-owner.js";
-import { assertContract, assertContractEqual } from "./contract-assertions.js";
+import { assertContract, assertContractEqual, isPlainRecord } from "./contract-assertions.js";
 import { type OwnedContractResources, withContractResources } from "./contract-resources.js";
 import type { PluginContractCase, PluginContractFixture } from "./contract-types.js";
+import {
+	CONTRACT_FAIL_TIME_ADVANCE_ENV,
+	CONTRACT_TIME_ADVANCE_EVENT_PREFIX,
+} from "./durability-fixture-protocol.js";
 import { stopSupervisedProcess } from "./durability-process.js";
 import { assertSelectedServiceIdentity } from "./service-identity.js";
 
@@ -33,12 +37,20 @@ const contractProcessEnvironment: Readonly<{
 export function durabilityCases<Services extends ServiceRecord>(
 	fixture: PluginContractFixture<Services>,
 ): readonly PluginContractCase[] {
-	return Object.freeze([
+	const cases: PluginContractCase[] = [
 		contractCase("update failure is recoverable", () => updateRecoveryCase(fixture)),
 		contractCase("state persists across runtime restart", () => restartPersistenceCase(fixture)),
 		contractCase("future stored state versions are rejected", () => futureVersionCase(fixture)),
 		contractCase("state-version upgrades preserve data", () => stateUpgradeCase(fixture)),
-	]);
+	];
+	if (fixture.durability.timeAdvance) {
+		cases.push(
+			contractCase("committed time advance recovers before restart readiness", () =>
+				timeAdvanceRecoveryCase(fixture),
+			),
+		);
+	}
+	return Object.freeze(cases);
 }
 
 async function restartPersistenceCase<Services extends ServiceRecord>(
@@ -46,7 +58,7 @@ async function restartPersistenceCase<Services extends ServiceRecord>(
 ): Promise<void> {
 	const name = "state persists across runtime restart";
 	await withDurabilityRoot(fixture, async (owner) => {
-		const first = await owner.start(fixture.durability.versions.current, false, name);
+		const first = await owner.start(fixture.durability.versions.current, {}, name);
 		await arrange(first.client, fixture);
 		assertContractEqual(
 			await execute(first.client, fixture, fixture.durability.read),
@@ -59,7 +71,7 @@ async function restartPersistenceCase<Services extends ServiceRecord>(
 			name,
 		);
 		await first.stop();
-		const second = await owner.start(fixture.durability.versions.current, false, name);
+		const second = await owner.start(fixture.durability.versions.current, {}, name);
 		assertContractEqual(
 			await execute(second.client, fixture, fixture.durability.read),
 			fixture.durability.expectedPersisted,
@@ -74,9 +86,9 @@ async function futureVersionCase<Services extends ServiceRecord>(
 ): Promise<void> {
 	const name = "future stored state versions are rejected";
 	await withDurabilityRoot(fixture, async (owner) => {
-		const future = await owner.start(fixture.durability.versions.future, false, name);
+		const future = await owner.start(fixture.durability.versions.future, {}, name);
 		await future.stop();
-		const exitCode = await owner.expectFailure(fixture.durability.versions.current, false);
+		const exitCode = await owner.expectFailure(fixture.durability.versions.current, {});
 		assertContract(
 			exitCode !== 0 || exitCode === null,
 			name,
@@ -90,11 +102,11 @@ async function stateUpgradeCase<Services extends ServiceRecord>(
 ): Promise<void> {
 	const name = "state-version upgrades preserve data";
 	await withDurabilityRoot(fixture, async (owner) => {
-		const old = await owner.start(fixture.durability.versions.old, false, name);
+		const old = await owner.start(fixture.durability.versions.old, {}, name);
 		await arrange(old.client, fixture);
 		await execute(old.client, fixture, fixture.durability.write);
 		await old.stop();
-		const current = await owner.start(fixture.durability.versions.current, false, name);
+		const current = await owner.start(fixture.durability.versions.current, {}, name);
 		assertContractEqual(
 			await execute(current.client, fixture, fixture.durability.read),
 			fixture.durability.expectedPersisted,
@@ -114,17 +126,19 @@ async function updateRecoveryCase<Services extends ServiceRecord>(
 ): Promise<void> {
 	const name = "update failure is recoverable";
 	await withDurabilityRoot(fixture, async (owner) => {
-		const old = await owner.start(fixture.durability.versions.old, false, name);
+		const old = await owner.start(fixture.durability.versions.old, {}, name);
 		await arrange(old.client, fixture);
 		await execute(old.client, fixture, fixture.durability.write);
 		await old.stop();
-		const exitCode = await owner.expectFailure(fixture.durability.versions.current, true);
+		const exitCode = await owner.expectFailure(fixture.durability.versions.current, {
+			update: true,
+		});
 		assertContract(
 			exitCode !== 0 || exitCode === null,
 			name,
 			"injected update failure started successfully",
 		);
-		const recovered = await owner.start(fixture.durability.versions.current, false, name);
+		const recovered = await owner.start(fixture.durability.versions.current, {}, name);
 		assertContractEqual(
 			await execute(recovered.client, fixture, fixture.durability.read),
 			fixture.durability.expectedPersisted,
@@ -133,6 +147,82 @@ async function updateRecoveryCase<Services extends ServiceRecord>(
 		await recovered.stop();
 		const event = `update:${fixture.durability.versions.old}:${fixture.durability.versions.current}`;
 		assertContractEqual(await owner.events(), [event, event], name);
+	});
+}
+
+async function timeAdvanceRecoveryCase<Services extends ServiceRecord>(
+	fixture: PluginContractFixture<Services>,
+): Promise<void> {
+	const name = "committed time advance recovers before restart readiness";
+	const specification = fixture.durability.timeAdvance;
+	if (!specification) throw new TypeError("Time-advance durability specification is missing.");
+	await withDurabilityRoot(fixture, async (owner) => {
+		const first = await owner.start(
+			fixture.durability.versions.current,
+			{ timeAdvance: true },
+			name,
+		);
+		for (const call of specification.arrange) await execute(first.client, fixture, call);
+		await first.client.idle(INSTANCE_ID);
+		assertContractEqual(owner.deliveryCount(), specification.deliveries.afterArrange, name);
+
+		const advance = await capture(() =>
+			first.client.clockAdvance(INSTANCE_ID, specification.duration),
+		);
+		assertContract(advance.status === "rejected", name, "faulted clock advance resolved");
+		if (advance.status !== "rejected") return;
+		const details = errorDetails(advance.reason);
+		assertContract(
+			errorProperty(advance.reason, "code") === "INSTANCE_MUTATION_COMMITTED",
+			name,
+			"faulted clock advance did not report a committed mutation",
+		);
+		assertContract(
+			details?.reconciliationPending === true,
+			name,
+			"faulted clock advance did not remain pending",
+		);
+		await assertObservations(first.client, fixture, specification.observations, name);
+		assertContractEqual(
+			owner.deliveryCount(),
+			specification.deliveries.afterCommittedAdvance,
+			name,
+		);
+		await first.stop();
+
+		const pending = await owner.pendingTimeAdvance(name);
+		assertContract(pending !== undefined, name, "committed advance was not persisted");
+		if (!pending) return;
+		assertContract(
+			pending.services.includes(fixture.serviceKey) &&
+				!pending.acknowledgedServices.includes(fixture.serviceKey),
+			name,
+			"selected service was unexpectedly acknowledged after its injected failure",
+		);
+		assertContractEqual(details?.advanceId, pending.id, name);
+		assertContractEqual(details?.from, new Date(pending.fromMs).toISOString(), name);
+		assertContractEqual(details?.to, new Date(pending.toMs).toISOString(), name);
+
+		const second = await owner.start(fixture.durability.versions.current, {}, name);
+		assertContract(
+			(await owner.pendingTimeAdvance(name)) === undefined,
+			name,
+			"runtime published readiness before clearing the recovered advance",
+		);
+		await second.client.idle(INSTANCE_ID);
+		assertContractEqual(owner.deliveryCount(), specification.deliveries.afterRecovery, name);
+		await assertObservations(second.client, fixture, specification.observations, name);
+
+		const expectedRecord = Object.freeze({
+			advanceId: pending.id,
+			from: new Date(pending.fromMs).toISOString(),
+			to: new Date(pending.toMs).toISOString(),
+		});
+		const records = (await owner.events())
+			.filter((event) => event.startsWith(CONTRACT_TIME_ADVANCE_EVENT_PREFIX))
+			.map((event) => parseTimeAdvanceEvent(event, name));
+		assertContractEqual(records, [expectedRecord, expectedRecord], name);
+		await second.stop();
 	});
 }
 
@@ -147,10 +237,25 @@ interface SpawnedDaemon {
 	stop(): Promise<number | null>;
 }
 
+interface DurabilityFaults {
+	readonly timeAdvance?: boolean;
+	readonly update?: boolean;
+}
+
+interface PendingTimeAdvance {
+	readonly acknowledgedServices: readonly string[];
+	readonly fromMs: number;
+	readonly id: string;
+	readonly services: readonly string[];
+	readonly toMs: number;
+}
+
 interface DurabilityOwner {
+	deliveryCount(): number;
 	events(): Promise<readonly string[]>;
-	expectFailure(version: number, failUpdate: boolean): Promise<number | null>;
-	start(version: number, failUpdate: boolean, caseName: string): Promise<RunningDaemon>;
+	expectFailure(version: number, faults: DurabilityFaults): Promise<number | null>;
+	pendingTimeAdvance(caseName: string): Promise<PendingTimeAdvance | undefined>;
+	start(version: number, faults: DurabilityFaults, caseName: string): Promise<RunningDaemon>;
 }
 
 async function withDurabilityRoot<Services extends ServiceRecord, Value>(
@@ -173,7 +278,7 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 	const activeStops = new Set<() => Promise<number | null>>();
 	const daemonCwd = await nearestPackageRoot(fileURLToPath(fixture.durability.configModule));
 	const supervisorSource = supervisorModuleUrl();
-	const spawnOwned = async (version: number, failUpdate: boolean): Promise<SpawnedDaemon> => {
+	const spawnOwned = async (version: number, faults: DurabilityFaults): Promise<SpawnedDaemon> => {
 		await waitForDurabilityRelease(root);
 		const port = await availablePort();
 		const inheritedEnvironment = { ...process.env };
@@ -195,7 +300,8 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 				...inheritedEnvironment,
 				[contractProcessEnvironment.deliveryUrl]: resources.harness.deliveryUrl,
 				[contractProcessEnvironment.events]: eventsPath,
-				[contractProcessEnvironment.failUpdate]: failUpdate ? "1" : "0",
+				[CONTRACT_FAIL_TIME_ADVANCE_ENV]: faults.timeAdvance ? "1" : "0",
+				[contractProcessEnvironment.failUpdate]: faults.update ? "1" : "0",
 				[contractProcessEnvironment.storage]: root,
 				[contractProcessEnvironment.version]: String(version),
 			},
@@ -224,18 +330,20 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 		});
 	};
 	const owner: DurabilityOwner = Object.freeze({
+		deliveryCount: resources.deliveries.count,
 		events: async () =>
 			Object.freeze((await readFile(eventsPath, "utf8")).split("\n").filter(Boolean)),
-		expectFailure: async (version: number, failUpdate: boolean) => {
-			const daemon = await spawnOwned(version, failUpdate);
+		expectFailure: async (version: number, faults: DurabilityFaults) => {
+			const daemon = await spawnOwned(version, faults);
 			try {
 				return await waitForFailure(root, daemon);
 			} finally {
 				await daemon.stop();
 			}
 		},
-		start: async (version: number, failUpdate: boolean, caseName: string) => {
-			const daemon = await spawnOwned(version, failUpdate);
+		pendingTimeAdvance: (caseName: string) => readPendingTimeAdvance(root, caseName),
+		start: async (version: number, faults: DurabilityFaults, caseName: string) => {
+			const daemon = await spawnOwned(version, faults);
 			try {
 				const descriptor = await waitForDescriptor(root, daemon);
 				assertContract(
@@ -285,6 +393,112 @@ async function arrange<Services extends ServiceRecord>(
 	fixture: PluginContractFixture<Services>,
 ): Promise<void> {
 	for (const call of fixture.durability.arrange) await execute(client, fixture, call);
+}
+
+async function assertObservations<Services extends ServiceRecord>(
+	client: RuntimeClient,
+	fixture: PluginContractFixture<Services>,
+	observations: readonly Readonly<{
+		expected: unknown;
+		read: Readonly<{ input: unknown; operation: string }>;
+	}>[],
+	caseName: string,
+): Promise<void> {
+	for (const observation of observations) {
+		assertContractEqual(
+			await execute(client, fixture, observation.read),
+			observation.expected,
+			caseName,
+		);
+	}
+}
+
+function errorDetails(value: unknown): Readonly<Record<PropertyKey, unknown>> | undefined {
+	const details = errorProperty(value, "details");
+	return isPlainRecord(details) ? details : undefined;
+}
+
+function errorProperty(value: unknown, key: string): unknown {
+	return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+function parseTimeAdvanceEvent(
+	event: string,
+	caseName: string,
+): Readonly<{ advanceId: string; from: string; to: string }> {
+	let value: unknown;
+	try {
+		value = JSON.parse(event.slice(CONTRACT_TIME_ADVANCE_EVENT_PREFIX.length));
+	} catch {
+		return contractFailure(caseName, "time-advance fixture emitted invalid JSON");
+	}
+	if (!isPlainRecord(value)) {
+		return contractFailure(caseName, "time-advance fixture emitted a non-object record");
+	}
+	const advanceId = value.advanceId;
+	const from = value.from;
+	const to = value.to;
+	if (
+		typeof advanceId !== "string" ||
+		typeof from !== "string" ||
+		typeof to !== "string" ||
+		!Number.isFinite(Date.parse(from)) ||
+		!Number.isFinite(Date.parse(to))
+	) {
+		return contractFailure(caseName, "time-advance fixture emitted an invalid record");
+	}
+	return Object.freeze({ advanceId, from, to });
+}
+
+async function readPendingTimeAdvance(
+	root: string,
+	caseName: string,
+): Promise<PendingTimeAdvance | undefined> {
+	let manifest: unknown;
+	try {
+		manifest = JSON.parse(
+			await readFile(join(root, "instances", INSTANCE_ID, "instance.json"), "utf8"),
+		);
+	} catch {
+		return contractFailure(caseName, "could not read the persisted instance manifest");
+	}
+	if (!isPlainRecord(manifest)) {
+		return contractFailure(caseName, "persisted instance manifest is not an object");
+	}
+	const value = manifest.timeAdvance;
+	if (value === undefined) return undefined;
+	if (!isPlainRecord(value)) {
+		return contractFailure(caseName, "pending time advance is not an object");
+	}
+	const acknowledgedServices = value.acknowledgedServices;
+	const fromMs = value.fromMs;
+	const id = value.id;
+	const services = value.services;
+	const toMs = value.toMs;
+	if (
+		!Array.isArray(acknowledgedServices) ||
+		!acknowledgedServices.every((service) => typeof service === "string") ||
+		!Number.isSafeInteger(fromMs) ||
+		typeof id !== "string" ||
+		!Array.isArray(services) ||
+		!services.every((service) => typeof service === "string") ||
+		!Number.isSafeInteger(toMs) ||
+		Number(toMs) <= Number(fromMs)
+	) {
+		return contractFailure(caseName, "pending time advance has an invalid shape");
+	}
+	return Object.freeze({
+		acknowledgedServices: Object.freeze([...acknowledgedServices]) as readonly string[],
+		fromMs: Number(fromMs),
+		id,
+		services: Object.freeze([...services]) as readonly string[],
+		toMs: Number(toMs),
+	});
+}
+
+function contractFailure(caseName: string, message: string): never {
+	assertContract(false, caseName, message);
+	throw new TypeError("Unreachable contract assertion.");
 }
 
 async function waitForDescriptor(

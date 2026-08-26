@@ -36,6 +36,42 @@ export const stripeContractFixture = Object.freeze({
 		expectedPersisted: Object.freeze([invoice()]),
 		expectedWrite: subscription(),
 		read: Object.freeze({ input: Object.freeze({}), operation: "listInvoices" as const }),
+		timeAdvance: Object.freeze({
+			arrange: Object.freeze([
+				Object.freeze({
+					input: Object.freeze({ name: "Ada" }),
+					operation: "createCustomer" as const,
+				}),
+				Object.freeze({
+					input: Object.freeze({ name: "Pro" }),
+					operation: "createProduct" as const,
+				}),
+				Object.freeze({
+					input: Object.freeze({ productId: "prod_000001", unitAmount: 2_500 }),
+					operation: "createPrice" as const,
+				}),
+				Object.freeze({
+					input: Object.freeze({ customerId: "cus_000001", priceId: "price_000001" }),
+					operation: "createSubscription" as const,
+				}),
+			]),
+			deliveries: Object.freeze({
+				afterArrange: 1,
+				afterCommittedAdvance: 1,
+				afterRecovery: 2,
+			}),
+			duration: "30d",
+			observations: Object.freeze([
+				Object.freeze({
+					expected: Object.freeze([invoice(), renewalInvoice()]),
+					read: Object.freeze({ input: Object.freeze({}), operation: "listInvoices" as const }),
+				}),
+				Object.freeze({
+					expected: Object.freeze([event(), renewalEvent()]),
+					read: Object.freeze({ input: Object.freeze({}), operation: "listEvents" as const }),
+				}),
+			]),
+		}),
 		versions: Object.freeze({ current: 3, future: 4, old: 2 }),
 		write: Object.freeze({
 			input: Object.freeze({ customerId: "cus_000001", priceId: "price_000001" }),
@@ -306,6 +342,29 @@ function event() {
 		createdAt: PINNED_TIME,
 		id: "evt_000001",
 		invoiceId: "in_000001",
+		type: "invoice.paid",
+	});
+}
+
+function renewalInvoice() {
+	return Object.freeze({
+		amountDue: 2_500,
+		amountPaid: 2_500,
+		currency: "usd",
+		customerId: "cus_000001",
+		id: "in_000002",
+		periodEnd: "2026-03-03T03:04:05.000Z",
+		periodStart: "2026-02-01T03:04:05.000Z",
+		status: "paid",
+		subscriptionId: "sub_000001",
+	});
+}
+
+function renewalEvent() {
+	return Object.freeze({
+		createdAt: "2026-02-01T03:04:05.000Z",
+		id: "evt_000002",
+		invoiceId: "in_000002",
 		type: "invoice.paid",
 	});
 }

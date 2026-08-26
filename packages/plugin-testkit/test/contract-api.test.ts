@@ -86,6 +86,40 @@ describe("plugin contract testkit API", () => {
 		expect(() => createPluginContractCases(candidate as never)).toThrow(TypeError);
 	});
 
+	it.each([
+		[
+			"a non-canonical time-advance duration",
+			{
+				arrange: [],
+				deliveries: { afterArrange: 0, afterCommittedAdvance: 0, afterRecovery: 0 },
+				duration: "30 days",
+				observations: [{ expected: { value: 0 }, read: { input: {}, operation: "read" } }],
+			},
+		],
+		[
+			"time advancement without an observation",
+			{
+				arrange: [],
+				deliveries: { afterArrange: 0, afterCommittedAdvance: 0, afterRecovery: 0 },
+				duration: "30d",
+				observations: [],
+			},
+		],
+		[
+			"non-monotonic time-advance delivery counts",
+			{
+				arrange: [],
+				deliveries: { afterArrange: 1, afterCommittedAdvance: 0, afterRecovery: 2 },
+				duration: "30d",
+				observations: [{ expected: { value: 0 }, read: { input: {}, operation: "read" } }],
+			},
+		],
+	] as const)("rejects %s", (_label, timeAdvance) => {
+		const candidate = mutableFixture();
+		candidate.durability = { ...candidate.durability, timeAdvance };
+		expect(() => createPluginContractCases(candidate as never)).toThrow(TypeError);
+	});
+
 	it("provides a stable assertion error with case context", () => {
 		const failure = new PluginContractAssertionError("state isolation", "values differed");
 		expect(failure).toMatchObject({
@@ -209,6 +243,22 @@ describe("plugin contract testkit API", () => {
 		};
 		expect(() => createPluginContractCases(candidate as never)).toThrow(
 			"Contract call references undeclared operation testOnlySetup",
+		);
+	});
+
+	it("validates time-advance observation calls against the production inventory", () => {
+		const candidate = mutableFixture();
+		candidate.durability = {
+			...candidate.durability,
+			timeAdvance: {
+				arrange: [],
+				deliveries: { afterArrange: 0, afterCommittedAdvance: 0, afterRecovery: 0 },
+				duration: "30d",
+				observations: [{ expected: { value: 0 }, read: { input: {}, operation: "testOnlyRead" } }],
+			},
+		};
+		expect(() => createPluginContractCases(candidate as never)).toThrow(
+			"Contract call references undeclared operation testOnlyRead",
 		);
 	});
 });
