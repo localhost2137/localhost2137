@@ -13,6 +13,13 @@ export interface TaskFailure {
 	readonly label: string;
 }
 
+const taskFailureCheckpointOwner: unique symbol = Symbol("taskFailureCheckpointOwner");
+
+export interface TaskFailureCheckpoint {
+	readonly nextTaskId: number;
+	readonly [taskFailureCheckpointOwner]: InstanceTaskTracker;
+}
+
 export interface TaskCloseReport {
 	readonly failures: readonly TaskFailure[];
 	readonly unfinishedLabels: readonly string[];
@@ -63,8 +70,12 @@ interface WaitOptions {
 	readonly timeoutMs?: number;
 }
 
+interface RecordedTaskFailure extends TaskFailure {
+	readonly taskId: number;
+}
+
 export class InstanceTaskTracker implements TaskTracker {
-	readonly #failures: TaskFailure[] = [];
+	readonly #failures: RecordedTaskFailure[] = [];
 	readonly #scheduler: TaskScheduler;
 	readonly #tasks = new Map<number, string>();
 	readonly #waiters = new Set<() => void>();
@@ -103,7 +114,7 @@ export class InstanceTaskTracker implements TaskTracker {
 					return value;
 				},
 				(cause: unknown) => {
-					if (recordFailure) this.#failures.push(Object.freeze({ cause, label }));
+					if (recordFailure) this.#failures.push(Object.freeze({ cause, label, taskId }));
 					this.#finishTask(taskId);
 					throw cause;
 				},
@@ -118,6 +129,27 @@ export class InstanceTaskTracker implements TaskTracker {
 	async idle(options: WaitOptions = {}): Promise<void> {
 		await this.#drain(options);
 		const failures = this.#takeFailures();
+		if (failures.length > 0) throw new TrackedTaskFailuresError(failures);
+	}
+
+	failureCheckpoint(): TaskFailureCheckpoint {
+		return Object.freeze({
+			nextTaskId: this.#nextTaskId,
+			[taskFailureCheckpointOwner]: this,
+		});
+	}
+
+	async idleSince(checkpoint: TaskFailureCheckpoint, options: WaitOptions = {}): Promise<void> {
+		if (
+			checkpoint[taskFailureCheckpointOwner] !== this ||
+			!Number.isSafeInteger(checkpoint.nextTaskId) ||
+			checkpoint.nextTaskId < 1 ||
+			checkpoint.nextTaskId > this.#nextTaskId
+		) {
+			throw new TypeError("Task failure checkpoint is invalid for this tracker.");
+		}
+		await this.#drain(options);
+		const failures = this.#takeFailuresSince(checkpoint.nextTaskId);
 		if (failures.length > 0) throw new TrackedTaskFailuresError(failures);
 	}
 
@@ -217,8 +249,23 @@ export class InstanceTaskTracker implements TaskTracker {
 	}
 
 	#takeFailures(): TaskFailure[] {
-		return this.#failures.splice(0);
+		return this.#failures.splice(0).map(ownTaskFailure);
 	}
+
+	#takeFailuresSince(nextTaskId: number): TaskFailure[] {
+		const selected: RecordedTaskFailure[] = [];
+		const retained: RecordedTaskFailure[] = [];
+		for (const failure of this.#failures) {
+			if (failure.taskId >= nextTaskId) selected.push(failure);
+			else retained.push(failure);
+		}
+		this.#failures.splice(0, this.#failures.length, ...retained);
+		return selected.map(ownTaskFailure);
+	}
+}
+
+function ownTaskFailure(failure: RecordedTaskFailure): TaskFailure {
+	return Object.freeze({ cause: failure.cause, label: failure.label });
 }
 
 interface WaitCancellation {

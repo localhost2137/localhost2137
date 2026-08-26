@@ -129,16 +129,19 @@ export class ActiveInstanceFactory {
 			clock,
 			getManifest: () => holder.manifest,
 			instanceId,
-			quiesce: (phaseSignal) =>
-				tasks.quiesce({
-					...(phaseSignal ? { signal: phaseSignal } : {}),
-					timeoutMs: options.remainingMs(),
-				}),
 			services,
 			setManifest: (next) => {
 				holder.manifest = next;
 			},
 			storage: this.#dependencies.storage,
+			tasks: {
+				failureCheckpoint: () => tasks.failureCheckpoint(),
+				idleSince: (checkpoint, phaseSignal) =>
+					tasks.idleSince(checkpoint, {
+						...(phaseSignal ? { signal: phaseSignal } : {}),
+						timeoutMs: options.remainingMs(),
+					}),
+			},
 			token: this.#dependencies.advanceId,
 		});
 		const active: ActiveInstance = {

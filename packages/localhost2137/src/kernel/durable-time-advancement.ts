@@ -4,6 +4,7 @@ import { StorageWriteCommittedError } from "./instance-storage.js";
 import type { AnyServiceLifecycle } from "./service-lifecycle.js";
 import type { InstanceManifest, PendingTimeAdvance } from "./manifests.js";
 import { ownInstanceManifest } from "./manifests.js";
+import type { TaskFailureCheckpoint } from "./task-tracker.js";
 
 export type { InstanceClockAdvanceResult } from "../authoring/config.js";
 
@@ -59,33 +60,38 @@ export interface TimeAdvanceManifestStore {
 	writeInstance(instanceId: InstanceId, manifest: InstanceManifest): Promise<void>;
 }
 
+export interface TimeAdvanceTaskBoundary {
+	failureCheckpoint(): TaskFailureCheckpoint;
+	idleSince(checkpoint: TaskFailureCheckpoint, signal?: AbortSignal): Promise<void>;
+}
+
 export class DurableTimeAdvancement {
 	readonly #clock: InstanceClock;
 	readonly #getManifest: () => InstanceManifest;
 	readonly #instanceId: InstanceId;
-	readonly #quiesce: (signal?: AbortSignal) => Promise<void>;
 	readonly #services: readonly AnyServiceLifecycle[];
 	readonly #setManifest: (manifest: InstanceManifest) => void;
 	readonly #storage: TimeAdvanceManifestStore;
+	readonly #tasks: TimeAdvanceTaskBoundary;
 	readonly #token: () => string;
 
 	constructor(input: {
 		readonly clock: InstanceClock;
 		readonly getManifest: () => InstanceManifest;
 		readonly instanceId: InstanceId;
-		readonly quiesce: (signal?: AbortSignal) => Promise<void>;
 		readonly services: readonly AnyServiceLifecycle[];
 		readonly setManifest: (manifest: InstanceManifest) => void;
 		readonly storage: TimeAdvanceManifestStore;
+		readonly tasks: TimeAdvanceTaskBoundary;
 		readonly token: () => string;
 	}) {
 		this.#clock = input.clock;
 		this.#getManifest = input.getManifest;
 		this.#instanceId = input.instanceId;
-		this.#quiesce = input.quiesce;
 		this.#services = input.services;
 		this.#setManifest = input.setManifest;
 		this.#storage = input.storage;
+		this.#tasks = input.tasks;
 		this.#token = input.token;
 	}
 
@@ -154,15 +160,32 @@ export class DurableTimeAdvancement {
 			if (!serviceKey) throw new TypeError("Pending time advance has an invalid service order.");
 			const service = this.#services.find((candidate) => candidate.serviceKey === serviceKey);
 			if (!service) throw new TimeAdvanceServiceMissingError(pending.id, serviceKey);
-			await service.onTimeAdvanced(
-				{
-					advanceId: pending.id,
-					from: new Date(pending.fromMs),
-					to: new Date(pending.toMs),
-				},
-				signal,
-			);
-			await this.#quiesce(signal);
+			const taskCheckpoint = this.#tasks.failureCheckpoint();
+			const serviceFailures: unknown[] = [];
+			try {
+				await service.onTimeAdvanced(
+					{
+						advanceId: pending.id,
+						from: new Date(pending.fromMs),
+						to: new Date(pending.toMs),
+					},
+					signal,
+				);
+			} catch (cause) {
+				serviceFailures.push(cause);
+			}
+			try {
+				await this.#tasks.idleSince(taskCheckpoint, signal);
+			} catch (cause) {
+				serviceFailures.push(cause);
+			}
+			if (serviceFailures.length === 1) throw serviceFailures[0];
+			if (serviceFailures.length > 1) {
+				throw new AggregateError(
+					serviceFailures,
+					`Time advance ${pending.id} failed while reconciling service "${serviceKey}".`,
+				);
+			}
 			acknowledged += 1;
 			const current = this.#getManifest();
 			const nextPending = current.timeAdvance;

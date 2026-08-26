@@ -57,6 +57,51 @@ describe("InstanceTaskTracker", () => {
 		await expect(tracker.idle()).resolves.toBeUndefined();
 	});
 
+	it("surfaces only failures since a checkpoint and retains older failures", async () => {
+		const tracker = new InstanceTaskTracker(new ManualScheduler());
+		const olderFailure = new Error("older failure");
+		const hookFailure = new Error("hook failure");
+		await expect(tracker.track("older", Promise.reject(olderFailure))).rejects.toBe(olderFailure);
+		const checkpoint = tracker.failureCheckpoint();
+		await expect(tracker.track("hook", Promise.reject(hookFailure))).rejects.toBe(hookFailure);
+
+		await expect(tracker.idleSince(checkpoint)).rejects.toMatchObject({
+			failures: [{ cause: hookFailure, label: "hook" }],
+		});
+		await expect(tracker.idle()).rejects.toMatchObject({
+			failures: [{ cause: olderFailure, label: "older" }],
+		});
+	});
+
+	it("rejects checkpoints captured by another tracker", async () => {
+		const first = new InstanceTaskTracker(new ManualScheduler());
+		const second = new InstanceTaskTracker(new ManualScheduler());
+
+		await expect(second.idleSince(first.failureCheckpoint())).rejects.toThrow(
+			"Task failure checkpoint is invalid for this tracker.",
+		);
+	});
+
+	it("drains tasks nested after a checkpoint before surfacing their failures", async () => {
+		const tracker = new InstanceTaskTracker(new ManualScheduler());
+		const parent = deferred<void>();
+		const childFailure = new Error("nested hook task failed");
+		const checkpoint = tracker.failureCheckpoint();
+		const trackedParent = tracker.track(
+			"hook parent",
+			parent.promise.then(() => {
+				tracker.track("hook child", Promise.reject(childFailure));
+			}),
+		);
+		const idle = tracker.idleSince(checkpoint);
+
+		parent.resolve();
+		await trackedParent;
+		await expect(idle).rejects.toMatchObject({
+			failures: [{ cause: childFailure, label: "hook child" }],
+		});
+	});
+
 	it("owns ignored background rejections while keeping them idle-visible", async () => {
 		const tracker = new InstanceTaskTracker(new ManualScheduler());
 		const unhandled: unknown[] = [];
@@ -112,7 +157,10 @@ describe("InstanceTaskTracker", () => {
 		const close = tracker.close({ graceMs: 25 });
 		scheduler.fire();
 
-		await expect(close).resolves.toEqual({ failures: [], unfinishedLabels: ["shutdown-work"] });
+		await expect(close).resolves.toEqual({
+			failures: [],
+			unfinishedLabels: ["shutdown-work"],
+		});
 		expect(() => tracker.track("late", Promise.resolve())).toThrow(TaskTrackerClosedError);
 		pending.resolve();
 		await tracked;
@@ -134,7 +182,10 @@ describe("InstanceTaskTracker", () => {
 		expect(subsequent).toBe(first);
 		expect(concurrentReport).toBe(firstReport);
 		expect(await subsequent).toBe(firstReport);
-		expect(firstReport).toEqual({ failures: [], unfinishedLabels: ["shutdown-work"] });
+		expect(firstReport).toEqual({
+			failures: [],
+			unfinishedLabels: ["shutdown-work"],
+		});
 
 		pending.resolve();
 		await tracked;

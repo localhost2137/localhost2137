@@ -5,6 +5,7 @@ import {
 	PendingTimeAdvanceConflictError,
 	TimeAdvanceCommittedError,
 	type TimeAdvanceManifestStore,
+	type TimeAdvanceTaskBoundary,
 	TimeAdvanceServiceMissingError,
 } from "../../src/kernel/durable-time-advancement.js";
 import { parseInstanceId } from "../../src/kernel/identifiers.js";
@@ -12,6 +13,7 @@ import { InstanceClock } from "../../src/kernel/instance-clock.js";
 import { StorageWriteCommittedError } from "../../src/kernel/instance-storage.js";
 import type { InstanceManifest } from "../../src/kernel/manifests.js";
 import type { AnyServiceLifecycle } from "../../src/kernel/service-lifecycle.js";
+import { InstanceTaskTracker } from "../../src/kernel/task-tracker.js";
 
 describe("durable time advancement", () => {
 	it("does not report an uncommitted initial manifest failure as a moved clock", async () => {
@@ -66,7 +68,9 @@ describe("durable time advancement", () => {
 			instantMs: Date.parse("2026-01-02T00:00:00.000Z"),
 			mode: "pinned",
 		});
-		expect(manifest.timeAdvance).toMatchObject({ acknowledgedServices: ["slack"] });
+		expect(manifest.timeAdvance).toMatchObject({
+			acknowledgedServices: ["slack"],
+		});
 
 		failStripe = false;
 		const restarted = coordinator(
@@ -245,7 +249,7 @@ describe("durable time advancement", () => {
 		},
 	);
 
-	it("checks cancellation before final clear and resumes without rerunning an acknowledged hook", async () => {
+	it("does not acknowledge a hook whose scoped drain observes cancellation", async () => {
 		let manifest = fixtureManifest(["stripe"]);
 		let calls = 0;
 		let writes = 0;
@@ -269,8 +273,8 @@ describe("durable time advancement", () => {
 				store,
 			).advance(1_000, cancellation.signal),
 		).rejects.toMatchObject({ reconciliationPending: true });
-		expect(writes).toBe(2);
-		expect(manifest.timeAdvance?.acknowledgedServices).toEqual(["stripe"]);
+		expect(writes).toBe(1);
+		expect(manifest.timeAdvance?.acknowledgedServices).toEqual([]);
 
 		await coordinator(
 			() => manifest,
@@ -278,7 +282,8 @@ describe("durable time advancement", () => {
 			services,
 			store,
 		).recover();
-		expect(calls).toBe(1);
+		expect(calls).toBe(2);
+		expect(writes).toBe(3);
 		expect(manifest.timeAdvance).toBeUndefined();
 	});
 
@@ -298,22 +303,135 @@ describe("durable time advancement", () => {
 
 		expect(observed).toEqual([Date.parse("2026-01-01T00:00:01.000Z")]);
 	});
+
+	it("does not acknowledge a service whose time hook launches failing tracked work", async () => {
+		let manifest = fixtureManifest(["stripe"]);
+		const tasks = taskTracker();
+		const olderFailure = new Error("retained from earlier work");
+		await expect(tasks.track("older", Promise.reject(olderFailure))).rejects.toBe(olderFailure);
+		const hookTaskFailure = new Error("renewal delivery failed");
+		const advance = coordinator(
+			() => manifest,
+			(next) => (manifest = next),
+			[
+				service("stripe", () => {
+					void tasks.track("renewal delivery", Promise.reject(hookTaskFailure));
+				}),
+			],
+			manifestStore((next) => (manifest = next)),
+			{
+				failureCheckpoint: () => tasks.failureCheckpoint(),
+				idleSince: (checkpoint) => tasks.idleSince(checkpoint),
+			},
+		);
+
+		const failure = await advance.advance(1_000).catch((cause: unknown) => cause);
+
+		expect(failure).toBeInstanceOf(TimeAdvanceCommittedError);
+		expect(failure).toMatchObject({
+			errors: [{ failures: [{ cause: hookTaskFailure, label: "renewal delivery" }] }],
+			reconciliationPending: true,
+		});
+		expect(manifest.timeAdvance?.acknowledgedServices).toEqual([]);
+		await expect(tasks.idle()).rejects.toMatchObject({
+			failures: [{ cause: olderFailure, label: "older" }],
+		});
+	});
+
+	it("drains scoped work after a throwing time hook and preserves both failures", async () => {
+		let manifest = fixtureManifest(["stripe"]);
+		const tasks = taskTracker();
+		const deferredTask = deferred<void>();
+		const hookFailure = new Error("hook failed");
+		const taskFailure = new Error("hook cleanup failed");
+		const advance = coordinator(
+			() => manifest,
+			(next) => (manifest = next),
+			[
+				service("stripe", () => {
+					void tasks.track(
+						"hook cleanup",
+						deferredTask.promise.then(() => Promise.reject(taskFailure)),
+					);
+					throw hookFailure;
+				}),
+			],
+			manifestStore((next) => (manifest = next)),
+			{
+				failureCheckpoint: () => tasks.failureCheckpoint(),
+				idleSince: (checkpoint) => tasks.idleSince(checkpoint),
+			},
+		);
+		const advancing = advance.advance(1_000);
+		let settled = false;
+		void advancing.finally(() => (settled = true)).catch(() => undefined);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(settled).toBe(false);
+
+		deferredTask.resolve();
+		const failure = await advancing.catch((cause: unknown) => cause);
+
+		expect(failure).toMatchObject({
+			errors: [
+				{
+					errors: [hookFailure, { failures: [{ cause: taskFailure, label: "hook cleanup" }] }],
+				},
+			],
+			reconciliationPending: true,
+		});
+		expect(manifest.timeAdvance?.acknowledgedServices).toEqual([]);
+	});
 });
+
+function taskTracker(): InstanceTaskTracker {
+	return new InstanceTaskTracker({
+		schedule: () => {
+			throw new Error("This test does not schedule task timeouts.");
+		},
+	});
+}
+
+function taskBoundary(tasks: InstanceTaskTracker): TimeAdvanceTaskBoundary {
+	return {
+		failureCheckpoint: () => tasks.failureCheckpoint(),
+		idleSince: (checkpoint, signal) => tasks.idleSince(checkpoint, signal ? { signal } : {}),
+	};
+}
+
+function deferred<T>(): Readonly<{
+	promise: Promise<T>;
+	reject: (cause?: unknown) => void;
+	resolve: (value: T | PromiseLike<T>) => void;
+}> {
+	let resolvePromise: (value: T | PromiseLike<T>) => void = () => undefined;
+	let rejectPromise: (cause?: unknown) => void = () => undefined;
+	const promise = new Promise<T>((resolve, reject) => {
+		resolvePromise = resolve;
+		rejectPromise = reject;
+	});
+	return Object.freeze({
+		promise,
+		reject: rejectPromise,
+		resolve: resolvePromise,
+	});
+}
 
 function coordinator(
 	getManifest: () => InstanceManifest,
 	setManifest: (manifest: InstanceManifest) => void,
 	services: readonly AnyServiceLifecycle[],
 	store: TimeAdvanceManifestStore,
+	tasks: TimeAdvanceTaskBoundary = taskBoundary(taskTracker()),
 ): DurableTimeAdvancement {
 	return new DurableTimeAdvancement({
 		clock: new InstanceClock(getManifest().clock, { nowMilliseconds: () => 0 }),
 		getManifest,
 		instanceId: parseInstanceId("dev"),
-		quiesce: async () => undefined,
 		services,
 		setManifest,
 		storage: store,
+		tasks,
 		token: () => "token",
 	});
 }
@@ -348,7 +466,10 @@ function service(
 
 function fixtureManifest(services: readonly string[] = ["slack", "stripe"]): InstanceManifest {
 	return {
-		clock: { instantMs: Date.parse("2026-01-01T00:00:00.000Z"), mode: "pinned" },
+		clock: {
+			instantMs: Date.parse("2026-01-01T00:00:00.000Z"),
+			mode: "pinned",
+		},
 		configuredServices: services,
 		configFingerprint: `sha256:${"a".repeat(64)}`,
 		createdAt: "2026-01-01T00:00:00.000Z",
