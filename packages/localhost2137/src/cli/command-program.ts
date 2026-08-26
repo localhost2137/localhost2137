@@ -11,7 +11,7 @@ export interface RunCliInput {
 	readonly io: CliIo;
 }
 
-export interface CliActionBootstrap {
+interface CliActionBootstrap {
 	readonly configPath?: string;
 }
 
