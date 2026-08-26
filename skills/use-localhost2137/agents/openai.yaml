@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use localhost2137"
+  short_description: "Build and test against local service emulators"
+  default_prompt: "Use $use-localhost2137 to integrate this application with its configured local service emulator and verify the behavior."
