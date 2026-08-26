@@ -101,6 +101,7 @@ async function conversationsList(context: SlackContext): Promise<Response> {
 			slackChannel(channel, {
 				creator: runtime.state.service.workspace().botUserId,
 				isMember: runtime.state.service.isMember(channel.id, actor.id),
+				memberCount: runtime.state.service.memberCount(channel.id),
 			}),
 		),
 		ok: true,

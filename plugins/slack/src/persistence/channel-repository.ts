@@ -59,6 +59,13 @@ export class ChannelRepository {
 		);
 	}
 
+	memberCount(channelId: ChannelId): number {
+		const row = this.#database
+			.prepare("SELECT COUNT(*) AS count FROM channel_memberships WHERE channel_id = ?")
+			.get(channelId) as { count: number };
+		return row.count;
+	}
+
 	listMembers(
 		channelId: ChannelId,
 		input: Readonly<{ afterId?: string; limit: number }>,

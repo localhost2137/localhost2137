@@ -111,6 +111,10 @@ export class SlackService {
 		return this.#database.channels.hasMember(channelId, userId);
 	}
 
+	memberCount(channelId: ChannelId): number {
+		return this.#database.channels.memberCount(channelId);
+	}
+
 	listMembers(
 		channelReference: string,
 		input: Readonly<{ afterId?: string; limit: number }>,

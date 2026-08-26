@@ -27,7 +27,7 @@ export function slackUser(user: SlackUser, teamId: string): Readonly<Record<stri
 
 export function slackChannel(
 	channel: SlackChannel,
-	input: Readonly<{ creator: string; isMember: boolean }>,
+	input: Readonly<{ creator: string; isMember: boolean; memberCount: number }>,
 ): Readonly<Record<string, unknown>> {
 	const created = Math.floor(channel.createdAt.getTime() / 1_000);
 	return {
@@ -49,6 +49,7 @@ export function slackChannel(
 		is_shared: false,
 		name: channel.name,
 		name_normalized: channel.name,
+		num_members: input.memberCount,
 		pending_shared: [],
 		previous_names: [],
 		purpose: { creator: "", last_set: 0, value: "" },

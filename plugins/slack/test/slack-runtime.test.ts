@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { verifySlackRequestSignature } from "../src/events/request-signature.js";
 import { slack } from "../src/index.js";
 import { createSlackPlugin } from "../src/plugin.js";
+import { expectedSlackResponses, normalizeSlackResponse } from "./compatibility-fixtures.js";
 
 const ownedServers: Array<ReturnType<typeof createServer>> = [];
 const ownedRuntimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
@@ -25,6 +26,65 @@ afterEach(async () => {
 });
 
 describe("Slack runtime integration", () => {
+	it("matches normalized compatibility fixtures for every supported Web API method", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const ada = await instance.slack.createUser({ admin: true, name: "Ada" });
+			const channel = await instance.slack.createChannel({ name: "General" });
+			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
+			await instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "ping" });
+
+			await expectFixture(
+				"auth.test",
+				await slackRequest(instance.slack.connection.apiUrl, "auth.test", {
+					token: instance.slack.connection.botToken,
+				}),
+			);
+			await expectFixture(
+				"users.list",
+				await slackRequest(instance.slack.connection.apiUrl, "users.list", {
+					token: instance.slack.connection.botToken,
+				}),
+			);
+			await expectFixture(
+				"conversations.list",
+				await slackRequest(instance.slack.connection.apiUrl, "conversations.list", {
+					token: instance.slack.connection.botToken,
+					types: "public_channel",
+				}),
+			);
+			await expectFixture(
+				"conversations.members",
+				await slackGet(instance.slack.connection.apiUrl, "conversations.members", {
+					channel: channel.id,
+					token: instance.slack.connection.botToken,
+				}),
+			);
+			await expectFixture(
+				"chat.postMessage",
+				await slackJson(
+					instance.slack.connection.apiUrl,
+					"chat.postMessage",
+					{
+						channel: channel.id,
+						text: "pong",
+					},
+					instance.slack.connection.botToken,
+				),
+			);
+			await expectFixture(
+				"conversations.history",
+				await slackGet(instance.slack.connection.apiUrl, "conversations.history", {
+					channel: channel.id,
+					token: instance.slack.connection.botToken,
+				}),
+			);
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("shares one world across typed operations and Slack-compatible HTTP", async () => {
 		const runtime = await startRuntime(slack, null);
 		const instance = await runtime.createInstance();
@@ -218,6 +278,25 @@ async function slackGet(
 	return fetch(`${apiUrl}${method}?${query}`, {
 		headers: { authorization: `Bearer ${token}` },
 	});
+}
+
+function slackJson(
+	apiUrl: string,
+	method: string,
+	values: Readonly<Record<string, unknown>>,
+	token: string,
+): Promise<Response> {
+	return fetch(`${apiUrl}${method}`, {
+		body: JSON.stringify(values),
+		headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+		method: "POST",
+	});
+}
+
+async function expectFixture(method: string, response: Response): Promise<void> {
+	expect(response.status).toBe(200);
+	const normalized = normalizeSlackResponse(method, await response.json());
+	expect(normalized).toEqual(expectedSlackResponses[method]);
 }
 
 interface ReceivedRequest {
