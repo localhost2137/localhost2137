@@ -1,6 +1,7 @@
 {
 	"title": "localhost2137",
 	"pages": [
+		"agents",
 		"index",
 		"getting-started",
 		"configuration",
@@ -9,7 +10,6 @@
 		"virtual-time",
 		"plugins",
 		"first-party",
-		"agents",
 		"limitations"
 	]
 }

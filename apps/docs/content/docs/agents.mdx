@@ -1,29 +1,52 @@
 ---
-title: Coding agents and skills
-description: Give a coding agent enough product context to discover plugins, preserve application boundaries, and verify real behavior.
+title: For LLMs
+description: Short prompts, machine-readable documentation, and reusable skills for coding agents working with localhost2137.
 ---
 
-localhost2137 uses ordinary developer interfaces: TypeScript config, HTTP, CLI, files, and tests. A
-coding agent does not need a product-specific protocol. It does need accurate plugin context and the
-same resource-ownership discipline expected from a human contributor.
+Use this page when handing localhost2137 work to a coding agent. The prompts are deliberately short;
+the agent should inspect the installed runtime and plugin instead of relying on a longer prompt full
+of guessed details.
 
-## A useful agent loop
+## Copy-paste prompts
 
-Give the agent the repository, installed packages, and permission to run the local test workflow.
-Then ask it to:
+### Integrate and test
 
-1. inspect the existing application integration and installed plugin;
-2. use `describe --json` or generated help instead of guessing operations;
-3. configure the plugin and pass its connection through the application's normal SDK or adapter;
-4. create an isolated instance and arrange state with operations;
-5. trigger behavior through the application-facing interface;
-6. await tracked plugin work and inspect the outcome;
-7. clean up resources and report exact compatibility limits.
+```text
+Use localhost2137 to test this integration locally. Inspect the installed plugin, preserve the
+application's normal service boundary, use an isolated instance, verify the behavior, and clean up.
+Do not invent unsupported plugin behavior.
+```
 
-This loop is useful because it turns an external dependency into local state the agent can control.
-It does not make every provider feature available: capability still comes from the installed plugin.
+### Diagnose a failure
 
-## Repository skills
+```text
+Diagnose this localhost2137 integration. Separate application bugs, runtime failures, and missing
+plugin behavior. Report evidence before changing code.
+```
+
+### Build or extend a plugin
+
+```text
+Build the smallest useful localhost2137 plugin slice for [behavior]. Keep service rules inside the
+plugin, share logic below HTTP and operation adapters, and prove behavior through public tests.
+```
+
+Replace the bracketed text with the behavior you need. Add repository-specific constraints only when
+they materially change the work.
+
+## Give an agent the right docs
+
+- [`/llms.txt`](/llms.txt) is the compact index. Start here when the agent can fetch more pages as
+  needed.
+- [`/llms-full.txt`](/llms-full.txt) contains the complete documentation corpus. Use it only when the
+  agent cannot follow links or retrieve pages during the task.
+- Each documentation page also has a Markdown form: append `.md` to its path, or use `/index.md` for
+  this site's root page.
+
+These are machine-readable documentation endpoints. They are not skills and do not install or change
+anything on the developer's machine.
+
+## Skills to install
 
 Two agent skills live in the repository:
 
@@ -32,31 +55,31 @@ Two agent skills live in the repository:
 | `skills/use-localhost2137` | Configuring an installed plugin, wiring an app, and building or diagnosing integration tests. |
 | `skills/build-localhost2137-plugin` | Authoring, extending, reviewing, and contract-testing emulator plugins. |
 
-The use skill tells an agent to inspect the installed plugin, preserve the provider-facing
-application boundary, use operations only for control, choose explicit runtime ownership, verify
-cleanup, and disclose unsupported behavior.
+Install only the skill that matches the task. Copy its entire directory into the skill directory
+documented by your coding-agent tool, including `references/` and `agents/`. Pointing the agent at the
+repository's `SKILL.md` directly also works when the tool accepts file context.
 
-The authoring skill tells an agent to keep service semantics in the plugin, share domain behavior
-below HTTP and operation adapters, own persistence and migrations, track outbound work, avoid runtime
-internals, and prove compatibility claims through public tests.
+There is no automatic skill installer, symlink behavior, or npm lifecycle hook. Installing the
+runtime or a plugin does not modify agent configuration.
 
-## Use the skills manually
+After installation, a short prompt is enough:
 
-Point the coding agent at the appropriate `SKILL.md`, or copy the entire skill directory into the
-skill location documented by that agent tool. Keep its `references/` and `agents/` files with it;
-the main file intentionally sends the agent to those details only when relevant.
+```text
+Use $use-localhost2137 to integrate and test this service locally.
+```
 
-There is no automatic skill installer, symlink behavior, or npm lifecycle hook in the current
-project. Do not make package installation mutate a developer's agent configuration.
+```text
+Use $build-localhost2137-plugin to implement and verify [behavior].
+```
 
-## What the agent should tell the human
+## What a useful handoff includes
 
-An agent's handoff should make the same facts useful to its human collaborator:
+Ask the agent to report:
 
 - which application boundary now points to the emulator;
-- how the world is arranged, triggered, and observed;
-- which installed plugin behavior the scenario relies on;
+- how it arranged, triggered, and observed the scenario;
 - how the work was verified and cleaned up;
-- which relevant behavior is unsupported or unverified.
+- which relevant plugin behavior is unsupported or unverified.
 
-Avoid claims about autonomy or compatibility that the demonstrated test does not establish.
+That is enough. Internal runtime structure belongs in the handoff only when it explains a decision or
+a remaining problem.

@@ -45,6 +45,15 @@ body {
 	font-weight: 760;
 }
 
+/* Glass page links are inline-flex by default. Use block-level flex so each
+   page owns one row and long labels wrap within the sidebar. */
+#nd-sidebar [data-radix-scroll-area-viewport] a {
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	white-space: normal;
+}
+
 :focus-visible {
 	outline: 2px solid var(--lh-signal);
 	outline-offset: 3px;

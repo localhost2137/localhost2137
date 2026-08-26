@@ -83,15 +83,28 @@ assert.equal(
 );
 
 const agents = content.get("agents.mdx");
+assert(agents?.includes("title: For LLMs"));
+assert(agents?.includes("## Copy-paste prompts"));
 assert(agents?.includes("skills/use-localhost2137"));
 assert(agents?.includes("skills/build-localhost2137-plugin"));
 assert(agents?.includes("There is no automatic skill installer"));
+
+const introduction = content.get("index.mdx");
+assert(introduction?.includes("title: What localhost2137 is"));
+
+const navigation = JSON.parse(await readFile(join(contentRoot, "meta.json"), "utf8"));
+assert.equal(navigation.pages[0], "agents", "For LLMs must remain the first sidebar page.");
+const layoutOptions = await readFile(join(docsRoot, "lib/layout.shared.tsx"), "utf8");
+assert(!layoutOptions.includes('text: "llms.txt"'));
+assert(!layoutOptions.includes('url: "/llms.txt"'));
 
 const layout = await readFile(join(docsRoot, "app/routes/docs.tsx"), "utf8");
 assert(layout.includes('from "fumadocs-ui/layouts/glass"'));
 assert(layout.includes('from "fumadocs-ui/layouts/glass/page"'));
 const stylesheet = await readFile(join(docsRoot, "app/global.css"), "utf8");
 assert(stylesheet.includes('@import "fumadocs-ui/css/generated/glass.css"'));
+assert(stylesheet.includes("#nd-sidebar [data-radix-scroll-area-viewport] a"));
+assert(stylesheet.includes("display: flex"));
 
 const routeModule = await import("../app/routes.ts");
 const routeConfig = routeModule.default;
