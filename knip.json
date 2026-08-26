@@ -9,7 +9,11 @@
 			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
 		"packages/plugin-testkit": {
-			"entry": ["src/authoring-child.ts", "type-fixtures/public-inference.ts"],
+			"entry": [
+				"src/authoring-child.ts",
+				"test/fixtures/authoring-output.config.ts",
+				"type-fixtures/public-inference.ts"
+			],
 			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
 		"plugins/*": {

@@ -95,6 +95,30 @@ describe("plugin contract testkit API", () => {
 		});
 	});
 
+	it("bounds noisy authoring children without exposing their output", async () => {
+		const secret = "authoring-secret-must-not-escape";
+		for (const stream of ["stdout", "stderr"] as const) {
+			const candidate = mutableFixture();
+			candidate.authoring = {
+				exportName: "noisyConfig",
+				module: new URL(`./fixtures/authoring-output.config.ts?stream=${stream}`, import.meta.url),
+			};
+			const startedAt = Date.now();
+			let failure: unknown;
+			try {
+				await caseAt(candidate, 0).run();
+			} catch (cause) {
+				failure = cause;
+			}
+			expect(failure).toBeInstanceOf(PluginContractAssertionError);
+			expect(String(failure)).toContain(`authoring child ${stream} emitted output`);
+			expect(String(failure)).not.toContain(secret);
+			expect(Date.now() - startedAt).toBeLessThan(2_500);
+		}
+
+		await expect(caseAt(mutableFixture(), 0).run()).resolves.toBeUndefined();
+	});
+
 	it("does not accept an error forged by an invalid-config factory", async () => {
 		const forged = Object.assign(new Error("forged"), {
 			code: "CONFIG_INVALID",

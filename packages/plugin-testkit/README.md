@@ -34,9 +34,11 @@ through selected production operations and observe it through a public route.
 The authoring case imports the declared file URL in a fresh bounded child, validates its named config
 export, and compares cwd, environment, cwd files, and Node-reported active resources before and after
 import. Stdout and stderr are independently required to stay empty, while the result travels over
-IPC. The child and temporary cwd are always cleaned up. This operational check cannot detect effects
-that are completely reversed before the second snapshot, short-lived detached work, concealed
-external-system writes, or resources Node does not report.
+IPC. From the first output byte, each stream retains only a byte count and a 256-byte diagnostic
+sample, terminates the child, and never includes the sample in assertion text. Child termination has
+its own deadline, and the temporary cwd is always cleaned up. This operational check cannot detect
+effects that are completely reversed before the second snapshot, short-lived detached work,
+concealed external-system writes, or resources Node does not report.
 
 Durability uses the declared CLI config module and a testkit-owned process, free port, storage root,
 descriptor, control token, deadline, and cleanup. The module reads these standardized environment
