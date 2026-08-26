@@ -85,17 +85,40 @@ async function main() {
 		const packageDependencies = {};
 		const peerDependencies = {};
 
-		runPnpm(["build"]);
+		runPnpm(["build:clean"]);
 
 		for (const workspacePackage of workspacePackages) {
 			const tarballsBefore = new Set(await readdir(tarballDirectory));
-			runPnpm([
-				"--dir",
-				workspacePackage.directory,
-				"pack",
-				"--pack-destination",
-				tarballDirectory,
-			]);
+			const packResult = runPnpm(
+				[
+					"--dir",
+					workspacePackage.directory,
+					"pack",
+					"--pack-destination",
+					tarballDirectory,
+					"--json",
+				],
+				repositoryRoot,
+				["ignore", "pipe", "inherit"],
+			);
+			const packInventory = JSON.parse(packResult.stdout.toString());
+			if (!Array.isArray(packInventory.files)) {
+				throw new Error(
+					`pnpm did not return a file inventory for ${workspacePackage.manifest.name}`,
+				);
+			}
+			if (
+				workspacePackage.manifest.name === "localhost2137" &&
+				packInventory.files.some(
+					(file) =>
+						file.path === "dist/kernel/time-advance.js" ||
+						file.path === "dist/kernel/time-advance.d.ts" ||
+						file.path.startsWith("dist/test-cache/") ||
+						file.path.startsWith("test/.tmp/"),
+				)
+			) {
+				throw new Error("Packed localhost2137 tarball retained removed or test-only output");
+			}
 
 			const newTarballs = (await readdir(tarballDirectory)).filter(
 				(file) => file.endsWith(".tgz") && !tarballsBefore.has(file),

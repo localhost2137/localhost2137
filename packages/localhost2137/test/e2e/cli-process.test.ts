@@ -256,7 +256,7 @@ function processOptions(cwd: string) {
 }
 
 async function temporaryProject(label: string): Promise<string> {
-	const cache = join(packageDirectory, "dist/test-cache");
+	const cache = join(packageDirectory, "test/.tmp");
 	await mkdir(cache, { recursive: true });
 	return mkdtemp(join(cache, `localhost2137-cli-${label}-`));
 }

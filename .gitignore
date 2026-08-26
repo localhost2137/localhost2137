@@ -5,3 +5,4 @@ coverage/
 .DS_Store
 .localhost2137/
 .pnpm-store/
+packages/localhost2137/test/.tmp/
