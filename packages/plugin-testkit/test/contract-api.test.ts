@@ -49,6 +49,43 @@ describe("plugin contract testkit API", () => {
 		);
 	});
 
+	it.each([
+		[
+			"a non-file authoring module",
+			(candidate: ReturnType<typeof mutableFixture>) => {
+				candidate.authoring = {
+					...candidate.authoring,
+					module: new URL("https://example.invalid/fixture.js"),
+				};
+			},
+		],
+		[
+			"an invalid authoring export name",
+			(candidate: ReturnType<typeof mutableFixture>) => {
+				candidate.authoring = { ...candidate.authoring, exportName: "not-an-export-name" };
+			},
+		],
+		[
+			"a non-positive selected state version",
+			(candidate: ReturnType<typeof mutableFixture>) => {
+				candidate.harness = { ...candidate.harness, stateVersion: 0 };
+			},
+		],
+		[
+			"unordered durability versions",
+			(candidate: ReturnType<typeof mutableFixture>) => {
+				candidate.durability = {
+					...candidate.durability,
+					versions: { current: 2, future: 1, old: 3 },
+				};
+			},
+		],
+	] as const)("rejects %s", (_label, mutate) => {
+		const candidate = mutableFixture();
+		mutate(candidate);
+		expect(() => createPluginContractCases(candidate as never)).toThrow(TypeError);
+	});
+
 	it("provides a stable assertion error with case context", () => {
 		const failure = new PluginContractAssertionError("state isolation", "values differed");
 		expect(failure).toMatchObject({
@@ -127,6 +164,8 @@ describe("plugin contract testkit API", () => {
 function mutableFixture() {
 	return {
 		...minimalContractFixture,
+		authoring: { ...minimalContractFixture.authoring },
+		durability: { ...minimalContractFixture.durability },
 		harness: { ...minimalContractFixture.harness },
 		operations: [...minimalContractFixture.operations] as unknown[],
 		trackedFetch: { ...minimalContractFixture.trackedFetch },
