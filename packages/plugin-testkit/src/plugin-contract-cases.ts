@@ -6,6 +6,7 @@ import {
 	dataProperty,
 	isPlainRecord,
 	isRecordObject,
+	PluginContractAssertionError,
 } from "./contract-assertions.js";
 import type {
 	ContractObservationProbe,
@@ -87,19 +88,38 @@ function invalidConfigurationCase(
 	return Object.freeze({
 		name,
 		run: async () => {
+			const config = fixture.create();
 			let runtime: TestRuntime<ServiceRecord> | undefined;
+			let didReject = false;
 			let failure: unknown;
 			try {
 				const result = Reflect.apply(createTestRuntime, undefined, [
-					{ config: fixture.create(), port: 0, storage: "temporary" },
+					{ config, port: 0, storage: "temporary" },
 				]);
 				runtime = await result;
 			} catch (cause) {
+				didReject = true;
 				failure = cause;
-			} finally {
-				await runtime?.close();
 			}
-			assertContract(failure !== undefined, name, "invalid configuration unexpectedly started");
+			if (runtime) {
+				const assertion = new PluginContractAssertionError(
+					name,
+					"invalid configuration unexpectedly started",
+				);
+				await runtime.close().catch((cause: unknown) => {
+					throw new AggregateError(
+						[assertion, cause],
+						"Invalid configuration started and runtime cleanup failed.",
+					);
+				});
+				throw assertion;
+			}
+			assertContract(didReject, name, "invalid configuration unexpectedly started");
+			assertContract(
+				errorCode(failure) === "CONFIG_INVALID",
+				name,
+				"failure was not CONFIG_INVALID",
+			);
 			assertContract(
 				hasIssuePath(failure, fixture.expectedPath),
 				name,
@@ -211,19 +231,36 @@ async function connectionContract<Services extends ServiceRecord>(
 	const name = "connections and environment values are instance-correct";
 	await withInstances(fixture, 2, async (runtime, instances) => {
 		const [first, second] = requireTwoInstances(instances);
+		const instanceIds = await registeredInstanceIds(runtime, 2, name);
 		const firstUrl = fixture.probes.connection.readUrl(first);
 		const secondUrl = fixture.probes.connection.readUrl(second);
-		assertContract(
-			firstUrl.startsWith(`${runtime.connection.url}/`),
-			name,
-			"first URL does not use the bound runtime",
+		const firstId = connectionInstanceId(
+			firstUrl,
+			runtime.connection.url,
+			fixture.world.serviceKey,
+			instanceIds,
+		);
+		const secondId = connectionInstanceId(
+			secondUrl,
+			runtime.connection.url,
+			fixture.world.serviceKey,
+			instanceIds,
 		);
 		assertContract(
-			secondUrl.startsWith(`${runtime.connection.url}/`),
+			firstId !== undefined,
 			name,
-			"second URL does not use the bound runtime",
+			"first URL is not rooted at its registered service",
 		);
-		assertContract(firstUrl !== secondUrl, name, "two instances produced the same connection URL");
+		assertContract(
+			secondId !== undefined,
+			name,
+			"second URL is not rooted at its registered service",
+		);
+		assertContract(
+			firstId !== secondId,
+			name,
+			"two handles resolved to the same registered instance",
+		);
 		assertContract(
 			first.env[fixture.probes.connection.environmentName] === firstUrl,
 			name,
@@ -297,6 +334,7 @@ async function withInstances<Services extends ServiceRecord>(
 ): Promise<void> {
 	const runtime = await testRuntime(fixture);
 	const instances: InstanceHandle<Services>[] = [];
+	let didFail = false;
 	let workFailure: unknown;
 	try {
 		for (let index = 0; index < count; index += 1) {
@@ -304,6 +342,7 @@ async function withInstances<Services extends ServiceRecord>(
 		}
 		await work(runtime, Object.freeze([...instances]));
 	} catch (cause) {
+		didFail = true;
 		workFailure = cause;
 	}
 	const cleanupFailures: unknown[] = [];
@@ -311,13 +350,13 @@ async function withInstances<Services extends ServiceRecord>(
 		if (result.status === "rejected") cleanupFailures.push(result.reason);
 	}
 	await runtime.close().catch((cause: unknown) => cleanupFailures.push(cause));
-	if (workFailure !== undefined && cleanupFailures.length > 0) {
+	if (didFail && cleanupFailures.length > 0) {
 		throw new AggregateError(
 			[workFailure, ...cleanupFailures],
 			"Plugin contract case and cleanup failed.",
 		);
 	}
-	if (workFailure !== undefined) throw workFailure;
+	if (didFail) throw workFailure;
 	if (cleanupFailures.length > 0) {
 		throw new AggregateError(cleanupFailures, "Plugin contract case cleanup failed.");
 	}
@@ -340,17 +379,49 @@ async function onlyInstanceId<Services extends ServiceRecord>(
 	runtime: TestRuntime<Services>,
 	caseName: string,
 ): Promise<string> {
+	const [id] = await registeredInstanceIds(runtime, 1, caseName);
+	return id ?? "invalid";
+}
+
+async function registeredInstanceIds<Services extends ServiceRecord>(
+	runtime: TestRuntime<Services>,
+	expectedCount: number,
+	caseName: string,
+): Promise<readonly string[]> {
 	const instances = await runtime.control.listInstances();
 	assertContract(
-		Array.isArray(instances) && instances.length === 1,
+		Array.isArray(instances) && instances.length === expectedCount,
 		caseName,
-		"expected exactly one active instance",
+		`expected exactly ${expectedCount} active instance(s)`,
 	);
-	const summary = Array.isArray(instances) ? instances[0] : undefined;
-	assertContract(isPlainRecord(summary), caseName, "instance summary must be an object");
-	const id = isPlainRecord(summary) ? dataProperty(summary, "id") : undefined;
-	assertContract(typeof id === "string", caseName, "instance summary has no id");
-	return typeof id === "string" ? id : "invalid";
+	if (!Array.isArray(instances)) return [];
+	return instances.map((summary) => {
+		assertContract(isPlainRecord(summary), caseName, "instance summary must be an object");
+		const id = isPlainRecord(summary) ? dataProperty(summary, "id") : undefined;
+		assertContract(typeof id === "string", caseName, "instance summary has no id");
+		return typeof id === "string" ? id : "invalid";
+	});
+}
+
+function connectionInstanceId(
+	value: string,
+	runtimeUrl: string,
+	serviceKey: string,
+	instanceIds: readonly string[],
+): string | undefined {
+	try {
+		const runtime = new URL(runtimeUrl);
+		const connection = new URL(value);
+		if (connection.origin !== runtime.origin) return undefined;
+		const runtimePath = runtime.pathname.endsWith("/") ? runtime.pathname : `${runtime.pathname}/`;
+		if (!connection.pathname.startsWith(runtimePath)) return undefined;
+		const [instanceId, selectedService] = connection.pathname.slice(runtimePath.length).split("/");
+		return selectedService === serviceKey && instanceId && instanceIds.includes(instanceId)
+			? instanceId
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function hasIssuePath(failure: unknown, expectedPath: string): boolean {

@@ -1,4 +1,9 @@
-import type { InstanceHandle, RuntimeConfig, ServiceRecord } from "localhost2137";
+import type {
+	InstanceHandle,
+	ReservedServiceKey,
+	RuntimeConfig,
+	ServiceRecord,
+} from "localhost2137";
 
 /** A probe returns facts; the testkit, not the plugin fixture, owns the assertion. */
 export interface ContractObservation {
@@ -13,9 +18,22 @@ export interface PluginContractCase {
 	run(): Promise<void>;
 }
 
-export interface OperationContractFixture<Services extends ServiceRecord> {
+export type ContractServiceKey<Services extends ServiceRecord> = Extract<
+	Exclude<keyof Services, ReservedServiceKey>,
+	string
+>;
+
+export type ContractOperationKey<
+	Services extends ServiceRecord,
+	ServiceKey extends ContractServiceKey<Services>,
+> = Exclude<Extract<keyof InstanceHandle<Services>[ServiceKey], string>, "connection">;
+
+export interface OperationContractFixture<
+	Services extends ServiceRecord,
+	ServiceKey extends ContractServiceKey<Services> = ContractServiceKey<Services>,
+> {
 	readonly cli: "flags" | "json";
-	readonly key: string;
+	readonly key: ContractOperationKey<Services, ServiceKey>;
 	invoke(instance: InstanceHandle<Services>): ContractObservation | Promise<ContractObservation>;
 }
 
@@ -24,7 +42,7 @@ export interface InvalidConfigurationFixture {
 	readonly expectedPath: string;
 }
 
-export interface PluginContractFixture<Services extends ServiceRecord> {
+interface PluginContractFixtureBase<Services extends ServiceRecord> {
 	readonly authoring: Readonly<{
 		sideEffects: ContractObservationProbe;
 	}>;
@@ -65,9 +83,24 @@ export interface PluginContractFixture<Services extends ServiceRecord> {
 		storageEscape: ContractObservationProbe;
 		trackedFetchAndIdle(instance: InstanceHandle<Services>): Promise<ContractObservation>;
 	}>;
-	readonly world: Readonly<{
-		createConfig(): RuntimeConfig<Services>;
-		readonly operations: readonly OperationContractFixture<Services>[];
-		readonly serviceKey: Extract<keyof Services, string>;
-	}>;
 }
+
+type PluginContractWorld<
+	Services extends ServiceRecord,
+	ServiceKey extends ContractServiceKey<Services>,
+> = Readonly<{
+	createConfig(): RuntimeConfig<Services>;
+	readonly operations: readonly OperationContractFixture<Services, ServiceKey>[];
+	readonly serviceKey: ServiceKey;
+}>;
+
+/**
+ * Trusted executable fixture code for one selected configured service.
+ *
+ * The testkit owns orchestration and assertions, but it cannot infer plugin-specific semantics.
+ * Probe and factory callbacks must exercise the selected plugin rather than synthesize a pass.
+ */
+export type PluginContractFixture<Services extends ServiceRecord> = {
+	[ServiceKey in ContractServiceKey<Services>]: PluginContractFixtureBase<Services> &
+		Readonly<{ world: PluginContractWorld<Services, ServiceKey> }>;
+}[ContractServiceKey<Services>];

@@ -35,6 +35,37 @@ describe("plugin contract testkit API", () => {
 			name: "PluginContractAssertionError",
 		});
 	});
+
+	it("does not accept an error forged by an invalid-config factory", async () => {
+		const forged = Object.assign(new Error("forged"), {
+			code: "CONFIG_INVALID",
+			details: { issues: [{ path: "$.services.fixture" }] },
+		});
+		const candidate = fixture();
+		candidate.invalid.config.create = () => {
+			throw forged;
+		};
+		const cases: unknown = Reflect.apply(createPluginContractCases, undefined, [candidate]);
+		const invalidConfigCase = Array.isArray(cases) ? cases[1] : undefined;
+		await expect(
+			Reflect.apply(Reflect.get(invalidConfigCase, "run"), invalidConfigCase, []),
+		).rejects.toBe(forged);
+	});
+
+	it("preserves undefined rejections after owned cleanup", async () => {
+		const candidate = fixture();
+		candidate.probes.honoContext = () => Promise.reject(undefined);
+		const cases: unknown = Reflect.apply(createPluginContractCases, undefined, [candidate]);
+		const honoCase = Array.isArray(cases) ? cases[10] : undefined;
+		let didReject = false;
+		try {
+			await Reflect.apply(Reflect.get(honoCase, "run"), honoCase, []);
+		} catch (cause) {
+			didReject = true;
+			expect(cause).toBeUndefined();
+		}
+		expect(didReject).toBe(true);
+	});
 });
 
 function fixture() {

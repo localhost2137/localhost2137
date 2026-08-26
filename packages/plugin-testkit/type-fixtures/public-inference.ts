@@ -1,4 +1,5 @@
 import {
+	type ContractOperationKey,
 	createPluginContractCases,
 	type PluginContractFixture,
 	runPluginContract,
@@ -105,6 +106,11 @@ const fixture = {
 
 const cases = createPluginContractCases(fixture);
 const caseName: string | undefined = cases[0]?.name;
+const operationKey: "greet" | undefined = fixture.world.operations[0]?.key;
+// @ts-expect-error selected-service operation keys reject misspellings
+const missingOperation: ContractOperationKey<typeof config.services, "typed"> = "missing";
 const run: Promise<void> = runPluginContract(fixture);
 void caseName;
+void missingOperation;
+void operationKey;
 void run;

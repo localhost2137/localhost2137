@@ -35,7 +35,7 @@ api.get("/value", async (context) => {
 	});
 });
 
-export const testingPlugin = definePlugin({
+const testingPlugin = definePlugin({
 	api,
 	configSchema,
 	connection: ({ baseUrl, config, instanceId, serviceKey }) => ({
