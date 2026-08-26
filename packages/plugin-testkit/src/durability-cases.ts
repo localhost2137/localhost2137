@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ServiceRecord } from "localhost2137";
 import { connectRuntime, type RuntimeClient } from "localhost2137/client";
@@ -13,7 +13,6 @@ import { assertSelectedServiceIdentity } from "./service-identity.js";
 
 const INSTANCE_ID = "dev";
 const DAEMON_DEADLINE_MS = 10_000;
-const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 export const contractProcessEnvironment: Readonly<{
 	events: string;
@@ -51,7 +50,7 @@ async function restartPersistenceCase<Services extends ServiceRecord>(
 		);
 		assertContractEqual(
 			await execute(first.client, fixture, fixture.durability.write),
-			fixture.durability.expectedPersisted,
+			fixture.durability.expectedWrite,
 			name,
 		);
 		await first.stop();
@@ -155,6 +154,7 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 	const eventsPath = join(root, "events.log");
 	await writeFile(eventsPath, "", "utf8");
 	const activeStops = new Set<() => Promise<number | null>>();
+	const daemonCwd = await nearestPackageRoot(fileURLToPath(fixture.durability.configModule));
 	const spawnOwned = async (version: number, failUpdate: boolean): Promise<SpawnedDaemon> => {
 		await Promise.all([
 			rm(join(root, "control-token"), { force: true }),
@@ -163,9 +163,11 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 		const port = await availablePort();
 		const inheritedEnvironment = { ...process.env };
 		delete inheritedEnvironment.LOCALHOST_CONTROL_TOKEN;
+		const packageManager = pnpmCommand();
 		const child = spawn(
-			pnpmExecutable,
+			packageManager.command,
 			[
+				...packageManager.prefix,
 				"exec",
 				"localhost",
 				"--config",
@@ -175,7 +177,7 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 				String(port),
 			],
 			{
-				cwd: dirname(fileURLToPath(fixture.durability.configModule)),
+				cwd: daemonCwd,
 				env: {
 					...inheritedEnvironment,
 					[contractProcessEnvironment.events]: eventsPath,
@@ -317,6 +319,44 @@ function processExit(process: ChildProcess): Promise<number | null> {
 		process.once("error", reject);
 		process.once("close", (code) => resolve(code));
 	});
+}
+
+function pnpmCommand(): Readonly<{ command: string; prefix: readonly string[] }> {
+	const npmExecPath = process.env.npm_execpath;
+	if (
+		npmExecPath &&
+		isAbsolute(npmExecPath) &&
+		/^pnpm(?:\.c?js|\.mjs)?$/i.test(basename(npmExecPath))
+	) {
+		return Object.freeze({ command: process.execPath, prefix: Object.freeze([npmExecPath]) });
+	}
+	return Object.freeze({
+		command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+		prefix: Object.freeze([]),
+	});
+}
+
+async function nearestPackageRoot(fromFile: string): Promise<string> {
+	let current = dirname(fromFile);
+	const filesystemRoot = parse(current).root;
+	while (true) {
+		try {
+			const manifest: unknown = JSON.parse(await readFile(join(current, "package.json"), "utf8"));
+			if (
+				typeof manifest === "object" &&
+				manifest !== null &&
+				typeof Reflect.get(manifest, "name") === "string"
+			) {
+				return current;
+			}
+		} catch (cause) {
+			if (!hasCode(cause, "ENOENT") && !(cause instanceof SyntaxError)) throw cause;
+		}
+		if (current === filesystemRoot) {
+			throw new TypeError("Durability config module is not contained by a package.");
+		}
+		current = dirname(current);
+	}
 }
 
 function tick(): Promise<void> {

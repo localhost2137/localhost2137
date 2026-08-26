@@ -1,5 +1,5 @@
 import { defineConfig } from "localhost2137";
-import { durabilityPlugin } from "./durability-plugin.js";
+import { createFixturePlugin } from "./fixture-plugin.js";
 
 const root = process.env.LOCALHOST2137_CONTRACT_STORAGE;
 const eventsPath = process.env.LOCALHOST2137_CONTRACT_EVENTS;
@@ -10,11 +10,13 @@ if (!root || !eventsPath || !Number.isSafeInteger(stateVersion) || stateVersion 
 
 export default defineConfig({
 	services: {
-		durable: durabilityPlugin(stateVersion)({
-			config: {
-				eventsPath,
-				failUpdate: process.env.LOCALHOST2137_CONTRACT_FAIL_UPDATE === "1",
-			},
+		fixture: createFixturePlugin({
+			eventsPath,
+			failUpdate: process.env.LOCALHOST2137_CONTRACT_FAIL_UPDATE === "1",
+			stateVersion,
+		})({
+			config: { label: "isolated" },
+			seed: { value: 7 },
 		}),
 	},
 	storage: { dir: root },

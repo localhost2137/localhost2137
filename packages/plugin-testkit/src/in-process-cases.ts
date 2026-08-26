@@ -112,7 +112,7 @@ async function honoContract<Services extends ServiceRecord>(
 	fixture: PluginContractFixture<Services>,
 ): Promise<void> {
 	const name = "public Hono routes receive instance context";
-	await withOwnedInstances(fixture, { caseName: name, count: 1 }, async ({ instances }) => {
+	await withOwnedInstances(fixture, { caseName: name, count: 1 }, async ({ ids, instances }) => {
 		const connection = selectedConnection(requireItem(instances, 0), fixture.serviceKey);
 		const baseUrl = dataProperty(connection, fixture.connection.valueKey);
 		assertContract(typeof baseUrl === "string", name, "selected connection URL is missing");
@@ -120,7 +120,17 @@ async function honoContract<Services extends ServiceRecord>(
 		const response = await fetch(`${baseUrl}${fixture.hono.path}`);
 		const body: unknown = await response.json();
 		assertContractEqual(response.status, fixture.hono.expectedStatus, name);
-		assertContractEqual(body, fixture.hono.expectedBody, name);
+		assertContract(isPlainRecord(body), name, "Hono response body must be an object");
+		if (!isPlainRecord(body)) return;
+		assertContractEqual(
+			dataProperty(body, fixture.hono.instanceIdProperty),
+			requireItem(ids, 0),
+			name,
+		);
+		const businessBody = Object.fromEntries(
+			Object.entries(body).filter(([key]) => key !== fixture.hono.instanceIdProperty),
+		);
+		assertContractEqual(businessBody, fixture.hono.expectedBody, name);
 	});
 }
 

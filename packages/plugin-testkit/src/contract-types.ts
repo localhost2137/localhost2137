@@ -112,6 +112,7 @@ export interface ContractDurabilityFixture<
 	readonly configModule: URL;
 	readonly expectedInitial: unknown;
 	readonly expectedPersisted: unknown;
+	readonly expectedWrite: unknown;
 	readonly read: ContractOperationCall<Services, ServiceKey>;
 	readonly versions: Readonly<{
 		current: number;
@@ -152,6 +153,7 @@ interface PluginContractFixtureBase<
 	readonly hono: Readonly<{
 		readonly expectedBody: unknown;
 		readonly expectedStatus: number;
+		readonly instanceIdProperty: string;
 		readonly path: `/${string}`;
 	}>;
 	readonly invalid: Readonly<{

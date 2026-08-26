@@ -1,390 +1,103 @@
-import { createServer } from "node:http";
-import { Hono } from "hono";
-import {
-	defineConfig,
-	defineOperation,
-	definePlugin,
-	type InstanceHandle,
-	type PluginEnv,
-	type RuntimeConfig,
-	type ServiceRecord,
-} from "localhost2137";
-import { createTestRuntime, type TestRuntime } from "localhost2137/testing";
-import { z } from "zod";
 import type { PluginContractFixture } from "../../src/index.js";
 import {
-	observeFutureVersionRejection,
-	observeRestartPersistence,
-	observeStateUpgrade,
-	observeUpdateFailureRecovery,
-} from "./durability-observations.js";
-import { fixtureConfig, fixturePlugin } from "./fixture-plugin.js";
+	createFixtureConfig,
+	createFixtureService,
+	createInvalidFixtureConfig,
+	fixtureConfig,
+} from "./fixture-plugin.js";
 
 type Services = typeof fixtureConfig.services;
-type Handle = InstanceHandle<Services>;
 
-export const minimalContractFixture: PluginContractFixture<Services> = Object.freeze({
-	authoring: Object.freeze({ sideEffects: observeAuthoringSideEffects }),
+export const minimalContractFixture = Object.freeze({
+	authoring: Object.freeze({
+		exportName: "fixtureConfig",
+		module: new URL("./fixture-plugin.ts", import.meta.url),
+	}),
+	connection: Object.freeze({
+		environmentName: "FIXTURE_API_URL",
+		valueKey: "apiUrl" as const,
+	}),
 	durability: Object.freeze({
-		futureVersion: observeFutureVersionRejection,
-		restartPersistence: observeRestartPersistence,
-		stateUpgrade: observeStateUpgrade,
+		configModule: new URL("./durability-daemon.config.ts", import.meta.url),
+		expectedInitial: Object.freeze({ value: 0 }),
+		expectedPersisted: Object.freeze({ value: 41 }),
+		expectedWrite: Object.freeze({ label: "isolated", value: 41 }),
+		read: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
+		versions: Object.freeze({ current: 2, future: 3, old: 1 }),
+		write: Object.freeze({ input: Object.freeze({ by: 41 }), operation: "increment" as const }),
+	}),
+	faults: Object.freeze({
+		invalidOutput: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
+		storageEscape: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
+	}),
+	harness: Object.freeze({
+		createConfig: ({ instrumentation, variant }) => {
+			let shouldFailCreate = variant === "create-fails-once";
+			return createFixtureConfig({
+				failCreateOnce:
+					variant === "create-fails-once"
+						? () => {
+								if (!shouldFailCreate) return;
+								shouldFailCreate = false;
+								throw new Error("injected create failure");
+							}
+						: undefined,
+				invalidOutput: variant === "invalid-output",
+				record: instrumentation.record,
+				storageEscape: variant === "storage-escape",
+			});
+		},
+		createInvalidConfig: createInvalidFixtureConfig,
+		createService: createFixtureService,
+		pluginId: "fixture",
+		stateVersion: 2,
+	}),
+	hono: Object.freeze({
+		expectedBody: Object.freeze({ label: "isolated", value: 0 }),
+		expectedStatus: 200,
+		instanceIdProperty: "instanceId",
+		path: "/value" as const,
 	}),
 	invalid: Object.freeze({
-		config: Object.freeze({
-			create: () => invalidFixtureConfig({ config: { label: 2137 }, seed: { value: 7 } }),
-			expectedPath: "$.services.fixture.config.label",
-		}),
-		environmentCollision: Object.freeze({
-			create: () => ({
-				services: {
-					first: fixturePlugin({ config: { label: "first" }, seed: { value: 1 } }),
-					second: fixturePlugin({ config: { label: "second" }, seed: { value: 2 } }),
-				},
-			}),
-			expectedPath: "$.services.second.$plugin.connection.env.FIXTURE_API_URL",
-		}),
-		seed: Object.freeze({
-			create: () => invalidFixtureConfig({ config: { label: "valid" }, seed: { value: "bad" } }),
-			expectedPath: "$.services.fixture.seed.value",
-		}),
+		configPath: Object.freeze(["label"]),
+		seedPath: Object.freeze(["value"]),
 	}),
-	lifecycle: Object.freeze({
-		createFailureRecovery: observeCreateFailureRecovery,
-		ordering: observeLifecycleOrdering,
-		updateFailureRecovery: observeUpdateFailureRecovery,
+	isolation: Object.freeze({
+		expectedFresh: Object.freeze({ value: 0 }),
+		expectedMutated: Object.freeze({ value: 5 }),
+		mutate: Object.freeze({ input: Object.freeze({ by: 5 }), operation: "increment" as const }),
+		read: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
 	}),
-	probes: Object.freeze({
-		connection: Object.freeze({
-			environmentName: "FIXTURE_API_URL",
-			readUrl: (instance: Handle) => instance.fixture.connection.apiUrl,
+	operations: Object.freeze([
+		Object.freeze({
+			cli: "flags" as const,
+			expected: Object.freeze({ queued: true as const }),
+			input: Object.freeze({ url: "data:text/plain,ok" }),
+			key: "deliver" as const,
 		}),
-		honoContext: observeHonoContext,
-		isolation: Object.freeze({
-			expectedFresh: 0,
-			expectedMutated: 5,
-			mutate: async (instance: Handle) => {
-				await instance.fixture.increment({ by: 5 });
-			},
-			read: async (instance: Handle) => (await instance.fixture.read({})).value,
+		Object.freeze({
+			cli: "flags" as const,
+			expected: Object.freeze({ label: "isolated", value: 2 }),
+			input: Object.freeze({ by: 2 }),
+			key: "increment" as const,
 		}),
-		outputValidation: observeOutputValidation,
-		reset: Object.freeze({
-			expectedEmpty: 0,
-			expectedSeeded: 7,
-			mutate: async (instance: Handle) => {
-				await instance.fixture.increment({ by: 3 });
-			},
-			read: async (instance: Handle) => (await instance.fixture.read({})).value,
+		Object.freeze({
+			cli: "flags" as const,
+			expected: Object.freeze({ value: 2 }),
+			input: Object.freeze({}),
+			key: "read" as const,
 		}),
-		storageEscape: observeStorageEscape,
-		trackedFetchAndIdle: observeTrackedFetchAndIdle,
+	]),
+	reset: Object.freeze({
+		expectedEmpty: Object.freeze({ value: 0 }),
+		expectedSeeded: Object.freeze({ value: 7 }),
+		mutate: Object.freeze({ input: Object.freeze({ by: 3 }), operation: "increment" as const }),
+		read: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
 	}),
-	world: Object.freeze({
-		createConfig: () => fixtureConfig,
-		operations: Object.freeze([
-			Object.freeze({
-				cli: "flags" as const,
-				invoke: async (instance: Handle) =>
-					observation(await instance.fixture.deliver({ url: "data:text/plain,ok" }), {
-						queued: true,
-					}),
-				key: "deliver",
-			}),
-			Object.freeze({
-				cli: "flags" as const,
-				invoke: async (instance: Handle) =>
-					observation(await instance.fixture.increment({ by: 2 }), {
-						label: "isolated",
-						value: 2,
-					}),
-				key: "increment",
-			}),
-			Object.freeze({
-				cli: "flags" as const,
-				invoke: async (instance: Handle) =>
-					observation(await instance.fixture.read({}), { value: 2 }),
-				key: "read",
-			}),
-		]),
-		serviceKey: "fixture" as const,
+	serviceKey: "fixture" as const,
+	trackedFetch: Object.freeze({
+		expected: Object.freeze({ queued: true as const }),
+		input: (testkitOwnedUrl: string) => Object.freeze({ url: testkitOwnedUrl }),
+		operation: "deliver" as const,
 	}),
-});
-
-async function observeHonoContext(instance: Handle) {
-	const response = await fetch(`${instance.fixture.connection.apiUrl}/value`);
-	const body: unknown = await response.json();
-	const record = objectRecord(body);
-	return observation(
-		{
-			hasInstanceId: typeof record.instanceId === "string" && record.instanceId.startsWith("test-"),
-			label: record.label,
-			status: response.status,
-			value: record.value,
-		},
-		{ hasInstanceId: true, label: "isolated", status: 200, value: 0 },
-	);
-}
-
-async function observeTrackedFetchAndIdle(instance: Handle) {
-	const entered = deferred<void>();
-	const release = deferred<void>();
-	let deliveries = 0;
-	const server = createServer(async (_request, response) => {
-		deliveries += 1;
-		entered.resolve();
-		await release.promise;
-		response.writeHead(204).end();
-	});
-	await new Promise<void>((resolve, reject) => {
-		server.once("error", reject);
-		server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-	});
-	const address = server.address();
-	if (!address || typeof address === "string")
-		throw new Error("Fixture server has no TCP address.");
-	try {
-		await instance.fixture.deliver({ url: `http://127.0.0.1:${address.port}/delivery` });
-		await entered.promise;
-		let idleSettled = false;
-		const idle = instance.idle().then(() => {
-			idleSettled = true;
-		});
-		await Promise.resolve();
-		const settledBeforeRelease = idleSettled;
-		release.resolve();
-		await idle;
-		return observation(
-			{ deliveries, settledBeforeRelease },
-			{ deliveries: 1, settledBeforeRelease: false },
-		);
-	} finally {
-		release.resolve();
-		await new Promise<void>((resolve, reject) =>
-			server.close((cause) => (cause ? reject(cause) : resolve())),
-		);
-	}
-}
-
-async function observeAuthoringSideEffects() {
-	let lifecycleCalls = 0;
-	const bind = defineOperation<"quiet", object, object>();
-	const inspect = bind({
-		description: "Inspect quiet plugin",
-		input: z.object({}),
-		output: z.object({ quiet: z.literal(true) }),
-		run: (): { readonly quiet: true } => ({ quiet: true }),
-	});
-	const quiet = definePlugin({
-		api: new Hono<PluginEnv<object, object>>(),
-		configSchema: z.object({}),
-		connection: () => ({ env: {}, values: {} }),
-		description: "Quiet authoring probe",
-		id: "quiet",
-		lifecycle: {
-			create: () => {
-				lifecycleCalls += 1;
-			},
-			start: () => ({}),
-		},
-		operations: { inspect },
-		stateVersion: 1,
-	});
-	quiet({ config: {} });
-	return observation(lifecycleCalls, 0);
-}
-
-async function observeLifecycleOrdering() {
-	const events: string[] = [];
-	const config = lifecycleConfig(events);
-	await withTemporaryRuntime(config, async (runtime) => {
-		const instance = await runtime.createInstance({ seed: true });
-		await instance.destroy();
-	});
-	return observation(events, ["create", "start", "seed", "stop"]);
-}
-
-async function observeCreateFailureRecovery() {
-	const events: string[] = [];
-	let fail = true;
-	const config = lifecycleConfig(events, () => {
-		if (fail) {
-			fail = false;
-			throw new Error("injected create failure");
-		}
-	});
-	const failure = await withTemporaryRuntime(config, async (runtime) => {
-		const firstFailure = await runtime.createInstance().catch((cause: unknown) => cause);
-		const recovered = await runtime.createInstance();
-		await recovered.destroy();
-		return firstFailure;
-	});
-	return observation(
-		{ events, failed: failure instanceof Error },
-		{ events: ["create", "create", "start", "stop"], failed: true },
-	);
-}
-
-function lifecycleConfig(events: string[], afterCreate: () => void = () => undefined) {
-	type State = Readonly<{ ready: true }>;
-	type Config = Readonly<Record<string, never>>;
-	const bind = defineOperation<"lifecycle", State, Config>();
-	const inspect = bind({
-		description: "Inspect lifecycle state",
-		input: z.object({}),
-		output: z.object({ ready: z.literal(true) }),
-		run: (context) => context.state,
-	});
-	const seedSchema = z.object({ ready: z.literal(true) });
-	const plugin = definePlugin({
-		api: new Hono<PluginEnv<State, Config>>(),
-		configSchema: z.object({}),
-		connection: () => ({ env: {}, values: {} }),
-		description: "Lifecycle contract fixture",
-		id: "lifecycle",
-		lifecycle: {
-			create: () => {
-				events.push("create");
-				afterCreate();
-			},
-			seed: () => {
-				events.push("seed");
-			},
-			start: (): State => {
-				events.push("start");
-				return { ready: true };
-			},
-			stop: () => {
-				events.push("stop");
-			},
-		},
-		operations: { inspect },
-		seedSchema,
-		stateVersion: 1,
-	});
-	return defineConfig({
-		services: { lifecycle: plugin({ config: {}, seed: { ready: true } }) },
-	});
-}
-
-async function observeOutputValidation() {
-	type State = Readonly<{ ready: true }>;
-	type Config = Readonly<Record<string, never>>;
-	const bind = defineOperation<"broken-output", State, Config>();
-	const fail = bind({
-		description: "Return a schema-invalid numeric value",
-		input: z.object({}),
-		output: z.object({ value: z.number() }),
-		run: () => ({ value: Number.NaN }),
-	});
-	const plugin = definePlugin({
-		api: new Hono<PluginEnv<State, Config>>(),
-		configSchema: z.object({}),
-		connection: () => ({ env: {}, values: {} }),
-		description: "Output validation probe",
-		id: "broken-output",
-		lifecycle: { create: () => undefined, start: (): State => ({ ready: true }) },
-		operations: { fail },
-		stateVersion: 1,
-	});
-	const failure = await withTemporaryRuntime(
-		defineConfig({ services: { broken: plugin({ config: {} }) } }),
-		async (runtime) => {
-			const instance = await runtime.createInstance();
-			const operationFailure = await instance.broken.fail({}).catch((cause: unknown) => cause);
-			await instance.destroy();
-			return operationFailure;
-		},
-	);
-	return observation(errorCode(failure), "OPERATION_OUTPUT_INVALID");
-}
-
-async function observeStorageEscape() {
-	type State = Readonly<{ escape(): string }>;
-	type Config = Readonly<Record<string, never>>;
-	const bind = defineOperation<"escape", State, Config>();
-	const escapeOperation = bind({
-		description: "Attempt an invalid storage path",
-		input: z.object({}),
-		output: z.object({ path: z.string() }),
-		run: (context) => ({ path: context.state.escape() }),
-	});
-	const plugin = definePlugin({
-		api: new Hono<PluginEnv<State, Config>>(),
-		configSchema: z.object({}),
-		connection: () => ({ env: {}, values: {} }),
-		description: "Storage escape probe",
-		id: "escape",
-		lifecycle: {
-			create: () => undefined,
-			start: (context): State => ({ escape: () => context.storage.path("../escape") }),
-		},
-		operations: { escape: escapeOperation },
-		stateVersion: 1,
-	});
-	const failure = await withTemporaryRuntime(
-		defineConfig({ services: { escape: plugin({ config: {} }) } }),
-		async (runtime) => {
-			const instance = await runtime.createInstance();
-			const operationFailure = await instance.escape.escape({}).catch((cause: unknown) => cause);
-			await instance.destroy();
-			return operationFailure;
-		},
-	);
-	return observation(errorCode(failure), "PLUGIN_EXECUTION_FAILED");
-}
-
-function invalidFixtureConfig(envelope: unknown): unknown {
-	return {
-		services: {
-			fixture: Reflect.apply(fixturePlugin, undefined, [envelope]),
-		},
-	};
-}
-
-function objectRecord(value: unknown): Readonly<Record<string, unknown>> {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new TypeError("Expected a response object.");
-	}
-	return value as Readonly<Record<string, unknown>>;
-}
-
-function errorCode(value: unknown): unknown {
-	return typeof value === "object" && value !== null ? Reflect.get(value, "code") : undefined;
-}
-
-function observation(actual: unknown, expected: unknown) {
-	return Object.freeze({ actual, expected });
-}
-
-function deferred<Value>() {
-	let resolvePromise: (value: Value | PromiseLike<Value>) => void = () => undefined;
-	const promise = new Promise<Value>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return Object.freeze({ promise, resolve: resolvePromise });
-}
-
-async function withTemporaryRuntime<Services extends ServiceRecord, Value>(
-	config: RuntimeConfig<Services>,
-	work: (runtime: TestRuntime<Services>) => Promise<Value>,
-): Promise<Value> {
-	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
-	const outcome = await work(runtime).then(
-		(value) => Object.freeze({ status: "fulfilled" as const, value }),
-		(reason: unknown) => Object.freeze({ reason, status: "rejected" as const }),
-	);
-	const cleanup = await runtime.close().then(
-		() => Object.freeze({ status: "fulfilled" as const }),
-		(reason: unknown) => Object.freeze({ reason, status: "rejected" as const }),
-	);
-	if (outcome.status === "rejected" && cleanup.status === "rejected") {
-		throw new AggregateError(
-			[outcome.reason, cleanup.reason],
-			"Contract fixture probe and temporary runtime cleanup failed.",
-		);
-	}
-	if (outcome.status === "rejected") throw outcome.reason;
-	if (cleanup.status === "rejected") throw cleanup.reason;
-	return outcome.value;
-}
+} satisfies PluginContractFixture<Services>);
