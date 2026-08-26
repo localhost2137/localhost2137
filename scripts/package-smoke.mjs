@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,7 +36,7 @@ async function discoverWorkspacePackages() {
 		"inherit",
 	]);
 	const workspaceEntries = JSON.parse(result.stdout.toString()).filter(
-		(entry) => resolve(entry.path) !== repositoryRoot,
+		(entry) => resolve(entry.path) !== repositoryRoot && isPackagedWorkspace(resolve(entry.path)),
 	);
 	const packages = await Promise.all(
 		workspaceEntries.map(async (entry) => ({
@@ -46,6 +46,11 @@ async function discoverWorkspacePackages() {
 	);
 
 	return packages.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
+}
+
+function isPackagedWorkspace(directory) {
+	const [group] = relative(repositoryRoot, directory).split(sep);
+	return group === "packages" || group === "plugins";
 }
 
 function fileDependency(path) {
@@ -148,7 +153,17 @@ import { Hono } from "hono";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { defineOperation, definePlugin } from "localhost2137";
+import { connectRuntime } from "localhost2137/client";
+import { createTestRuntime } from "localhost2137/testing";
+import { createPluginContractCases } from "@localhost2137/plugin-testkit";
 import { z } from "zod";
+
+if (typeof connectRuntime !== "function" || typeof createTestRuntime !== "function") {
+	throw new Error("Packed localhost2137 testing entry points are incomplete");
+}
+if (typeof createPluginContractCases !== "function") {
+	throw new Error("Packed plugin testkit entry point is incomplete");
+}
 
 const bindPackedOperation = defineOperation();
 const packedOperation = bindPackedOperation({
@@ -189,8 +204,22 @@ import {
 	defineOperation,
 	definePlugin,
 	type PluginEnv,
+	type ServiceRecord,
 } from "localhost2137";
+import type { RuntimeClient } from "localhost2137/client";
+import type { TestRuntime } from "localhost2137/testing";
+import type { PluginContractFixture } from "@localhost2137/plugin-testkit";
 import { z } from "zod";
+
+type PackedRuntimeClient = RuntimeClient;
+type PackedTestRuntime = TestRuntime<ServiceRecord>;
+type PackedContractFixture = PluginContractFixture<ServiceRecord>;
+declare const runtimeClient: PackedRuntimeClient;
+declare const testRuntime: PackedTestRuntime;
+declare const contractFixture: PackedContractFixture;
+void runtimeClient;
+void testRuntime;
+void contractFixture;
 
 type PackedConfig = { readonly token: string };
 type PackedState = { readonly ready: true };
@@ -291,6 +320,17 @@ void packedPlugin({ config: { token: "fixture" } });
 		);
 		if (installedHostManifest.bin?.localhost !== "./dist/bin.js") {
 			throw new Error("Packed localhost2137 package does not declare the localhost binary");
+		}
+		for (const subpath of [".", "./client", "./testing"]) {
+			if (!installedHostManifest.exports?.[subpath]) {
+				throw new Error(`Packed localhost2137 package is missing export ${subpath}`);
+			}
+		}
+		const installedTestkitManifest = await readJson(
+			join(consumerDirectory, "node_modules/@localhost2137/plugin-testkit/package.json"),
+		);
+		if (!installedTestkitManifest.exports?.["."]) {
+			throw new Error("Packed plugin testkit is missing its public entry point");
 		}
 		const installedBinPath = join(consumerDirectory, "node_modules/localhost2137/dist/bin.js");
 		const installedBin = await readFile(installedBinPath, "utf8");

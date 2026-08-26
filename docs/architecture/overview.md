@@ -16,15 +16,15 @@ plugin definitions -> public authoring contracts -> runtime kernel
 
 The package layout enforces that direction without splitting the runtime into
 several independently versioned packages. `localhost2137` contains public
-authoring contracts and, in later phases, private kernel and adapter modules.
-Plugins import only the package's public contract. The separately published
-`@localhost2137/plugin-testkit` will exercise plugins solely through that
-contract.
+authoring contracts plus private kernel and adapter modules. Plugins import
+only the package's public contract. The separately published
+`@localhost2137/plugin-testkit` exercises plugins through the public root and
+the explicit `/testing` and `/client` subpaths.
 
 One operation executor will eventually sit below the TypeScript, CLI, and
 control HTTP adapters. Adapters may validate transport details and render
 results, but must not contain emulator behavior.
 
-Phase 0 freezes these boundaries and proves the intended public type shapes.
-It does not implement runtime behavior. The accepted decisions are indexed in
-[`adr/README.md`](adr/README.md).
+The accepted decisions are indexed in [`adr/README.md`](adr/README.md). Test
+runtime ownership and framework worker recipes are documented in
+[`../testing/framework-recipes.md`](../testing/framework-recipes.md).

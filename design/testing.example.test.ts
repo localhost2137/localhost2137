@@ -4,13 +4,14 @@
  * Resource ownership is explicit: one test runtime owns the server and
  * temporary root; every test owns and destroys its isolated instance.
  */
+
+import { createTestRuntime, type TestRuntime } from "localhost2137/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createTestRuntime } from "localhost2137/testing";
-import config from "../localhost.config";
-import { buildBotApp } from "../src/bot";
+import config from "../localhost.config.js";
+import { buildBotApp } from "../src/bot.js";
 
 describe("ping-pong Slack bot", () => {
-	let runtime: Awaited<ReturnType<typeof createTestRuntime>>;
+	let runtime: TestRuntime<typeof config.services>;
 
 	beforeAll(async () => {
 		runtime = await createTestRuntime({
