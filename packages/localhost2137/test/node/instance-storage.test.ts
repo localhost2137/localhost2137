@@ -314,7 +314,7 @@ function instanceManifest(id: string, overrides: Partial<InstanceManifest> = {})
 		createdAt: "2026-08-25T12:00:00.000Z",
 		id,
 		persistence: "persistent",
-		schemaVersion: 1,
+		schemaVersion: 2,
 		seed: { attempt: 0, status: "unseeded" },
 		status: "ready",
 		...overrides,

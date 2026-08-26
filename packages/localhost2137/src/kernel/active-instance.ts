@@ -1,7 +1,7 @@
 import { ActiveInstanceGeneration } from "./active-instance-generation.js";
 import { retireActiveInstance } from "./active-instance-retirement.js";
 import { type InstanceId, parseServiceKey } from "./identifiers.js";
-import { ReadonlyInstanceClock } from "./instance-clock.js";
+import { InstanceClock } from "./instance-clock.js";
 import { InstanceLeaseCoordinator, type MonotonicClock } from "./instance-leases.js";
 import { InstanceLifecycle, type ScenarioSeedPort } from "./instance-lifecycle.js";
 import {
@@ -31,9 +31,10 @@ import {
 } from "./structured-log.js";
 import { InstanceTaskTracker, type TaskScheduler } from "./task-tracker.js";
 import { TrackedPluginFetch } from "./tracked-plugin-fetch.js";
+import { DurableTimeAdvancement } from "./durable-time-advancement.js";
 
 export interface ActiveInstance {
-	readonly clock: ReadonlyInstanceClock;
+	readonly clock: InstanceClock;
 	readonly generation: ActiveInstanceGeneration;
 	readonly id: InstanceId;
 	readonly leases: InstanceLeaseCoordinator;
@@ -43,6 +44,7 @@ export interface ActiveInstance {
 	pendingResetTransition?: StorageTransitionManifest;
 	readonly services: readonly AnyServiceLifecycle[];
 	readonly tasks: InstanceTaskTracker;
+	readonly timeAdvancement: DurableTimeAdvancement;
 }
 
 export interface InstanceSummary {
@@ -56,6 +58,7 @@ export interface InstanceSummary {
 
 export interface ActiveInstanceDependencies {
 	readonly correlationId: () => string;
+	readonly advanceId: () => string;
 	readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 	readonly logLimits: StructuredLogLimits;
 	readonly monotonicClock: MonotonicClock;
@@ -89,7 +92,7 @@ export class ActiveInstanceFactory {
 		const generation = new ActiveInstanceGeneration(tasks);
 		const hooks = new LifecycleHookRunner(tasks, generation.signal);
 		const signal = AbortSignal.any([generation.signal, options.signal]);
-		const clock = new ReadonlyInstanceClock(manifest.clock, this.#dependencies.time);
+		const clock = new InstanceClock(manifest.clock, this.#dependencies.time);
 		const logs = new StructuredLogRing(this.#dependencies.logLimits);
 		const services = this.#template.services.map((template) =>
 			this.#service(instanceId, template, clock, tasks, logs, generation.signal, hooks),
@@ -122,6 +125,22 @@ export class ActiveInstanceFactory {
 			services,
 			signal: generation.signal,
 		});
+		const timeAdvancement = new DurableTimeAdvancement({
+			clock,
+			getManifest: () => holder.manifest,
+			instanceId,
+			quiesce: (phaseSignal) =>
+				tasks.quiesce({
+					...(phaseSignal ? { signal: phaseSignal } : {}),
+					timeoutMs: options.remainingMs(),
+				}),
+			services,
+			setManifest: (next) => {
+				holder.manifest = next;
+			},
+			storage: this.#dependencies.storage,
+			token: this.#dependencies.advanceId,
+		});
 		const active: ActiveInstance = {
 			clock,
 			generation,
@@ -141,11 +160,13 @@ export class ActiveInstanceFactory {
 			},
 			services,
 			tasks,
+			timeAdvancement,
 		};
 		try {
 			await reconcileServices(services, this.#reconciliationStore(instanceId), signal);
 			await lifecycle.start(signal);
-			await tasks.idle({ signal, timeoutMs: options.remainingMs() });
+			await timeAdvancement.recover(signal);
+			await tasks.quiesce({ signal, timeoutMs: options.remainingMs() });
 			return active;
 		} catch (cause) {
 			const cleanupFailures: unknown[] = [];
@@ -169,7 +190,7 @@ export class ActiveInstanceFactory {
 	#service(
 		instanceId: InstanceId,
 		template: InstanceServiceTemplate,
-		clock: ReadonlyInstanceClock,
+		clock: InstanceClock,
 		tasks: InstanceTaskTracker,
 		logs: StructuredLogRing,
 		generationSignal: AbortSignal,

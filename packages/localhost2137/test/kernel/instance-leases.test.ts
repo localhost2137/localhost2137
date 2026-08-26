@@ -123,6 +123,21 @@ describe("InstanceLeaseCoordinator", () => {
 		(await sharedPromise).release();
 	});
 
+	it("does not consume or reclassify completed workload failures during exclusive admission", async () => {
+		const time = new ManualTime();
+		const tracker = new InstanceTaskTracker(time);
+		const leases = new InstanceLeaseCoordinator(tracker, time, time);
+		await tracker
+			.track("failed delivery", Promise.reject(new Error("callback unavailable")))
+			.catch(() => undefined);
+
+		const exclusive = await leases.acquireExclusive({ timeoutMs: 100 });
+		exclusive.release();
+		await expect(tracker.idle()).rejects.toMatchObject({
+			failures: [{ label: "failed delivery" }],
+		});
+	});
+
 	it("times out a queued exclusive lease and removes it from the queue", async () => {
 		const time = new ManualTime();
 		const tracker = new InstanceTaskTracker(time);

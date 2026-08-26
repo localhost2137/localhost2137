@@ -121,6 +121,11 @@ export class InstanceTaskTracker implements TaskTracker {
 		if (failures.length > 0) throw new TrackedTaskFailuresError(failures);
 	}
 
+	/** Waits for quiescence without consuming workload failures owned by explicit idle(). */
+	quiesce(options: WaitOptions = {}): Promise<void> {
+		return this.#drain(options);
+	}
+
 	close(options: Readonly<{ graceMs: number; signal?: AbortSignal }>): Promise<TaskCloseReport> {
 		if (this.#closePromise) return this.#closePromise;
 		this.#accepting = false;

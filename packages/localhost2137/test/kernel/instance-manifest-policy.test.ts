@@ -39,7 +39,7 @@ describe("InstanceManifestPolicy", () => {
 			createdAt: "2026-08-25T12:00:00.000Z",
 			id: "dev",
 			persistence: "persistent",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			seed: { attempt: 0, status: "unseeded" },
 			status: "creating",
 			transition: { id: "reset_token01", kind: "reset" },

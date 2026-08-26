@@ -27,13 +27,13 @@ describe("NodeManifestStore", () => {
 			createdAt: "2026-08-25T12:00:00.000Z",
 			id: "dev",
 			persistence: "persistent",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			seed: { attempt: 0, status: "unseeded" },
 			status: "ready",
 		});
 
 		expect(await store.readInstance(filePath)).toMatchObject({ id: "dev", status: "ready" });
-		expect(await readFile(filePath, "utf8")).toContain('"schemaVersion": 1');
+		expect(await readFile(filePath, "utf8")).toContain('"schemaVersion": 2');
 	});
 
 	it("distinguishes malformed JSON from a schema-incompatible manifest", async () => {

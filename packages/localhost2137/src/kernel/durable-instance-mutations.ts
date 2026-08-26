@@ -23,6 +23,7 @@ import {
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { MutationScope } from "./mutation-scope.js";
 import type { TaskScheduler } from "./task-tracker.js";
+import type { InstanceClockAdvanceResult } from "./durable-time-advancement.js";
 
 const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
 const MAX_ROLLBACK_GRACE_MS = 5_000;
@@ -144,6 +145,36 @@ export class DurableInstanceMutations {
 	seed(instanceId: InstanceId, options: AdmittedMutationOptions): OwnedMutation<void> {
 		const scope = this.#scope(`seeding instance ${instanceId.value}`, options);
 		return this.#owned(scope, this.#seed(instanceId, scope));
+	}
+
+	advanceClock(
+		instanceId: InstanceId,
+		durationMs: number,
+		options: AdmittedMutationOptions,
+	): OwnedMutation<InstanceClockAdvanceResult> {
+		const scope = this.#scope(`advancing clock for instance ${instanceId.value}`, options);
+		return this.#owned(scope, this.#advanceClock(instanceId, durationMs, scope));
+	}
+
+	async #advanceClock(
+		instanceId: InstanceId,
+		durationMs: number,
+		scope: MutationScope,
+	): Promise<InstanceClockAdvanceResult> {
+		const active = this.#registry.get(instanceId);
+		const lease = await active.leases.acquireExclusive({
+			signal: scope.signal,
+			timeoutMs: scope.remainingMs(),
+		});
+		try {
+			await this.#finalizePendingReset(active, scope);
+			const result = await active.timeAdvancement.advance(durationMs, scope.signal);
+			await active.tasks.quiesce({ signal: scope.signal, timeoutMs: scope.remainingMs() });
+			scope.checkpoint();
+			return result;
+		} finally {
+			lease.release();
+		}
 	}
 
 	async #seed(instanceId: InstanceId, scope: MutationScope): Promise<void> {

@@ -32,7 +32,7 @@ export class InstanceManifestPolicy {
 			createdAt: this.#time.nowTimestamp(),
 			id: instanceId.value,
 			persistence,
-			schemaVersion: 1,
+			schemaVersion: 2,
 			seed: { attempt: 0, status: "unseeded" },
 			status: "creating",
 			...(transitionId ? { transition: { id: transitionId, kind: "reset" } } : {}),

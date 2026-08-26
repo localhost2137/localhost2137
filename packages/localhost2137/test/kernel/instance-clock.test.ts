@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseClockDuration } from "../../src/kernel/clock-duration.js";
 import { initialClockState, ReadonlyInstanceClock } from "../../src/kernel/instance-clock.js";
 
 describe("per-instance read-only clock", () => {
@@ -60,4 +61,51 @@ describe("per-instance read-only clock", () => {
 
 		expect(() => clock.now()).toThrow(/wall time plus offset/);
 	});
+
+	it("previews exact pinned and real advances without mutating until replacement", async () => {
+		const pinned = new ReadonlyInstanceClock(
+			{ instantMs: Date.parse("2026-01-01T00:00:00.000Z"), mode: "pinned" },
+			{ nowMilliseconds: () => 0 },
+		);
+		const pinnedPreview = pinned.previewAdvance(parseClockDuration("30d"));
+		expect(await pinned.status()).toEqual({
+			mode: "pinned",
+			now: "2026-01-01T00:00:00.000Z",
+		});
+		pinned.replaceState(pinnedPreview.state);
+		expect(await pinned.status()).toEqual({
+			mode: "pinned",
+			now: "2026-01-31T00:00:00.000Z",
+		});
+
+		const real = new ReadonlyInstanceClock(
+			{ mode: "real", offsetMs: 1_000 },
+			{ nowMilliseconds: () => 10_000 },
+		);
+		expect(real.previewAdvance(parseClockDuration("2s"))).toEqual({
+			fromMs: 11_000,
+			state: { mode: "real", offsetMs: 3_000 },
+			toMs: 13_000,
+		});
+	});
+});
+
+describe("clock duration grammar", () => {
+	it.each([
+		["1ms", 1],
+		["2s", 2_000],
+		["3m", 180_000],
+		["4h", 14_400_000],
+		["30d", 2_592_000_000],
+		["2w", 1_209_600_000],
+	] as const)("parses %s exactly", (input, expected) => {
+		expect(parseClockDuration(input)).toBe(expected);
+	});
+
+	it.each([undefined, 1, "", "0ms", "01s", "1.5h", "1month", "-1d", "999999999999999999d"])(
+		"rejects ambiguous or unsafe duration %j",
+		(input) => {
+			expect(() => parseClockDuration(input)).toThrow();
+		},
+	);
 });

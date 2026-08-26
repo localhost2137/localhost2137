@@ -6,9 +6,14 @@ import {
 } from "./lifecycle-context.js";
 import type { LifecycleHookRunner } from "./lifecycle-hook-runner.js";
 import { ServiceLifecycleStateOwner, type ServiceLifecycleStatus } from "./lifecycle-state.js";
+import type { PluginTimeAdvanceInput } from "./time-advance.js";
 
 export interface ServiceLifecycleHooks<State, Config, Seed> {
 	readonly create: (context: BasePluginContext<Config>) => Promise<void> | void;
+	readonly onTimeAdvanced?: (
+		context: RunningPluginContext<State, Config>,
+		advance: PluginTimeAdvanceInput,
+	) => Promise<void> | void;
 	readonly seed?: (
 		context: RunningPluginContext<State, Config>,
 		seed: Seed,
@@ -33,14 +38,14 @@ export type ServiceReconciliation =
 
 export class LifecycleHookError extends Error {
 	readonly correlationId: string;
-	readonly hook: "create" | "seed" | "start" | "stop" | "update";
+	readonly hook: "create" | "onTimeAdvanced" | "seed" | "start" | "stop" | "update";
 	readonly instanceId: string;
 	readonly serviceKey: string;
 
 	constructor(
 		context: Readonly<{
 			correlationId: string;
-			hook: "create" | "seed" | "start" | "stop" | "update";
+			hook: "create" | "onTimeAdvanced" | "seed" | "start" | "stop" | "update";
 			instanceId: string;
 			serviceKey: string;
 		}>,
@@ -242,6 +247,19 @@ export class ServiceLifecycle<State, Config, Seed> {
 		}
 	}
 
+	async onTimeAdvanced(advance: PluginTimeAdvanceInput, signal?: AbortSignal): Promise<void> {
+		const hook = this.#hooks.onTimeAdvanced;
+		if (!hook) return;
+		const state = this.#state.runningState();
+		try {
+			await this.#runHook("onTimeAdvanced", signal, (capabilities) =>
+				hook(createRunningPluginContext(capabilities, state), freshTimeAdvance(advance)),
+			);
+		} catch (cause) {
+			throw this.#hookError("onTimeAdvanced", cause);
+		}
+	}
+
 	async stop(signal?: AbortSignal): Promise<void> {
 		const state = this.#state.beginStop();
 		try {
@@ -268,7 +286,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 	}
 
 	#runHook<Value>(
-		hook: "create" | "seed" | "start" | "stop" | "update",
+		hook: "create" | "onTimeAdvanced" | "seed" | "start" | "stop" | "update",
 		signal: AbortSignal | undefined,
 		run: (capabilities: LifecycleContextCapabilities<Config>) => Promise<Value> | Value,
 	): Promise<Value> {
@@ -280,7 +298,7 @@ export class ServiceLifecycle<State, Config, Seed> {
 	}
 
 	#hookError(
-		hook: "create" | "seed" | "start" | "stop" | "update",
+		hook: "create" | "onTimeAdvanced" | "seed" | "start" | "stop" | "update",
 		cause: unknown,
 	): LifecycleHookError {
 		return new LifecycleHookError(
@@ -300,9 +318,18 @@ export interface AnyServiceLifecycle {
 	readonly serviceKey: string;
 	readonly stateVersion: number;
 	reconcile(stored?: StoredServiceIdentity, signal?: AbortSignal): Promise<ServiceReconciliation>;
+	onTimeAdvanced(advance: PluginTimeAdvanceInput, signal?: AbortSignal): Promise<void>;
 	runningContext(signal?: AbortSignal): RunningPluginContext<unknown, unknown>;
 	seed(signal?: AbortSignal): Promise<void>;
 	start(signal?: AbortSignal): Promise<void>;
 	status(): ServiceLifecycleStatus;
 	stop(signal?: AbortSignal): Promise<void>;
+}
+
+function freshTimeAdvance(advance: PluginTimeAdvanceInput): PluginTimeAdvanceInput {
+	return Object.freeze({
+		advanceId: advance.advanceId,
+		from: new Date(advance.from.getTime()),
+		to: new Date(advance.to.getTime()),
+	});
 }

@@ -40,7 +40,7 @@ describe("versioned manifests", () => {
 			"service-current.json",
 		);
 
-		expect(instance.status).toBe("ready");
+		expect(instance).toMatchObject({ schemaVersion: 2, status: "ready" });
 		expect(service).toMatchObject({ pluginId: "slack", stateVersion: 2 });
 		expect(Object.isFrozen(instance)).toBe(true);
 		expect(Object.isFrozen(instance.clock)).toBe(true);
@@ -70,7 +70,7 @@ describe("versioned manifests", () => {
 				createdAt: "2026-08-25T12:00:00.000Z",
 				id: "dev",
 				persistence: "persistent",
-				schemaVersion: 1,
+				schemaVersion: 2,
 				seed: {
 					attempt: 1,
 					failure: { at: "2026-08-25T12:01:00.000Z", message: "Seed failed." },
@@ -87,6 +87,67 @@ describe("versioned manifests", () => {
 		if (manifest.seed.status !== "seed_failed") throw new Error("Expected failed seed fixture.");
 		expect(Object.isFrozen(manifest.seed.failure)).toBe(true);
 		expect(Object.isFrozen(manifest.transition)).toBe(true);
+	});
+
+	it("validates and deeply freezes pending time-advance progress", () => {
+		const manifest = parseInstanceManifest(
+			{
+				clock: { instantMs: 1_000, mode: "pinned" },
+				configuredServices: ["slack", "stripe"],
+				configFingerprint: `sha256:${"a".repeat(64)}`,
+				createdAt: "2026-08-25T12:00:00.000Z",
+				id: "dev",
+				persistence: "persistent",
+				schemaVersion: 2,
+				seed: { attempt: 0, status: "unseeded" },
+				status: "ready",
+				timeAdvance: {
+					acknowledgedServices: ["slack"],
+					fromMs: 0,
+					id: "advance_12345678",
+					services: ["slack", "stripe"],
+					toMs: 1_000,
+				},
+			},
+			"instance.json",
+		);
+
+		expect(Object.isFrozen(manifest.timeAdvance)).toBe(true);
+		expect(Object.isFrozen(manifest.timeAdvance?.services)).toBe(true);
+		expect(Object.isFrozen(manifest.timeAdvance?.acknowledgedServices)).toBe(true);
+		for (const acknowledgedServices of [["stripe"], ["slack", "stripe", "extra"]]) {
+			expect(() =>
+				parseInstanceManifest(
+					{
+						...manifest,
+						timeAdvance: { ...manifest.timeAdvance, acknowledgedServices },
+					},
+					"instance.json",
+				),
+			).toThrow(ManifestValidationError);
+		}
+		for (const invalid of [
+			{
+				...manifest,
+				clock: { instantMs: 999, mode: "pinned" },
+			},
+			{
+				...manifest,
+				timeAdvance: { ...manifest.timeAdvance, services: ["stripe", "slack"] },
+			},
+			{
+				...manifest,
+				timeAdvance: {
+					...manifest.timeAdvance,
+					fromMs: -8_640_000_000_000_000,
+					toMs: 8_640_000_000_000_000,
+				},
+			},
+		]) {
+			expect(() => parseInstanceManifest(invalid, "instance.json")).toThrow(
+				ManifestValidationError,
+			);
+		}
 	});
 
 	it("validates and freezes runtime quarantine metadata", () => {

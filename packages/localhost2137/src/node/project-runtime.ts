@@ -47,6 +47,7 @@ export function createProjectRuntime(
 	});
 	const scenarioSeed = createScenarioSeedFactory(config, runner, dependencies.correlationId);
 	const managerDependencies: InstanceManagerDependencies = {
+		advanceId: dependencies.token,
 		correlationId: dependencies.correlationId,
 		fetch: dependencies.fetch,
 		logLimits: dependencies.logLimits,

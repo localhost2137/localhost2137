@@ -6,6 +6,7 @@ export interface MonotonicClock {
 
 export interface TrackedTaskDrain {
 	idle(options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number }>): Promise<void>;
+	quiesce?(options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number }>): Promise<void>;
 }
 
 export interface InstanceLease {
@@ -114,7 +115,7 @@ export class InstanceLeaseCoordinator {
 		const lease = await this.#waitForExclusive(options);
 		try {
 			const remaining = Math.max(0, deadline - this.#clock.nowMilliseconds());
-			await this.#tasks.idle({
+			await quiesce(this.#tasks, {
 				...(options.signal ? { signal: options.signal } : {}),
 				timeoutMs: remaining,
 			});
@@ -129,7 +130,7 @@ export class InstanceLeaseCoordinator {
 		if (this.#retired) throw new LeaseRetiredError();
 		const lease = await this.#waitForExclusive({});
 		try {
-			await this.#tasks.idle();
+			await quiesce(this.#tasks);
 			return lease;
 		} catch (cause) {
 			lease.release();
@@ -237,6 +238,13 @@ export class InstanceLeaseCoordinator {
 		}
 		while (this.#queue[0]?.kind === "shared") this.#queue.shift()?.grant();
 	}
+}
+
+function quiesce(
+	tasks: TrackedTaskDrain,
+	options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number }>,
+): Promise<void> {
+	return tasks.quiesce ? tasks.quiesce(options) : tasks.idle(options);
 }
 
 function removeWaiter(queue: QueuedWaiter[], waiter: QueuedWaiter): void {

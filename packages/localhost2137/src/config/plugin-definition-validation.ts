@@ -131,7 +131,7 @@ function validateLifecycle(
 			issues.push(lifecycleHookIssue(definition.id, serviceKey, basePath, hook, lifecycle, true));
 		}
 	}
-	for (const hook of ["stop", "update"] as const) {
+	for (const hook of ["onTimeAdvanced", "stop", "update"] as const) {
 		if (hasOwn(lifecycle, hook) && !hasFunction(lifecycle, hook)) {
 			issues.push(lifecycleHookIssue(definition.id, serviceKey, basePath, hook, lifecycle, false));
 		}

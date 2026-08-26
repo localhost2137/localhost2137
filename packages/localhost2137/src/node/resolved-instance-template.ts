@@ -3,6 +3,7 @@ import type { ResolvedConfig } from "../config/config-resolution.js";
 import type { ResolvedServiceConfig } from "../config/configured-service-resolution.js";
 import type { InstanceServiceTemplate, InstanceTemplate } from "../kernel/instance-template.js";
 import type { ServiceLifecycleHooks } from "../kernel/service-lifecycle.js";
+import type { PluginTimeAdvanceInput } from "../kernel/time-advance.js";
 
 export function createInstanceTemplate(config: ResolvedConfig): InstanceTemplate {
 	return Object.freeze({
@@ -19,12 +20,23 @@ function createServiceTemplate(service: ResolvedServiceConfig): InstanceServiceT
 	const create = requiredHook(lifecycle, "create");
 	const start = requiredHook(lifecycle, "start");
 	const seed = optionalHook(lifecycle, "seed");
+	const onTimeAdvanced = optionalHook(lifecycle, "onTimeAdvanced");
 	const stop = optionalHook(lifecycle, "stop");
 	const update = optionalHook(lifecycle, "update");
 	const hooks: ServiceLifecycleHooks<unknown, unknown, unknown> = Object.freeze({
 		create: async (context: BasePluginContext<unknown>) => {
 			await invoke(create, [context]);
 		},
+		...(onTimeAdvanced
+			? {
+					onTimeAdvanced: async (
+						context: RunningPluginContext<unknown, unknown>,
+						advance: PluginTimeAdvanceInput,
+					) => {
+						await invoke(onTimeAdvanced, [context, advance]);
+					},
+				}
+			: {}),
 		...(seed
 			? {
 					seed: async (context: RunningPluginContext<unknown, unknown>, value: unknown) => {

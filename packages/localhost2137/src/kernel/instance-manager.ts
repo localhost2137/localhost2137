@@ -20,8 +20,11 @@ import { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { PersistedInstanceRuntime } from "./persisted-instance-runtime.js";
 import type { AnyServiceLifecycle } from "./service-lifecycle.js";
 import type { StructuredLogRing, StructuredLogSnapshot } from "./structured-log.js";
+import { parseClockDuration } from "./clock-duration.js";
+import type { InstanceClockAdvanceResult } from "./durable-time-advancement.js";
 
-export interface InstanceManagerDependencies extends ActiveInstanceDependencies {
+export interface InstanceManagerDependencies extends Omit<ActiveInstanceDependencies, "advanceId"> {
+	readonly advanceId?: () => string;
 	readonly token: () => string;
 }
 
@@ -47,7 +50,10 @@ export class InstanceManager {
 
 	constructor(template: InstanceTemplate, dependencies: InstanceManagerDependencies) {
 		this.#registry = new ActiveInstanceRegistry();
-		const factory = new ActiveInstanceFactory(template, dependencies);
+		const factory = new ActiveInstanceFactory(template, {
+			...dependencies,
+			advanceId: dependencies.advanceId ?? dependencies.token,
+		});
 		const manifests = new InstanceManifestPolicy(template, dependencies.time, dependencies.token);
 		const trash = new InstanceTrashCleanup(dependencies.storage, dependencies.scheduler);
 		this.#mutations = new DurableInstanceMutations({
@@ -196,6 +202,20 @@ export class InstanceManager {
 	async seed(id: string, options: LifecycleMutationOptions): Promise<void> {
 		return this.#runMutation((runtimeSignal) =>
 			this.#mutations.seed(parseInstanceId(id), {
+				...options,
+				runtimeSignal,
+			}),
+		);
+	}
+
+	async advanceClock(
+		id: string,
+		duration: string,
+		options: LifecycleMutationOptions,
+	): Promise<InstanceClockAdvanceResult> {
+		const durationMs = parseClockDuration(duration);
+		return this.#runMutation((runtimeSignal) =>
+			this.#mutations.advanceClock(parseInstanceId(id), durationMs, {
 				...options,
 				runtimeSignal,
 			}),
