@@ -5,7 +5,6 @@ import { baseOptions } from "@/lib/layout.shared";
 export default function NotFound() {
 	return (
 		<HomeLayout {...baseOptions()}>
-			<title>Not found — localhost2137</title>
 			<DefaultNotFound />
 		</HomeLayout>
 	);

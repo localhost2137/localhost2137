@@ -13,7 +13,11 @@ import NotFound from "./routes/not-found";
 
 const siteDescription = "Documentation for the localhost2137 service-emulator runtime.";
 
-export function meta(): Route.MetaDescriptors {
+export function meta({ error }: Route.MetaArgs): Route.MetaDescriptors {
+	if (isRouteErrorResponse(error) && error.status === 404) {
+		return [{ title: "Not found — localhost2137" }];
+	}
+
 	return [
 		{ title: "localhost2137 documentation" },
 		{ name: "description", content: siteDescription },

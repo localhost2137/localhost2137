@@ -7,6 +7,15 @@ import { baseOptions } from "@/lib/layout.shared";
 import { docs, source } from "@/lib/source";
 import type { Route } from "./+types/docs";
 
+export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
+	if (!loaderData) return [];
+
+	return [
+		{ title: `${loaderData.title} — localhost2137` },
+		{ name: "description", content: loaderData.description },
+	];
+}
+
 export async function loader({ params }: Route.LoaderArgs) {
 	const slugs = params["*"].split("/").filter(Boolean);
 	const page = source.getPage(slugs);
@@ -17,8 +26,10 @@ export async function loader({ params }: Route.LoaderArgs) {
 	await content.preload();
 
 	return {
+		description: page.data.description,
 		path: page.path,
 		pageTree: await source.serializePageTree(source.getPageTree()),
+		title: page.data.title,
 	};
 }
 
@@ -31,8 +42,6 @@ function Content({ path }: Readonly<{ path: string }>) {
 
 	return (
 		<DocsPage toc={toc}>
-			<title>{page.title} — localhost2137</title>
-			<meta name="description" content={page.description} />
 			<DocsTitle>{page.title}</DocsTitle>
 			<DocsDescription>{page.description}</DocsDescription>
 			<DocsBody>
