@@ -1,0 +1,23 @@
+{
+	"name": "@localhost2137/example-slack-ping-bot",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+	},
+	"dependencies": {
+		"@slack/bolt": "^5.0.0"
+	},
+	"devDependencies": {
+		"@localhost2137/slack": "workspace:*",
+		"@types/node": "24.13.3",
+		"localhost2137": "workspace:*",
+		"typescript": "6.0.3",
+		"vitest": "4.1.11"
+	}
+}
