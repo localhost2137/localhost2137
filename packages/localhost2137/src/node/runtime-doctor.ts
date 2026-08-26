@@ -1,4 +1,4 @@
-import { access, readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ConfigError } from "../config/config-error.js";
 import type { ResolvedConfig } from "../config/config-resolution.js";
@@ -166,7 +166,7 @@ async function inspectRuntime(
 
 async function pathExists(path: string): Promise<boolean> {
 	try {
-		await access(path);
+		await lstat(path);
 		return true;
 	} catch (cause) {
 		if (hasCode(cause, "ENOENT") || hasCode(cause, "ENOTDIR")) return false;

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,6 +106,31 @@ describe("active runtime files", () => {
 			code: "RUNTIME_DESCRIPTOR_MALFORMED",
 		});
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"rejects symlinked descriptor and control-token paths",
+		async () => {
+			const descriptorRoot = await temporaryRoot();
+			const descriptorTarget = join(descriptorRoot, "descriptor-target.json");
+			await writeFile(descriptorTarget, JSON.stringify(fixtureDescriptor()));
+			await symlink(descriptorTarget, storagePaths(descriptorRoot).runtime);
+			await writeFile(storagePaths(descriptorRoot).controlToken, `${TOKEN}\n`);
+
+			await expect(discoverRuntimeFiles(descriptorRoot)).rejects.toMatchObject({
+				code: "RUNTIME_DESCRIPTOR_MALFORMED",
+			});
+
+			const tokenRoot = await temporaryRoot();
+			const tokenTarget = join(tokenRoot, "token-target");
+			await writeFile(storagePaths(tokenRoot).runtime, JSON.stringify(fixtureDescriptor()));
+			await writeFile(tokenTarget, `${TOKEN}\n`);
+			await symlink(tokenTarget, storagePaths(tokenRoot).controlToken);
+
+			await expect(discoverRuntimeFiles(tokenRoot)).rejects.toMatchObject({
+				code: "RUNTIME_TOKEN_MALFORMED",
+			});
+		},
+	);
 
 	it("reports a stale positive pid before network access and keeps the descriptor", async () => {
 		const root = await temporaryRoot();

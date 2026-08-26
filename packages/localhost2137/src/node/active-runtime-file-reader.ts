@@ -1,11 +1,10 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { ownControlToken } from "../control/control-client.js";
 import {
 	ownRuntimeDescriptor,
 	type RuntimeDescriptor,
 	RuntimeDescriptorValidationError,
 } from "../control/runtime-descriptor.js";
+import { readBoundedRegularFile } from "./bounded-regular-file.js";
 
 const DESCRIPTOR_LIMIT_BYTES = 16 * 1024;
 const TOKEN_LIMIT_BYTES = 1024;
@@ -36,19 +35,7 @@ export async function readRuntimeTokenFile(path: string): Promise<string> {
 }
 
 async function readBoundedText(path: string, limitBytes: number): Promise<string> {
-	const handle = await open(path, constants.O_RDONLY);
-	try {
-		const metadata = await handle.stat();
-		if (!metadata.isFile()) throw new TypeError("Active runtime path must be a regular file.");
-		if (metadata.size > limitBytes) {
-			throw new TypeError("Active runtime file exceeds its size limit.");
-		}
-		const body = await handle.readFile();
-		if (body.byteLength > limitBytes) {
-			throw new TypeError("Active runtime file exceeds its size limit.");
-		}
-		return new TextDecoder("utf-8", { fatal: true }).decode(body);
-	} finally {
-		await handle.close();
-	}
+	return new TextDecoder("utf-8", { fatal: true }).decode(
+		await readBoundedRegularFile(path, limitBytes),
+	);
 }

@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
 	createRuntimeDescriptor,
 } from "../../src/node/active-runtime-file-store.js";
 import { inspectProjectRuntime } from "../../src/node/runtime-doctor.js";
+import { storagePaths } from "../../src/node/storage-paths.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -144,6 +145,78 @@ describe("runtime doctor", () => {
 		);
 		expect(JSON.stringify(report)).not.toContain("private-control-token");
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"reports a symlinked runtime descriptor without following or removing it",
+		async () => {
+			const project = await temporaryProject();
+			const storage = join(project, ".state");
+			const config = resolveConfig(
+				{ services: {}, storage: { dir: storage } },
+				join(project, "localhost.config.ts"),
+			);
+			await mkdir(storage, { recursive: true });
+			const target = join(project, "untrusted-runtime.json");
+			await writeFile(target, "private descriptor contents");
+			await symlink(target, storagePaths(storage).runtime);
+
+			const report = await inspectProjectRuntime(
+				{ cwd: project },
+				{ loadConfig: async () => config },
+			);
+
+			expect(report.runtime).toEqual({
+				errorCode: "RUNTIME_DESCRIPTOR_MALFORMED",
+				state: "unhealthy",
+			});
+			expect(report.issues).toContainEqual(
+				expect.objectContaining({ code: "RUNTIME_DESCRIPTOR_MALFORMED" }),
+			);
+			expect(JSON.stringify(report)).not.toContain("private descriptor contents");
+			expect((await lstat(storagePaths(storage).runtime)).isSymbolicLink()).toBe(true);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"reports a symlinked control token without reading or removing it",
+		async () => {
+			const project = await temporaryProject();
+			const storage = join(project, ".state");
+			const config = resolveConfig(
+				{ services: {}, storage: { dir: storage } },
+				join(project, "localhost.config.ts"),
+			);
+			await mkdir(storage, { recursive: true });
+			await writeFile(
+				storagePaths(storage).runtime,
+				JSON.stringify(
+					createRuntimeDescriptor({
+						configFingerprint: config.fingerprint,
+						pid: process.pid,
+						url: "http://127.0.0.1:2137",
+					}),
+				),
+			);
+			const target = join(project, "untrusted-token");
+			await writeFile(target, "private-control-token");
+			await symlink(target, storagePaths(storage).controlToken);
+
+			const report = await inspectProjectRuntime(
+				{ cwd: project },
+				{ loadConfig: async () => config },
+			);
+
+			expect(report.runtime).toEqual({
+				errorCode: "RUNTIME_TOKEN_MALFORMED",
+				state: "unhealthy",
+			});
+			expect(report.issues).toContainEqual(
+				expect.objectContaining({ code: "RUNTIME_TOKEN_MALFORMED" }),
+			);
+			expect(JSON.stringify(report)).not.toContain("private-control-token");
+			expect((await lstat(storagePaths(storage).controlToken)).isSymbolicLink()).toBe(true);
+		},
+	);
 });
 
 async function temporaryProject(): Promise<string> {
