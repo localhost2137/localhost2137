@@ -4,8 +4,10 @@ description: What localhost2137 owns, what plugins own, and how an application i
 ---
 
 localhost2137 runs stateful emulator plugins for external developer services. It is not a generic
-request/response mock server. A plugin implements a small executable service with its own HTTP API,
-state, operations, and persistence.
+request/response mock server. [Choose the right test boundary](/test-boundaries) explains when a
+stateful emulator supplies useful evidence and when a simpler double or real service is the better
+fit. A plugin implements a small executable service with its own HTTP API, state, operations, and
+persistence.
 
 ## Two interfaces, one local world
 

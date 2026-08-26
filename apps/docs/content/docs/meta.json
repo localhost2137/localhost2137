@@ -3,6 +3,7 @@
 	"pages": [
 		"agents",
 		"index",
+		"test-boundaries",
 		"operations-and-apis",
 		"instances",
 		"getting-started",
