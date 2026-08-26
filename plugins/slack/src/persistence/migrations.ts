@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
+import { reconcileSequenceId, type SequenceKind } from "./id-sequence.js";
 
-export const CURRENT_DATABASE_VERSION = 2;
+export const CURRENT_DATABASE_VERSION = 3;
 
 interface Migration {
 	readonly version: number;
@@ -91,6 +92,15 @@ const migrations: readonly Migration[] = [
 			`);
 		},
 	},
+	{
+		version: 3,
+		apply(database) {
+			reconcileRows(database, "user", "SELECT id FROM users");
+			reconcileRows(database, "channel", "SELECT id FROM channels");
+			reconcileRows(database, "message", "SELECT id FROM messages");
+			reconcileRows(database, "event", "SELECT event_id AS id FROM event_deliveries");
+		},
+	},
 ];
 
 export function migrateDatabase(database: Database.Database): void {
@@ -129,4 +139,9 @@ function tableExists(database: Database.Database, name: string): boolean {
 			.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
 			.get(name) !== undefined
 	);
+}
+
+function reconcileRows(database: Database.Database, kind: SequenceKind, query: string): void {
+	const rows = database.prepare(query).all() as Array<{ id: string }>;
+	for (const row of rows) reconcileSequenceId(database, kind, row.id);
 }

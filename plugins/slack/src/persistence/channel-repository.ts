@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ChannelId, SlackChannel, UserId } from "../domain/models.js";
-import { nextId } from "./id-sequence.js";
+import { insertSequencedId } from "./id-sequence.js";
 
 interface ChannelRow {
 	readonly created_at_ms: number;
@@ -26,10 +26,11 @@ export class ChannelRepository {
 	create(
 		input: Readonly<{ id?: ChannelId; name: string; now: Date; private?: boolean }>,
 	): SlackChannel {
-		const id = input.id ?? nextId(this.#database, "channel");
-		this.#database
-			.prepare("INSERT INTO channels(id, name, is_private, created_at_ms) VALUES (?, ?, ?, ?)")
-			.run(id, input.name, input.private ? 1 : 0, input.now.getTime());
+		const id = insertSequencedId(this.#database, "channel", input.id, (allocatedId) => {
+			this.#database
+				.prepare("INSERT INTO channels(id, name, is_private, created_at_ms) VALUES (?, ?, ?, ?)")
+				.run(allocatedId, input.name, input.private ? 1 : 0, input.now.getTime());
+		});
 		return this.getById(id);
 	}
 

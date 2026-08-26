@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ChannelId, SlackMessage, UserId } from "../domain/models.js";
-import { nextId } from "./id-sequence.js";
+import { insertSequencedId } from "./id-sequence.js";
 
 interface MessageRow {
 	readonly channel_id: string;
@@ -36,22 +36,23 @@ export class MessageRepository {
 			userId: UserId;
 		}>,
 	): SlackMessage {
-		const id = nextId(this.#database, "message");
-		const ts = this.#nextTimestamp(input.now);
-		this.#database
-			.prepare(
-				`INSERT INTO messages(id, channel_id, user_id, text, ts, created_at_ms, thread_ts, deleted)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-			)
-			.run(
-				id,
-				input.channelId,
-				input.userId,
-				input.text,
-				ts,
-				input.now.getTime(),
-				input.threadTs ?? null,
-			);
+		const id = insertSequencedId(this.#database, "message", undefined, (allocatedId) => {
+			const ts = this.#nextTimestamp(input.now);
+			this.#database
+				.prepare(
+					`INSERT INTO messages(id, channel_id, user_id, text, ts, created_at_ms, thread_ts, deleted)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+				)
+				.run(
+					allocatedId,
+					input.channelId,
+					input.userId,
+					input.text,
+					ts,
+					input.now.getTime(),
+					input.threadTs ?? null,
+				);
+		});
 		return this.getById(id);
 	}
 

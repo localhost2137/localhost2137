@@ -39,7 +39,7 @@ export const slackContractFixture = Object.freeze({
 			input: Object.freeze({ channel: "general" }),
 			operation: "listMessages" as const,
 		}),
-		versions: Object.freeze({ current: 2, future: 3, old: 1 }),
+		versions: Object.freeze({ current: 3, future: 4, old: 2 }),
 		write: Object.freeze({
 			input: Object.freeze({ channel: "general", from: "U000001", text: "durable" }),
 			operation: "sendMessage" as const,
@@ -63,7 +63,7 @@ export const slackContractFixture = Object.freeze({
 		createService: (resources: ContractHarnessResources) =>
 			createSlackService(resources.deliveryUrl),
 		pluginId: "slack",
-		stateVersion: 2,
+		stateVersion: 3,
 	}),
 	hono: Object.freeze({
 		arrange: Object.freeze({

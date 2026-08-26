@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { EventDelivery, EventId, MessageId } from "../domain/models.js";
-import { nextId } from "./id-sequence.js";
+import { insertSequencedId } from "./id-sequence.js";
 
 interface DeliveryRow {
 	readonly completed_at_ms: number | null;
@@ -53,13 +53,14 @@ export class DeliveryRepository {
 	}
 
 	enqueue(messageId: MessageId, now: Date): EventDelivery {
-		const eventId = nextId(this.#database, "event");
-		this.#database
-			.prepare(
-				`INSERT INTO event_deliveries(event_id, message_id, status, requested_at_ms)
-				 VALUES (?, ?, 'pending', ?)`,
-			)
-			.run(eventId, messageId, now.getTime());
+		const eventId = insertSequencedId(this.#database, "event", undefined, (allocatedId) => {
+			this.#database
+				.prepare(
+					`INSERT INTO event_deliveries(event_id, message_id, status, requested_at_ms)
+					 VALUES (?, ?, 'pending', ?)`,
+				)
+				.run(allocatedId, messageId, now.getTime());
+		});
 		return this.get(eventId);
 	}
 

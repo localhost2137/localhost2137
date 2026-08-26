@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { SlackUser, UserId } from "../domain/models.js";
-import { nextId } from "./id-sequence.js";
+import { insertSequencedId } from "./id-sequence.js";
 
 interface UserRow {
 	readonly created_at_ms: number;
@@ -20,12 +20,13 @@ export class UserRepository {
 	create(
 		input: Readonly<{ admin: boolean; bot?: boolean; id?: UserId; name: string; now: Date }>,
 	): SlackUser {
-		const id = input.id ?? nextId(this.#database, "user");
-		this.#database
-			.prepare(
-				"INSERT INTO users(id, name, is_admin, is_bot, created_at_ms) VALUES (?, ?, ?, ?, ?)",
-			)
-			.run(id, input.name, input.admin ? 1 : 0, input.bot ? 1 : 0, input.now.getTime());
+		const id = insertSequencedId(this.#database, "user", input.id, (allocatedId) => {
+			this.#database
+				.prepare(
+					"INSERT INTO users(id, name, is_admin, is_bot, created_at_ms) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(allocatedId, input.name, input.admin ? 1 : 0, input.bot ? 1 : 0, input.now.getTime());
+		});
 		return this.getById(id);
 	}
 

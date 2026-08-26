@@ -101,7 +101,7 @@ events adapter ---------------------> delivery repository
 lifecycle --------------------------> database resource owner
 ```
 
-Raw parameterized SQL and two explicit migrations own the schema. Repositories map rows to domain
+Raw parameterized SQL and three explicit migrations own the schema. Repositories map rows to domain
 records. `SlackDatabase` is the only connection resource owner, closes idempotently, enables foreign
 keys/WAL, and provides the transaction boundary for multi-row message/event creation. The plugin
 never imports runtime internals and keeps no module-global instance state.

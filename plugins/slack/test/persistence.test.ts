@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 describe("Slack persistence", () => {
-	it("migrates a version-0 fixture and preserves its user", async () => {
+	it("migrates a realistic version-0 numeric ID and reconciles the next user ID", async () => {
 		const database = await fixtureDatabase();
 		try {
 			database
@@ -30,10 +30,62 @@ describe("Slack persistence", () => {
 			expect(database.raw().pragma("user_version", { simple: true })).toBe(
 				CURRENT_DATABASE_VERSION,
 			);
-			expect(database.users.findById("U_LEGACY")).toMatchObject({
+			expect(database.users.findById("U000001")).toMatchObject({
 				admin: true,
-				id: "U_LEGACY",
+				id: "U000001",
 				name: "Legacy Ada",
+			});
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			expect(service.createUser({ admin: false, name: "Grace", now }).id).toBe("U000002");
+		} finally {
+			database.close();
+		}
+	});
+
+	it("reconciles explicit numeric user and channel IDs without consuming semantic IDs", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			service.seed(
+				{
+					channels: [
+						{ id: "C000004", members: ["U000003"], name: "numeric" },
+						{ id: "C_GENERAL", members: ["U_ADA"], name: "semantic" },
+					],
+					users: [
+						{ admin: false, id: "U000003", name: "Numeric Ada" },
+						{ admin: false, id: "U_ADA", name: "Semantic Ada" },
+					],
+				},
+				now,
+			);
+
+			expect(service.requireUser("U000000")).toMatchObject({ bot: true, id: "U000000" });
+			expect(service.createUser({ admin: false, name: "Grace", now }).id).toBe("U000004");
+			expect(service.createChannel({ name: "next", now }).id).toBe("C000005");
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rolls back generated ID allocation when its row insert fails", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			expect(database.users.create({ admin: false, name: "Taken", now })).toMatchObject({
+				id: "U000001",
+			});
+			expect(() =>
+				database.users.create({ admin: false, id: "U000099", name: "Taken", now }),
+			).toThrow(/UNIQUE constraint failed/);
+			expect(() => database.users.create({ admin: false, name: "Taken", now })).toThrow(
+				/UNIQUE constraint failed/,
+			);
+			expect(database.users.create({ admin: false, name: "After failure", now })).toMatchObject({
+				id: "U000002",
 			});
 		} finally {
 			database.close();
