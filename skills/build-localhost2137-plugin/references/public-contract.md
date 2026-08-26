@@ -9,7 +9,6 @@ import { Hono } from "hono";
 import {
   defineOperation,
   definePlugin,
-  LocalhostError,
   type PluginEnv,
 } from "localhost2137";
 import { z } from "zod";

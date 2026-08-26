@@ -1,6 +1,6 @@
 ---
 name: use-localhost2137
-description: Integrate and test applications against stateful service-emulator plugins running on localhost2137. Use when Codex needs to configure installed plugins in localhost.config.ts, wire an application's existing SDK or service interface to a local emulator, arrange and inspect emulator state through operations, create isolated integration tests, drive virtual time, use the daemon or control client, or diagnose an application-to-emulator workflow.
+description: Integrate and test applications against stateful service-emulator plugins running on localhost2137. Use when configuring installed plugins in localhost.config.ts, wiring an application's existing SDK or service interface to a local emulator, arranging and inspecting emulator state through operations, creating isolated integration tests, driving virtual time, using the daemon or control client, or diagnosing an application-to-emulator workflow.
 ---
 
 # Use localhost2137
@@ -16,6 +16,8 @@ Treat localhost2137 as a runtime for emulator plugins. Let the installed plugin 
 
 Do not invent plugin packages, configuration fields, operations, SDK adapters, CLI commands, or compatibility claims. Verify them in the installed version.
 
+For a review or diagnosis request, inspect and report without changing files unless the user also requests implementation.
+
 ## Build the smallest useful integration
 
 1. Add the configured plugin under a meaningful `services` key. Treat that key as the service's route, storage, control, and typed-handle identity.
@@ -27,7 +29,7 @@ Do not invent plugin packages, configuration fields, operations, SDK adapters, C
 ## Choose an ownership model
 
 - For an in-process integration test, create one explicit test runtime, create an isolated instance for the test, and clean up both the application and instance on every failure path.
-- For parallel workers, let one owner process hold the test runtime. Give workers only its loopback URL and control token, then create one unique ephemeral instance per worker through `localhost2137/client`.
+- For parallel workers, let one owner process hold the test runtime. Give workers only its loopback URL and control token, then create one unique ephemeral instance per worker through `localhost2137/client`. Instances isolate emulator state, not shared plugin config or application callback URLs; inspect the plugin's callback-routing semantics before parallel event or webhook tests.
 - For a developer session, run the daemon and use generated discovery rather than memorized service commands. Use `localhost run --` only when the application should receive the instance's connection environment.
 
 Read [runtime-interfaces.md](references/runtime-interfaces.md) when choosing or implementing one of these modes.

@@ -1,6 +1,6 @@
 ---
 name: build-localhost2137-plugin
-description: Author, extend, or review a stateful external-service emulator plugin for localhost2137 through its public Hono, Zod, operation, lifecycle, connection, persistence, and plugin-testkit contracts. Use when Codex needs to design a plugin, add compatible API behavior or control operations, implement state migrations or durable delivery, respond to virtual time, create a contract fixture, or improve an existing plugin without coupling it to runtime internals.
+description: Author, extend, or review a stateful external-service emulator plugin for localhost2137 through its public Hono, Zod, operation, lifecycle, connection, persistence, and plugin-testkit contracts. Use when designing a plugin, adding compatible API behavior or control operations, implementing state migrations or durable delivery, responding to virtual time, creating a contract fixture, or improving an existing plugin without coupling it to runtime internals.
 ---
 
 # Build a localhost2137 plugin
@@ -18,13 +18,15 @@ Before editing:
 
 Do not import runtime source internals. If the public contract cannot express required behavior, explain the missing capability instead of creating a hidden dependency or service-specific kernel workaround.
 
+For a review or diagnosis request, inspect and report without changing files unless the user also requests implementation.
+
 ## Keep ownership explicit
 
 The plugin owns:
 
 - provider-compatible HTTP behavior and response mapping;
 - configuration and optional seed schemas;
-- domain rules and deterministic service-specific identities;
+- domain rules and provider-shaped identities, with deterministic generation only when it is a deliberate compatibility choice;
 - persistence, transactions, schema, and migrations;
 - control operations and connection metadata;
 - outbound event, webhook, or retry semantics.
@@ -79,11 +81,13 @@ Return one side-effect-free factory from `definePlugin` with:
 - lifecycle hooks;
 - instance-correct connection `values` and app-facing `env`.
 
-Prefer a private dependency-injected factory for fault testing and one ordinary configured export for consumers. Do not expose test-only operations or change the production operation inventory in fault variants.
+Prefer a private dependency-injected factory for fault testing and one ordinary consumer-facing plugin factory export. Do not expose test-only operations or change the production operation inventory in fault variants.
 
 ## Prove the plugin
 
-Use `@localhost2137/plugin-testkit` against the production factory. Add plugin-specific tests for domain rules, persistence transactions and migrations, API/SDK compatibility, durable recovery, signatures, retries, and unsupported input behavior. The generic contract proves runtime integration; it does not prove provider fidelity.
+Use `@localhost2137/plugin-testkit` against the production factory when its fixture can describe the plugin honestly. A new state-version-1 plugin has no valid historical predecessor for the current fixture's ordered version contract; do not bump its version or invent one. Use focused public-surface, lifecycle, and persistence tests and disclose that testkit gap until a real prior schema exists.
+
+Add plugin-specific tests for domain rules, persistence transactions and migrations, API/SDK compatibility, durable recovery, signatures, retries, and unsupported input behavior. The generic contract proves runtime integration; it does not prove provider fidelity.
 
 Verify at least:
 

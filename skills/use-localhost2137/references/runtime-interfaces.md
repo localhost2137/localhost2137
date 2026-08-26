@@ -46,6 +46,7 @@ localhost describe [service] --json
 localhost exec <service> --help
 localhost exec <service> <operation> [generated flags] --json
 localhost instance create <id> [--seed]
+localhost instance list [--json]
 localhost instance reset <id> [--seed]
 localhost instance destroy <id>
 localhost seed [--instance <id>]
@@ -84,6 +85,8 @@ try {
 ```
 
 The remote client is intentionally untyped and introspection-driven. Use it when another process owns the runtime, particularly test-runner global setup. Keep the URL and token in the test harness, allocate collision-resistant instance IDs, and destroy only instances owned by that worker.
+
+Instances isolate emulator state and service storage. They do not create distinct plugin configurations or application callback URLs. Before running callbacks, events, or webhooks in parallel, confirm how the installed plugin routes them and how the application associates a callback with an instance. Never promise application callback isolation from instance isolation alone.
 
 ## Application boundary
 

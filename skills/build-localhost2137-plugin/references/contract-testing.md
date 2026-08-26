@@ -1,6 +1,8 @@
 # Plugin contract testing
 
-Use `@localhost2137/plugin-testkit` as the shared runtime-integration proof. Inspect its installed README and exported `PluginContractFixture` type while building the fixture; the type is the source of truth.
+Use `@localhost2137/plugin-testkit` as the shared runtime-integration proof when its exported contract can represent the plugin honestly. Inspect its exported declarations and `PluginContractFixture` type while building the fixture; the type is the source of truth.
+
+The current fixture requires positive versions ordered `old < current < future`. It cannot truthfully represent a new state-version-1 plugin with no predecessor. Do not bump the plugin or invent an old schema to satisfy the testkit. Cover the public surface, lifecycle, isolation, and persistence with focused tests and disclose the gap until a real prior schema exists.
 
 ## Register the cases
 
@@ -11,7 +13,7 @@ import { pluginContractFixture } from "./plugin-contract-fixture.js";
 
 describe("plugin contract", () => {
   for (const contractCase of createPluginContractCases(pluginContractFixture)) {
-    it(contractCase.name, () => contractCase.run());
+    it(contractCase.name, () => contractCase.run(), 30_000);
   }
 });
 ```
