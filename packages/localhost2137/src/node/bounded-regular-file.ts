@@ -17,9 +17,9 @@ export interface BoundedRegularFileSystem {
 	open(path: string, flags: number): Promise<RegularFileHandle>;
 }
 
-export type BoundedRegularFileErrorCode = "FILE_CHANGED" | "FILE_TOO_LARGE" | "NOT_REGULAR";
+type BoundedRegularFileErrorCode = "FILE_CHANGED" | "FILE_TOO_LARGE" | "NOT_REGULAR";
 
-export class BoundedRegularFileError extends Error {
+class BoundedRegularFileError extends Error {
 	readonly code: BoundedRegularFileErrorCode;
 
 	constructor(code: BoundedRegularFileErrorCode, message: string, options?: ErrorOptions) {
