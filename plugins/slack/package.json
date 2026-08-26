@@ -18,5 +18,18 @@
 	"scripts": {
 		"build": "tsc -b",
 		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+	},
+	"dependencies": {
+		"better-sqlite3": "^13.0.3",
+		"hono": "4.13.4",
+		"zod": "4.4.3"
+	},
+	"devDependencies": {
+		"@localhost2137/plugin-testkit": "workspace:*",
+		"@types/better-sqlite3": "7.6.13",
+		"localhost2137": "workspace:*"
+	},
+	"peerDependencies": {
+		"localhost2137": "workspace:*"
 	}
 }
