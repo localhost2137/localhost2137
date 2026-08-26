@@ -570,13 +570,16 @@ describe("Slack event retries", () => {
 				fixture.dispatcher.schedule(initialContext, fixture.event);
 				await expect(initialTasks.only()).rejects.toThrow("HTTP 503");
 
-				const retryHeaders: Headers[] = [];
+				const retryRequests: Array<Readonly<{ body: string; headers: Headers }>> = [];
 				const cancellation = new AbortController();
 				const cancelledContext = eventContext(
 					current,
 					trackedTasks().tasks,
 					async (_url, init) => {
-						retryHeaders.push(new Headers(init?.headers));
+						retryRequests.push({
+							body: String(init?.body),
+							headers: new Headers(init?.headers),
+						});
 						if (mode === "fetch") {
 							const cause = new Error("cancelled retry fetch");
 							cancellation.abort(cause);
@@ -608,20 +611,28 @@ describe("Slack event retries", () => {
 				});
 
 				const recoveryContext = eventContext(current, trackedTasks().tasks, async (_url, init) => {
-					retryHeaders.push(new Headers(init?.headers));
+					retryRequests.push({
+						body: String(init?.body),
+						headers: new Headers(init?.headers),
+					});
 					return new Response(null, { status: 204 });
 				});
 				await fixture.dispatcher.reconcileThrough(recoveryContext, current.value);
 
-				expect(retryHeaders).toHaveLength(2);
+				expect(retryRequests).toHaveLength(2);
 				expect(
-					retryHeaders.map((headers) => ({
+					retryRequests.map(({ headers }) => ({
 						num: headers.get("x-slack-retry-num"),
 						reason: headers.get("x-slack-retry-reason"),
 					})),
 				).toEqual([
 					{ num: "1", reason: "http_error" },
 					{ num: "1", reason: "http_error" },
+				]);
+				expect(retryRequests[0]?.body).toBe(retryRequests[1]?.body);
+				expect(retryRequests.map(({ body }) => JSON.parse(body))).toEqual([
+					expect.objectContaining({ event_id: fixture.event.eventId }),
+					expect.objectContaining({ event_id: fixture.event.eventId }),
 				]);
 				expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
 					attemptCount: 2,
