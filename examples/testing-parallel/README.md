@@ -3,7 +3,8 @@
 This executable example starts exactly one temporary localhost2137 runtime in Vitest global setup.
 Vitest serializes only its loopback URL and private control token to four worker processes. Each test
 file creates and destroys its own ephemeral, path-isolated instance through `localhost2137/client`.
-Global teardown closes the sole runtime and removes its temporary storage.
+After mutation, workers rendezvous through a test-harness-owned filesystem barrier and then re-read
+their unique values. Global teardown closes the sole runtime and removes both temporary roots.
 
 Run it from the repository root:
 
