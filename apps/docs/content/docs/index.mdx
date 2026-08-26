@@ -1,0 +1,45 @@
+---
+title: Runtime mental model
+description: What localhost2137 owns, what plugins own, and how an application interacts with both.
+---
+
+localhost2137 runs stateful emulator plugins for external developer services. It is not a generic
+request/response mock server. A plugin implements a small executable service with its own HTTP API,
+state, operations, and persistence.
+
+## Two interfaces, one local world
+
+Your application uses the plugin's provider-compatible HTTP API. Tests, scripts, developers, and
+coding agents use operations to arrange and inspect the same state.
+
+```text
+application ── provider SDK / HTTP ──> emulated API
+                                         │
+test or agent ── typed operation / CLI ──┘
+```
+
+The service key in `localhost.config.ts` is the route, storage, CLI, and typed-handle identity. The
+`dev` Slack URL, for example, begins at `http://127.0.0.1:2137/dev/slack`.
+
+## Ownership boundary
+
+The runtime owns explicit instances, route mounting, lifecycle timing, isolated storage locations,
+operation adapters, generated connection values, virtual time, tracked async work, and control-plane
+authentication.
+
+Each plugin owns service behavior, compatible responses, control operations, configuration, data
+format, migrations, retry rules, and persistence. This boundary is why localhost2137 can host a
+general plugin ecosystem without learning each provider's rules in its kernel.
+
+## The normal loop
+
+1. Configure installed plugins in ordinary TypeScript.
+2. Start `localhost dev`; the persistent `dev` world starts empty.
+3. Pass generated connection values to the application's existing SDK or service adapter.
+4. Arrange and inspect state through plugin operations.
+5. Exercise the application through its normal provider-facing boundary.
+6. Await tracked asynchronous work before asserting.
+7. Reset or destroy the world when it no longer matters.
+
+Instances isolate plugin state and storage. They do not create separate plugin configuration or
+callback URLs. Read the parallel-callback limitation before assuming event or webhook isolation.

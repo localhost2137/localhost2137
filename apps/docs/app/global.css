@@ -1,0 +1,60 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/generated/glass.css";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+:root {
+	--lh-signal: oklch(0.68 0.14 174);
+	--lh-grid: color-mix(in oklab, var(--color-fd-border) 52%, transparent);
+	--fd-primary: var(--lh-signal);
+	--fd-layout-width: 1520px;
+}
+
+body {
+	background-color: var(--color-fd-background);
+	background-image:
+		linear-gradient(var(--lh-grid) 1px, transparent 1px),
+		linear-gradient(90deg, var(--lh-grid) 1px, transparent 1px),
+		radial-gradient(
+			circle at 72% -12%,
+			color-mix(in oklab, var(--lh-signal) 10%, transparent),
+			transparent 34rem
+		);
+	background-size:
+		48px 48px,
+		48px 48px,
+		auto;
+	font-feature-settings: "ss01", "cv02", "cv03";
+}
+
+::selection {
+	background: color-mix(in oklab, var(--lh-signal) 30%, transparent);
+}
+
+.lh-wordmark {
+	display: inline-flex;
+	align-items: baseline;
+	font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
+	font-size: 0.94rem;
+	font-weight: 620;
+	letter-spacing: -0.045em;
+}
+
+.lh-wordmark strong {
+	color: var(--lh-signal);
+	font-weight: 760;
+}
+
+:focus-visible {
+	outline: 2px solid var(--lh-signal);
+	outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+		transition-duration: 0.01ms !important;
+	}
+}

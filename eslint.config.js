@@ -29,10 +29,23 @@ const sideEffectGlobals = [
 
 export default defineConfig([
 	{
-		ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "design/**"],
+		ignores: [
+			"**/.next/**",
+			"**/.source/**",
+			"**/dist/**",
+			"**/coverage/**",
+			"**/node_modules/**",
+			"design/**",
+		],
 	},
 	{
-		files: ["packages/**/*.ts", "plugins/**/*.ts", "examples/**/*.ts"],
+		files: [
+			"apps/**/*.ts",
+			"apps/**/*.tsx",
+			"packages/**/*.ts",
+			"plugins/**/*.ts",
+			"examples/**/*.ts",
+		],
 		languageOptions: {
 			parser: tseslint.parser,
 		},

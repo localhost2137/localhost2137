@@ -4,5 +4,7 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .localhost2137/
+.next/
+.source/
 .pnpm-store/
 packages/localhost2137/test/.tmp/
