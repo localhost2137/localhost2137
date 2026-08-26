@@ -6,8 +6,10 @@ import {
 	definePlugin,
 	type InstanceHandle,
 	type PluginEnv,
+	type RuntimeConfig,
+	type ServiceRecord,
 } from "localhost2137";
-import { createTestRuntime } from "localhost2137/testing";
+import { createTestRuntime, type TestRuntime } from "localhost2137/testing";
 import { z } from "zod";
 import type { PluginContractFixture } from "../../src/index.js";
 import {
@@ -195,10 +197,10 @@ async function observeAuthoringSideEffects() {
 async function observeLifecycleOrdering() {
 	const events: string[] = [];
 	const config = lifecycleConfig(events);
-	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
-	const instance = await runtime.createInstance({ seed: true });
-	await instance.destroy();
-	await runtime.close();
+	await withTemporaryRuntime(config, async (runtime) => {
+		const instance = await runtime.createInstance({ seed: true });
+		await instance.destroy();
+	});
 	return observation(events, ["create", "start", "seed", "stop"]);
 }
 
@@ -211,11 +213,12 @@ async function observeCreateFailureRecovery() {
 			throw new Error("injected create failure");
 		}
 	});
-	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
-	const failure = await runtime.createInstance().catch((cause: unknown) => cause);
-	const recovered = await runtime.createInstance();
-	await recovered.destroy();
-	await runtime.close();
+	const failure = await withTemporaryRuntime(config, async (runtime) => {
+		const firstFailure = await runtime.createInstance().catch((cause: unknown) => cause);
+		const recovered = await runtime.createInstance();
+		await recovered.destroy();
+		return firstFailure;
+	});
 	return observation(
 		{ events, failed: failure instanceof Error },
 		{ events: ["create", "create", "start", "stop"], failed: true },
@@ -284,15 +287,15 @@ async function observeOutputValidation() {
 		operations: { fail },
 		stateVersion: 1,
 	});
-	const runtime = await createTestRuntime({
-		config: defineConfig({ services: { broken: plugin({ config: {} }) } }),
-		port: 0,
-		storage: "temporary",
-	});
-	const instance = await runtime.createInstance();
-	const failure = await instance.broken.fail({}).catch((cause: unknown) => cause);
-	await instance.destroy();
-	await runtime.close();
+	const failure = await withTemporaryRuntime(
+		defineConfig({ services: { broken: plugin({ config: {} }) } }),
+		async (runtime) => {
+			const instance = await runtime.createInstance();
+			const operationFailure = await instance.broken.fail({}).catch((cause: unknown) => cause);
+			await instance.destroy();
+			return operationFailure;
+		},
+	);
 	return observation(errorCode(failure), "OPERATION_OUTPUT_INVALID");
 }
 
@@ -319,15 +322,15 @@ async function observeStorageEscape() {
 		operations: { escape: escapeOperation },
 		stateVersion: 1,
 	});
-	const runtime = await createTestRuntime({
-		config: defineConfig({ services: { escape: plugin({ config: {} }) } }),
-		port: 0,
-		storage: "temporary",
-	});
-	const instance = await runtime.createInstance();
-	const failure = await instance.escape.escape({}).catch((cause: unknown) => cause);
-	await instance.destroy();
-	await runtime.close();
+	const failure = await withTemporaryRuntime(
+		defineConfig({ services: { escape: plugin({ config: {} }) } }),
+		async (runtime) => {
+			const instance = await runtime.createInstance();
+			const operationFailure = await instance.escape.escape({}).catch((cause: unknown) => cause);
+			await instance.destroy();
+			return operationFailure;
+		},
+	);
 	return observation(errorCode(failure), "PLUGIN_EXECUTION_FAILED");
 }
 
@@ -360,4 +363,28 @@ function deferred<Value>() {
 		resolvePromise = resolve;
 	});
 	return Object.freeze({ promise, resolve: resolvePromise });
+}
+
+async function withTemporaryRuntime<Services extends ServiceRecord, Value>(
+	config: RuntimeConfig<Services>,
+	work: (runtime: TestRuntime<Services>) => Promise<Value>,
+): Promise<Value> {
+	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+	const outcome = await work(runtime).then(
+		(value) => Object.freeze({ status: "fulfilled" as const, value }),
+		(reason: unknown) => Object.freeze({ reason, status: "rejected" as const }),
+	);
+	const cleanup = await runtime.close().then(
+		() => Object.freeze({ status: "fulfilled" as const }),
+		(reason: unknown) => Object.freeze({ reason, status: "rejected" as const }),
+	);
+	if (outcome.status === "rejected" && cleanup.status === "rejected") {
+		throw new AggregateError(
+			[outcome.reason, cleanup.reason],
+			"Contract fixture probe and temporary runtime cleanup failed.",
+		);
+	}
+	if (outcome.status === "rejected") throw outcome.reason;
+	if (cleanup.status === "rejected") throw cleanup.reason;
+	return outcome.value;
 }

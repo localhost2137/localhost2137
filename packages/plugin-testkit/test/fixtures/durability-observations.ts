@@ -104,7 +104,22 @@ async function startFailure(
 	failUpdate: boolean = false,
 ): Promise<number | null> {
 	const daemon = await spawnDaemon(fixture, version, failUpdate);
-	return await daemon.closed;
+	const polling = new AbortController();
+	try {
+		const outcome = await Promise.race([
+			daemon.closed.then((code) => Object.freeze({ code, kind: "closed" as const })),
+			waitForUnexpectedReadiness(fixture.root, polling.signal).then(() =>
+				Object.freeze({ kind: "ready" as const }),
+			),
+		]);
+		if (outcome.kind === "ready") {
+			throw new Error("Durability daemon unexpectedly started successfully.");
+		}
+		return outcome.code;
+	} finally {
+		polling.abort();
+		await daemon.stop();
+	}
 }
 
 async function spawnDaemon(
@@ -190,6 +205,23 @@ async function waitForDescriptor(
 	}
 	process.kill("SIGINT");
 	throw new Error(`Durability daemon did not publish readiness.\n${output.read()}`);
+}
+
+async function waitForUnexpectedReadiness(root: string, signal: AbortSignal): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (!signal.aborted && Date.now() < deadline) {
+		try {
+			const decoded: unknown = JSON.parse(await readFile(join(root, "runtime.json"), "utf8"));
+			if (typeof decoded === "object" && decoded !== null) {
+				const url = Reflect.get(decoded, "url");
+				if (typeof url === "string") return;
+			}
+		} catch (cause) {
+			if (!hasCode(cause, "ENOENT")) throw cause;
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 20));
+	}
+	if (!signal.aborted) throw new Error("Durability daemon neither failed nor became ready.");
 }
 
 function collectOutput(process: ChildProcess): Readonly<{ read(): string }> {
