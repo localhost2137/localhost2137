@@ -1,6 +1,5 @@
 import type { Lifecycle, RunningPluginContext } from "localhost2137";
 import type { StripeConfig, StripeSeed } from "./config.js";
-import type { StripeTimeAdvance } from "./domain/models.js";
 import { createStripeServices, seedStripeServices } from "./domain/stripe-services.js";
 import { StripeDatabase } from "./persistence/database.js";
 import { assertCurrentDatabaseVersion, migrateDatabase } from "./persistence/migrations.js";
@@ -9,10 +8,6 @@ import type { StripeState } from "./state.js";
 import { StripeWebhookDispatcher } from "./webhooks/webhook-dispatcher.js";
 
 type StripeLifecycle = Lifecycle<StripeState, StripeConfig> & {
-	readonly onTimeAdvanced: (
-		context: RunningPluginContext<StripeState, StripeConfig>,
-		advance: StripeTimeAdvance,
-	) => Promise<void>;
 	readonly seed: (
 		context: RunningPluginContext<StripeState, StripeConfig>,
 		seed: StripeSeed,

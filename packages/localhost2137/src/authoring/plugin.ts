@@ -2,9 +2,9 @@ import type { Hono } from "hono";
 import type { z } from "zod";
 import type { BasePluginContext, PluginEnv, RunningPluginContext } from "./context.js";
 import {
-	readOperationBinding,
 	type BoundOperationShape,
 	type OperationShape,
+	readOperationBinding,
 	type Schema,
 } from "./operation.js";
 
@@ -28,8 +28,20 @@ export interface ConnectionContext<Config> {
 	readonly serviceKey: string;
 }
 
+/** One committed virtual-time window presented to each configured service in stable order. */
+export interface PluginTimeAdvance {
+	readonly advanceId: string;
+	readonly from: Date;
+	readonly to: Date;
+}
+
 export interface Lifecycle<State, Config> {
 	readonly create: (context: BasePluginContext<Config>) => Promise<void> | void;
+	/** Reconcile time-derived durable state idempotently for the supplied advance ID and window. */
+	readonly onTimeAdvanced?: (
+		context: RunningPluginContext<State, Config>,
+		advance: PluginTimeAdvance,
+	) => Promise<void> | void;
 	readonly start: (context: BasePluginContext<Config>) => State | Promise<State>;
 	readonly stop?: (context: RunningPluginContext<State, Config>) => Promise<void> | void;
 	readonly update?: (

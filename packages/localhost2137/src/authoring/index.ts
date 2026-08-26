@@ -34,5 +34,6 @@ export {
 	definePlugin,
 	type Lifecycle,
 	type PluginFactory,
+	type PluginTimeAdvance,
 	type ReservedOperationKey,
 } from "./plugin.js";

@@ -2,22 +2,12 @@ import type { Lifecycle, RunningPluginContext } from "localhost2137";
 import type { SlackConfig, SlackSeed } from "./config.js";
 import { SlackService } from "./domain/slack-service.js";
 import { SlackEventDispatcher } from "./events/event-dispatcher.js";
-import type { SlackPluginDependencies } from "./plugin-dependencies.js";
 import { SlackDatabase } from "./persistence/database.js";
 import { assertCurrentDatabaseVersion, migrateDatabase } from "./persistence/migrations.js";
+import type { SlackPluginDependencies } from "./plugin-dependencies.js";
 import type { SlackState } from "./state.js";
 
-interface SlackTimeAdvance {
-	readonly advanceId: string;
-	readonly from: Date;
-	readonly to: Date;
-}
-
 type SlackLifecycle = Lifecycle<SlackState, SlackConfig> & {
-	readonly onTimeAdvanced: (
-		context: RunningPluginContext<SlackState, SlackConfig>,
-		advance: SlackTimeAdvance,
-	) => Promise<void>;
 	readonly seed: (
 		context: RunningPluginContext<SlackState, SlackConfig>,
 		seed: SlackSeed,

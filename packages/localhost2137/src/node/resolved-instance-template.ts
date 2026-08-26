@@ -1,9 +1,9 @@
 import type { BasePluginContext, RunningPluginContext } from "../authoring/context.js";
+import type { PluginTimeAdvance } from "../authoring/plugin.js";
 import type { ResolvedConfig } from "../config/config-resolution.js";
 import type { ResolvedServiceConfig } from "../config/configured-service-resolution.js";
 import type { InstanceServiceTemplate, InstanceTemplate } from "../kernel/instance-template.js";
 import type { ServiceLifecycleHooks } from "../kernel/service-lifecycle.js";
-import type { PluginTimeAdvanceInput } from "../kernel/time-advance.js";
 
 export function createInstanceTemplate(config: ResolvedConfig): InstanceTemplate {
 	return Object.freeze({
@@ -31,7 +31,7 @@ function createServiceTemplate(service: ResolvedServiceConfig): InstanceServiceT
 			? {
 					onTimeAdvanced: async (
 						context: RunningPluginContext<unknown, unknown>,
-						advance: PluginTimeAdvanceInput,
+						advance: PluginTimeAdvance,
 					) => {
 						await invoke(onTimeAdvanced, [context, advance]);
 					},

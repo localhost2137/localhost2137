@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { PluginTimeAdvance } from "../../src/authoring/plugin.js";
 import {
 	DurableTimeAdvancement,
 	PendingTimeAdvanceConflictError,
 	TimeAdvanceCommittedError,
-	TimeAdvanceServiceMissingError,
 	type TimeAdvanceManifestStore,
+	TimeAdvanceServiceMissingError,
 } from "../../src/kernel/durable-time-advancement.js";
 import { parseInstanceId } from "../../src/kernel/identifiers.js";
 import { InstanceClock } from "../../src/kernel/instance-clock.js";
 import { StorageWriteCommittedError } from "../../src/kernel/instance-storage.js";
 import type { InstanceManifest } from "../../src/kernel/manifests.js";
 import type { AnyServiceLifecycle } from "../../src/kernel/service-lifecycle.js";
-import type { PluginTimeAdvanceInput } from "../../src/kernel/time-advance.js";
 
 describe("durable time advancement", () => {
 	it("does not report an uncommitted initial manifest failure as a moved clock", async () => {
@@ -328,7 +328,7 @@ function manifestStore(write: (manifest: InstanceManifest) => void): TimeAdvance
 
 function service(
 	serviceKey: string,
-	onTimeAdvanced: (advance: PluginTimeAdvanceInput) => void,
+	onTimeAdvanced: (advance: PluginTimeAdvance) => void,
 ): AnyServiceLifecycle {
 	return {
 		onTimeAdvanced: async (advance) => onTimeAdvanced(advance),

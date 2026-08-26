@@ -3,11 +3,12 @@ import {
 	defineConfig,
 	defineOperation,
 	definePlugin,
-	type InstanceClockStatus,
 	type InstanceClockAdvanceResult,
+	type InstanceClockStatus,
 	type InstanceHandle,
 	LocalhostError,
 	type PluginEnv,
+	type PluginTimeAdvance,
 	type ReservedOperationKey,
 	type ReservedServiceKey,
 	type ScenarioFacade,
@@ -89,6 +90,17 @@ const slack = definePlugin({
 	id: "slack",
 	lifecycle: {
 		create: (_context) => undefined,
+		onTimeAdvanced: (context, advance) => {
+			const received: PluginTimeAdvance = advance;
+			const started: true = context.state.started;
+			const advanceId: string = received.advanceId;
+			const from: Date = received.from;
+			const to: Date = received.to;
+			void advanceId;
+			void from;
+			void started;
+			void to;
+		},
 		seed: (context, seed) => {
 			const started: true = context.state.started;
 			const firstUserName: string | undefined = seed.users[0]?.name;
