@@ -46,6 +46,7 @@ general plugin ecosystem without learning each provider's rules in its kernel.
 6. Await tracked asynchronous work before asserting.
 7. Reset or destroy the world when it no longer matters.
 
-Instances isolate plugin state and storage. They do not create separate plugin configuration or
-callback URLs. Before assuming event or webhook isolation, read the
+[Instances and isolation](/instances) explains which resources belong to a world and which remain
+shared. In particular, instances do not create separate plugin configuration or callback URLs;
+before parallel event or webhook tests, read the
 [parallel-callback limitation](/limitations#parallel-callbacks-need-an-application-rule).

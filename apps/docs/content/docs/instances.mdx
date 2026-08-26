@@ -1,0 +1,131 @@
+---
+title: Instances and isolation
+description: Understand which state belongs to a local world, what persists, and where instance boundaries stop.
+---
+
+An instance is the unit of mutable state in localhost2137. A runtime can host multiple instances;
+the project config supplies the same service template to each one it creates.
+
+That distinction matters. Starting another instance gives you a clean service world without another
+runtime process. Starting another runtime is useful when the worlds need different configuration,
+ports, or callback receivers.
+
+```text
+one runtime at 127.0.0.1:2137
+├── instance dev
+│   ├── service primary  → /dev/primary/*
+│   └── service billing  → /dev/billing/*
+└── instance test-a
+    ├── service primary  → /test-a/primary/*
+    └── service billing  → /test-a/billing/*
+```
+
+`primary` and `billing` are configured service keys, not hard-coded service types. The installed
+plugins behind them decide what their APIs, state, operations, and connection values contain.
+
+## One template, many worlds
+
+The config is runtime-scoped. It selects plugin factories, assigns stable service keys, and provides
+plugin configuration such as local credentials or callback URLs. It is loaded once when the runtime
+starts; instances cannot override it.
+
+Each instance then owns the changing parts of that template:
+
+| Concern | Scope |
+| --- | --- |
+| Runtime host, port, and control token | Runtime |
+| Configured plugins, service keys, and plugin config | Runtime template |
+| Plugin data and service storage | Instance and service |
+| Clock, seed status, logs, and tracked asynchronous work | Instance |
+| Public API URL and app-facing connection values | Derived for the selected instance |
+| Event or webhook destination | Plugin config, therefore shared by instances |
+
+Two instances can contain records with the same provider-shaped IDs or entirely different data.
+Their plugin storage and clocks remain independent. They still run the same plugin code with the
+same resolved configuration.
+
+This is state isolation, not a process or security sandbox. Instances share the runtime endpoint and
+control credential. Application code should receive only app-facing connection values, never the
+runtime control token.
+
+## Addressing selects the world
+
+The public route begins with both identities:
+
+```text
+http://127.0.0.1:2137/{instance}/{service}/*
+```
+
+For example, these URLs reach the same configured service in different worlds:
+
+```text
+http://127.0.0.1:2137/dev/primary/*
+http://127.0.0.1:2137/test-a/primary/*
+```
+
+Plugins derive their connection values from the bound runtime URL, instance ID, service key, and
+plugin config. Passing one instance's connection to the application therefore selects that world
+for provider SDK or HTTP traffic.
+
+Control operations must target the same instance. If a test arranges `test-a` but the application
+still points at `dev`, both sides work correctly while observing different state. That mismatch often
+looks like a failed operation or an emulator that forgot its data; check the connection URL first.
+
+## Create, reset, and destroy mean different things
+
+An instance keeps its identity until it is destroyed:
+
+```text
+create empty or seeded world
+          │
+          ▼
+        active ── reset ──> active under the same instance ID
+          │
+          └──── destroy ──> no addressable world
+```
+
+Creation and reset are empty by default. Plugins may still create identities required for their own
+operation. Passing `seed: true` applies configured plugin seeds followed by the top-level scenario
+seed.
+
+A reset replaces the instance's service state and returns its clock to the configured starting
+mode. The instance ID, public path, and persistence policy stay the same, so application wiring can
+remain in place. Reset is appropriate when the owner wants to reuse a named world deliberately; an
+independent test usually creates a new instance instead.
+
+Destroy retires the world and removes its stored instance state. A typed test handle becomes unusable
+after its instance is destroyed. Cleanup belongs in `finally` so a failed assertion does not leave a
+world or plugin resources behind.
+
+## Persistence answers one question
+
+Persistence controls whether an instance is restored when its runtime starts again. It does not
+change plugin behavior or the isolation boundary.
+
+- The developer daemon creates `dev` as a persistent instance. Stopping and restarting the daemon
+  preserves its world until an explicit reset or destroy.
+- Test runtimes create ephemeral instances inside temporary runtime storage. Closing the test runtime
+  stops its server and removes the owned storage directory.
+- A remote test worker can also request an ephemeral instance from a runtime owned by another
+  process. The worker should still destroy that instance; ephemeral does not mean fire-and-forget.
+
+The owner model follows those scopes: a daemon owns its runtime, a suite or setup process owns a test
+runtime, and a test or worker owns the instances it creates. An instance owner should not close a
+runtime shared with other workers, and a runtime owner should not make individual tests guess which
+worlds are safe to destroy.
+
+## Where the boundary stops
+
+Instance isolation is sufficient when scenarios share one config and interact only through
+instance-aware API and operation routes. It is not sufficient when an external receiver cannot tell
+which instance caused a callback.
+
+Event and webhook destinations are plugin configuration values. Creating another instance does not
+rewrite them. Parallel callback tests need an application-level routing rule, or separately
+configured runtimes with separate receivers.
+
+Use a new instance for independent mutable state. Use a separate runtime when configuration itself
+must differ. [Configuration](/configuration) defines the shared template,
+[Integration testing](/testing) shows the ownership patterns in code, and
+[Limitations and troubleshooting](/limitations#parallel-callbacks-need-an-application-rule) covers
+the callback constraint.
