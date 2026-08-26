@@ -100,6 +100,63 @@ describe("Stripe HTTP and webhook compatibility", () => {
 		}
 	});
 
+	it("covers every declared Stripe route with real cursor pagination", async () => {
+		const runtime = await startRuntime(null);
+		const instance = await runtime.createInstance({ seed: true });
+		try {
+			const connection = instance.stripe.connection;
+			await stripePost(connection, "/v1/customers", { name: "Ada" });
+			await stripePost(connection, "/v1/customers", { name: "Grace" });
+			const secondProduct = await instance.stripe.createProduct({ name: "Enterprise" });
+			const secondPrice = await instance.stripe.createPrice({
+				productId: secondProduct.id,
+				unitAmount: 5_000,
+			});
+			await stripePost(connection, "/v1/subscriptions", {
+				customer: "cus_000001",
+				"items[0][price]": "price_000001",
+			});
+			await stripePost(connection, "/v1/subscriptions", {
+				customer: "cus_000002",
+				"items[0][price]": secondPrice.id,
+			});
+
+			await expectCursorPages(connection, "/v1/customers", ["cus_000001", "cus_000002"]);
+			await expectCursorPages(connection, "/v1/products", ["prod_000001", "prod_000002"]);
+			await expectCursorPages(connection, "/v1/prices", ["price_000001", "price_000002"]);
+			await expectCursorPages(connection, "/v1/invoices", ["in_000001", "in_000002"]);
+
+			expect(await stripeGet(connection, "/v1/customers/cus_000001")).toMatchObject({
+				id: "cus_000001",
+				object: "customer",
+			});
+			expect(await stripeGet(connection, "/v1/products/prod_000001")).toMatchObject({
+				id: "prod_000001",
+				object: "product",
+			});
+			expect(await stripeGet(connection, "/v1/prices/price_000001")).toMatchObject({
+				id: "price_000001",
+				object: "price",
+			});
+			expect(await stripeGet(connection, "/v1/subscriptions/sub_000001")).toMatchObject({
+				id: "sub_000001",
+				object: "subscription",
+				status: "active",
+			});
+			expect(await stripeGet(connection, "/v1/invoices/in_000001")).toMatchObject({
+				id: "in_000001",
+				object: "invoice",
+			});
+			expect(await stripeDelete(connection, "/v1/subscriptions/sub_000001")).toMatchObject({
+				canceled_at: 1_767_225_600,
+				id: "sub_000001",
+				status: "canceled",
+			});
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("rewrites fixed-origin SDK requests without depending on the Stripe SDK", async () => {
 		let received: Request | URL | string | undefined;
 		const rewritten = createStripeSdkFetch("http://127.0.0.1:2137/dev/stripe/", async (input) => {
@@ -210,6 +267,38 @@ async function stripeGet(
 	});
 	expect(response.status).toBe(200);
 	return response.json();
+}
+
+async function stripeDelete(
+	connection: Readonly<{ apiUrl: string; secretKey: string }>,
+	path: string,
+): Promise<unknown> {
+	const response = await fetch(`${connection.apiUrl}${path}`, {
+		headers: { authorization: `Bearer ${connection.secretKey}` },
+		method: "DELETE",
+	});
+	expect(response.status).toBe(200);
+	return response.json();
+}
+
+async function expectCursorPages(
+	connection: Readonly<{ apiUrl: string; secretKey: string }>,
+	path: string,
+	ids: readonly [string, string],
+): Promise<void> {
+	const [firstId, secondId] = ids;
+	expect(await stripeGet(connection, `${path}?limit=1`)).toMatchObject({
+		data: [{ id: firstId }],
+		has_more: true,
+		object: "list",
+		url: path,
+	});
+	expect(await stripeGet(connection, `${path}?limit=1&starting_after=${firstId}`)).toMatchObject({
+		data: [{ id: secondId }],
+		has_more: false,
+		object: "list",
+		url: path,
+	});
 }
 
 interface ReceivedRequest {
