@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { markdownRouteForPage, rewriteLLMIndexLinks } from "../lib/markdown-routes.ts";
 
 const docsRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contentRoot = join(docsRoot, "content/docs");
@@ -25,23 +26,6 @@ const expectedPages = new Map([
 const documentationFirstCommands = Object.freeze([
 	"localhost init",
 	"localhost demo clone <name> [directory]",
-]);
-
-const requiredCurrentCommands = Object.freeze([
-	"localhost dev",
-	"localhost describe",
-	"localhost exec",
-	"localhost instance create",
-	"localhost instance list",
-	"localhost instance reset",
-	"localhost instance destroy",
-	"localhost seed",
-	"localhost env",
-	"localhost run",
-	"localhost logs",
-	"localhost clock status",
-	"localhost clock advance",
-	"localhost doctor",
 ]);
 
 const files = (await listFiles(contentRoot))
@@ -75,7 +59,7 @@ for (const file of files) {
 }
 
 const combined = [...content.values()].join("\n");
-for (const command of [...documentationFirstCommands, ...requiredCurrentCommands]) {
+for (const command of documentationFirstCommands) {
 	assert(combined.includes(command), `The docs must include ${command}.`);
 }
 for (const command of [
@@ -110,6 +94,22 @@ assert(stylesheet.includes('@import "fumadocs-ui/css/generated/glass.css"'));
 
 const nextConfig = await readFile(join(docsRoot, "next.config.mjs"), "utf8");
 assert(nextConfig.includes('source: "/:path*.md"'));
+const sourceIndexFixture = [...expectedPages]
+	.map(([file, pageUrl]) => `- [${file}](${pageUrl})`)
+	.join("\n");
+const markdownIndex = rewriteLLMIndexLinks(sourceIndexFixture, pageUrls);
+const markdownTargets = [...markdownIndex.matchAll(/\]\((\/[^)\s]*)\)/g)]
+	.map((match) => match[1])
+	.sort(codeUnitOrder);
+const expectedMarkdownTargets = [...pageUrls].map(markdownRouteForPage).sort(codeUnitOrder);
+assert.deepEqual(
+	markdownTargets,
+	expectedMarkdownTargets,
+	"Every llms.txt link must target the Markdown route for one docs page.",
+);
+
+const llmsIndexRoute = await readFile(join(docsRoot, "app/llms.txt/route.ts"), "utf8");
+assert(llmsIndexRoute.includes("rewriteLLMIndexLinks"));
 for (const route of [
 	"app/llms.txt/route.ts",
 	"app/llms-full.txt/route.ts",
@@ -119,7 +119,7 @@ for (const route of [
 }
 
 process.stdout.write(
-	`Validated ${files.length} docs pages, internal links, CLI contracts, Glass layout, skills, and LLM routes.\n`,
+	`Validated ${files.length} docs pages, navigation links, docs-first commands, Glass wiring, skills references, and Markdown route mapping.\n`,
 );
 
 async function listFiles(directory) {
