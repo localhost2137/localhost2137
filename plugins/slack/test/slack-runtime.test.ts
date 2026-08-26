@@ -443,6 +443,23 @@ describe("Slack runtime integration", () => {
 				event_id: message.eventId,
 				type: "event_callback",
 			});
+			const logs = await runtime.control.logs(await instanceIdFrom(runtime), {
+				service: "slack",
+			});
+			expect(logs).toMatchObject({
+				entries: expect.arrayContaining([
+					expect.objectContaining({
+						attributes: {
+							eventId: message.eventId,
+							outcome: "succeeded",
+							statusCode: 204,
+						},
+						kind: "plugin",
+						message: "Slack event delivery completed.",
+						serviceKey: "slack",
+					}),
+				]),
+			});
 		} finally {
 			await instance.destroy();
 		}
@@ -462,12 +479,30 @@ describe("Slack runtime integration", () => {
 			const ada = await instance.slack.createUser({ name: "Ada" });
 			const channel = await instance.slack.createChannel({ name: "general" });
 			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
-			await instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "ping" });
+			const message = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: ada.id,
+				text: "ping",
+			});
 			await expect(instance.idle()).rejects.toThrow(/tracked task|failed/i);
 			const logs = await runtime.control.logs(await instanceIdFrom(runtime), {
 				service: "slack",
 			});
-			expect(JSON.stringify(logs)).toContain(status === undefined ? "failed" : "503");
+			expect(logs).toMatchObject({
+				entries: expect.arrayContaining([
+					expect.objectContaining({
+						attributes: {
+							...(status === undefined ? {} : { statusCode: status }),
+							error: status === undefined ? "timeout" : "non_success_status",
+							eventId: message.eventId,
+							outcome: "failed",
+						},
+						kind: "plugin",
+						message: "Slack event delivery completed.",
+						serviceKey: "slack",
+					}),
+				]),
+			});
 		} finally {
 			await instance.destroy();
 		}

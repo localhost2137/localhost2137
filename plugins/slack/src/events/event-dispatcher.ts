@@ -1,4 +1,4 @@
-import type { PluginClock, TaskTracker } from "localhost2137";
+import type { PluginClock, PluginLogger, TaskTracker } from "localhost2137";
 import type { SlackConfig } from "../config.js";
 import type { EventId, SlackMessage, SlackUser } from "../domain/models.js";
 import type { SlackDatabase } from "../persistence/database.js";
@@ -9,6 +9,7 @@ const DEFAULT_DELIVERY_TIMEOUT_MS = 3_000;
 
 interface EventRuntimeContext {
 	readonly clock: PluginClock;
+	readonly log: PluginLogger;
 	readonly signal: AbortSignal;
 	readonly tasks: TaskTracker;
 	fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
@@ -80,10 +81,12 @@ export class SlackEventDispatcher {
 				signal: AbortSignal.any([context.signal, timeout]),
 			});
 		} catch {
+			const error = timeout.aborted ? "timeout" : "transport_error";
 			this.#database.deliveries.completeFailure(input.eventId, {
-				error: timeout.aborted ? "timeout" : "transport_error",
+				error,
 				now: context.clock.now(),
 			});
+			logDeliveryOutcome(context.log, { error, eventId: input.eventId, outcome: "failed" });
 			// ctx.fetch owns transport failure reporting. The outer tracked task
 			// stays successful after the durable outcome is recorded.
 			return;
@@ -96,6 +99,12 @@ export class SlackEventDispatcher {
 				now: context.clock.now(),
 				statusCode: response.status,
 			});
+			logDeliveryOutcome(context.log, {
+				error: "response_body_error",
+				eventId: input.eventId,
+				outcome: "failed",
+				statusCode: response.status,
+			});
 			throw new Error("Slack event callback response body could not be discarded.", { cause });
 		}
 		if (!response.ok) {
@@ -104,11 +113,39 @@ export class SlackEventDispatcher {
 				now: context.clock.now(),
 				statusCode: response.status,
 			});
+			logDeliveryOutcome(context.log, {
+				error: "non_success_status",
+				eventId: input.eventId,
+				outcome: "failed",
+				statusCode: response.status,
+			});
 			throw new Error(`Slack event delivery returned HTTP ${response.status}.`);
 		}
 		this.#database.deliveries.completeSuccess(input.eventId, {
 			now: context.clock.now(),
 			statusCode: response.status,
 		});
+		logDeliveryOutcome(context.log, {
+			eventId: input.eventId,
+			outcome: "succeeded",
+			statusCode: response.status,
+		});
 	}
+}
+
+function logDeliveryOutcome(
+	logger: PluginLogger,
+	input: Readonly<{
+		error?: "non_success_status" | "response_body_error" | "timeout" | "transport_error";
+		eventId: EventId;
+		outcome: "failed" | "succeeded";
+		statusCode?: number;
+	}>,
+): void {
+	logger.info("Slack event delivery completed.", {
+		...(input.error ? { error: input.error } : {}),
+		eventId: input.eventId,
+		outcome: input.outcome,
+		...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
+	});
 }

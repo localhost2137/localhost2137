@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TaskTracker } from "localhost2137";
+import type { PluginLogger, TaskTracker } from "localhost2137";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SlackConfig } from "../src/config.js";
 import { SlackService } from "../src/domain/slack-service.js";
@@ -40,10 +40,12 @@ describe("Slack event response ownership", () => {
 					{ status: statusCode },
 				);
 				const tracked = trackedTasks();
+				const logs = capturedLogs();
 				fixture.dispatcher.schedule(
 					{
 						clock: { now: () => now },
 						fetch: async () => response,
+						log: logs.logger,
 						signal: new AbortController().signal,
 						tasks: tracked.tasks,
 					},
@@ -67,6 +69,7 @@ describe("Slack event response ownership", () => {
 					completedAt: null,
 					status: "pending",
 				});
+				expect(logs.entries).toEqual([]);
 
 				releaseCancellation.resolve();
 				if (statusCode === 200) {
@@ -79,6 +82,17 @@ describe("Slack event response ownership", () => {
 					status: expectedStatus,
 					statusCode,
 				});
+				expect(logs.entries).toEqual([
+					{
+						attributes: {
+							...(expectedError ? { error: expectedError } : {}),
+							eventId: fixture.event.eventId,
+							outcome: expectedStatus,
+							statusCode,
+						},
+						message: "Slack event delivery completed.",
+					},
+				]);
 			} finally {
 				fixture.database.close();
 			}
@@ -100,10 +114,12 @@ describe("Slack event response ownership", () => {
 				{ status: 200 },
 			);
 			const tracked = trackedTasks();
+			const logs = capturedLogs();
 			fixture.dispatcher.schedule(
 				{
 					clock: { now: () => now },
 					fetch: async () => response,
+					log: logs.logger,
 					signal: new AbortController().signal,
 					tasks: tracked.tasks,
 				},
@@ -116,13 +132,100 @@ describe("Slack event response ownership", () => {
 				status: "failed",
 				statusCode: 200,
 			});
+			expect(logs.entries).toEqual([
+				{
+					attributes: {
+						error: "response_body_error",
+						eventId: fixture.event.eventId,
+						outcome: "failed",
+						statusCode: 200,
+					},
+					message: "Slack event delivery completed.",
+				},
+			]);
+		} finally {
+			fixture.database.close();
+		}
+	});
+
+	it.each([
+		{ error: "transport_error", timeoutAborted: false },
+		{ error: "timeout", timeoutAborted: true },
+	] as const)("logs a persisted $error outcome", async ({ error, timeoutAborted }) => {
+		const timeout = new AbortController();
+		if (timeoutAborted) timeout.abort();
+		const fixture = await deliveryFixture({ timeoutSignal: () => timeout.signal });
+		try {
+			const tracked = trackedTasks();
+			const logs = capturedLogs();
+			fixture.dispatcher.schedule(
+				{
+					clock: { now: () => now },
+					fetch: async () => {
+						throw new TypeError("injected fetch failure");
+					},
+					log: logs.logger,
+					signal: new AbortController().signal,
+					tasks: tracked.tasks,
+				},
+				fixture.event,
+			);
+
+			await expect(tracked.only()).resolves.toBeUndefined();
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				error,
+				status: "failed",
+				statusCode: null,
+			});
+			expect(logs.entries).toEqual([
+				{
+					attributes: { error, eventId: fixture.event.eventId, outcome: "failed" },
+					message: "Slack event delivery completed.",
+				},
+			]);
+		} finally {
+			fixture.database.close();
+		}
+	});
+
+	it("does not log a terminal outcome when persistence fails", async () => {
+		const fixture = await deliveryFixture();
+		try {
+			fixture.database.raw().exec(`
+				CREATE TRIGGER reject_delivery_completion
+				BEFORE UPDATE OF status ON event_deliveries
+				BEGIN
+					SELECT RAISE(ABORT, 'injected delivery completion failure');
+				END;
+			`);
+			const tracked = trackedTasks();
+			const logs = capturedLogs();
+			fixture.dispatcher.schedule(
+				{
+					clock: { now: () => now },
+					fetch: async () => new Response(null, { status: 204 }),
+					log: logs.logger,
+					signal: new AbortController().signal,
+					tasks: tracked.tasks,
+				},
+				fixture.event,
+			);
+
+			await expect(tracked.only()).rejects.toThrow(/injected delivery completion failure/);
+			expect(logs.entries).toEqual([]);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				completedAt: null,
+				status: "pending",
+			});
 		} finally {
 			fixture.database.close();
 		}
 	});
 });
 
-async function deliveryFixture() {
+async function deliveryFixture(
+	dependencies: ConstructorParameters<typeof SlackEventDispatcher>[2] = {},
+) {
 	const root = await mkdtemp(join(tmpdir(), "localhost2137-slack-event-"));
 	roots.push(root);
 	const database = new SlackDatabase(join(root, "slack.sqlite"));
@@ -141,11 +244,28 @@ async function deliveryFixture() {
 	if (!created.deliveryEventId) throw new TypeError("Expected an event delivery fixture.");
 	return {
 		database,
-		dispatcher: new SlackEventDispatcher(database, config),
+		dispatcher: new SlackEventDispatcher(database, config, dependencies),
 		event: {
 			actor,
 			eventId: created.deliveryEventId,
 			message: created.message,
+		},
+	};
+}
+
+function capturedLogs(): Readonly<{
+	entries: Array<Readonly<{ attributes?: Readonly<Record<string, unknown>>; message: string }>>;
+	logger: PluginLogger;
+}> {
+	const entries: Array<
+		Readonly<{ attributes?: Readonly<Record<string, unknown>>; message: string }>
+	> = [];
+	return {
+		entries,
+		logger: {
+			info(message, attributes) {
+				entries.push({ ...(attributes ? { attributes } : {}), message });
+			},
 		},
 	};
 }

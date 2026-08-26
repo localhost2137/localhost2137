@@ -89,8 +89,10 @@ Each message event gets one stable `event_id`. Delivery uses the exact compact J
 `v0=HMAC_SHA256(signingSecret, "v0:{timestamp}:{body}")` and sends
 `X-Slack-Request-Timestamp` plus `X-Slack-Signature`. One three-second attempt runs through
 `ctx.fetch` and is tracked by the instance. Success, non-2xx, timeout, and transport outcomes are
-persisted in SQLite; runtime delivery logs expose safe transport summaries. `instance.idle()` waits
-for delivery work and surfaces failed attempts. There are no automatic retries in v0.1.
+persisted in SQLite. Generic outbound logs describe transport acceptance, while the Slack plugin
+emits a separate safe semantic outcome (`eventId`, `outcome`, optional `statusCode`, and classified
+`error`) only after the terminal delivery state is persisted. `instance.idle()` waits for delivery
+work and surfaces failed attempts. There are no automatic retries in v0.1.
 
 Use real clock mode with Bolt's default replay-window verification. Pinned-clock signature tests
 should verify the supplied virtual timestamp directly instead of comparing it with wall time.
