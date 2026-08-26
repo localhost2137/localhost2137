@@ -5,7 +5,7 @@ import {
 } from "../../src/config/environment-rendering.js";
 
 describe("environment rendering", () => {
-	it("renders stable JSON and shell-safe dotenv values", () => {
+	it("renders stable JSON and dotenv-safe values", () => {
 		const environment = {
 			Z_EMPTY: "",
 			A_COMPLEX: 'line one\nquoted="yes" # $literal',

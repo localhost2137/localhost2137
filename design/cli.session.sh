@@ -126,7 +126,8 @@ seeded slack, stripe, then scenario
 $ localhost instance reset dev           # wipe → create/update → start (empty)
 $ localhost instance reset dev --seed    # then run plugin + scenario seeding
 
-# ── 8. Machine-readable env export (for sourcing in scripts/CI) ─────────────
+# ── 8. Dotenv-file export (for dotenv loaders in scripts/CI) ────────────────
+# JSON-string quoting is the dotenv contract; this is not POSIX shell source.
 $ localhost env --format dotenv >> .env.local
 
 # …or skip the file entirely: run your app with connection env injected
