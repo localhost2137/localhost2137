@@ -19,7 +19,7 @@ interface DynamicOperationInvocation {
 }
 
 export interface DynamicExecResult {
-	readonly exitCode: 0 | 2;
+	readonly exitCode: 0 | 2 | 4;
 	readonly invocation?: DynamicOperationInvocation;
 }
 
@@ -40,8 +40,7 @@ export async function parseDynamicExecCommand(
 	})
 		.name(`localhost exec ${service.name}`)
 		.description(service.description)
-		.showHelpAfterError()
-		.action(() => program.outputHelp());
+		.showHelpAfterError();
 
 	for (const [operationKey, metadata] of Object.entries(service.operationMetadata)) {
 		const operation = program.command(toCliName(operationKey)).description(metadata.description);
@@ -60,16 +59,25 @@ export async function parseDynamicExecCommand(
 	}
 
 	program.addHelpText("after", serviceOperationSummary(service.operationMetadata));
+	if (arguments_.length === 0) {
+		program.outputHelp();
+		return Object.freeze({ exitCode: 0 });
+	}
 	try {
 		await program.parseAsync([...arguments_], { from: "user" });
 		return Object.freeze({ exitCode: 0, ...(invocation ? { invocation } : {}) });
 	} catch (cause) {
 		if (cause instanceof CommanderError) {
 			if (cause.exitCode !== 0 && !wroteError) input.io.writeError(`error: ${cause.message}\n`);
-			return Object.freeze({ exitCode: cause.exitCode === 0 ? 0 : 2 });
+			return Object.freeze({ exitCode: dynamicCommanderExitCode(cause) });
 		}
 		throw cause;
 	}
+}
+
+function dynamicCommanderExitCode(error: CommanderError): 0 | 2 | 4 {
+	if (error.exitCode === 0) return 0;
+	return error.code === "commander.unknownCommand" ? 4 : 2;
 }
 
 interface CompiledInput {

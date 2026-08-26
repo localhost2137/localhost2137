@@ -129,6 +129,31 @@ describe("dynamic exec command", () => {
 		}
 	});
 
+	it("classifies only an unknown operation subcommand as not found", async () => {
+		const service = serviceDescription({
+			inspect: operationMetadata(z.object({ message: z.string() })),
+		});
+		const unknownOperation = io();
+		const unknownResult = await parseDynamicExecCommand(service, ["missing-operation"], {
+			defaultInstance: "dev",
+			io: unknownOperation,
+		});
+
+		expect(unknownResult).toEqual({ exitCode: 4 });
+		expect(unknownOperation.error).toContain("unknown command 'missing-operation'");
+		expect(unknownOperation.output).toBe("");
+
+		for (const arguments_ of [["inspect"], ["inspect", "--message", "ok", "--unknown-flag"]]) {
+			const malformed = io();
+			const result = await parseDynamicExecCommand(service, arguments_, {
+				defaultInstance: "dev",
+				io: malformed,
+			});
+			expect(result.exitCode).toBe(2);
+			expect(malformed.error).not.toBe("");
+		}
+	});
+
 	it("strictly owns control-provided service metadata", () => {
 		const metadata = operationMetadata(z.object({}));
 		const raw = {

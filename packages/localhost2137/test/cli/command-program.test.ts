@@ -156,6 +156,32 @@ describe("CLI command program", () => {
 		}
 	});
 
+	it("returns not-found only for an unknown operation on a described service", async () => {
+		const missing = cliFixture();
+		const missingExit = await runCliCommand({
+			actions: missing.actions,
+			arguments: ["exec", "fixture", "missing-operation"],
+			defaultInstance: "dev",
+			io: missing.io,
+		});
+
+		expect(missingExit).toBe(4);
+		expect(missing.actions.describeService).toHaveBeenCalledWith("dev", "fixture");
+		expect(missing.actions.execute).not.toHaveBeenCalled();
+		expect(missing.stdout).toBe("");
+
+		const malformed = cliFixture();
+		const malformedExit = await runCliCommand({
+			actions: malformed.actions,
+			arguments: ["exec", "fixture", "inspect", "--unknown-flag"],
+			defaultInstance: "dev",
+			io: malformed.io,
+		});
+
+		expect(malformedExit).toBe(2);
+		expect(malformed.actions.execute).not.toHaveBeenCalled();
+	});
+
 	it("keeps destructive targets explicit and excludes deferred commands", async () => {
 		for (const arguments_ of [
 			["instance", "destroy"],

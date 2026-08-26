@@ -75,6 +75,21 @@ describe("localhost process transcript", () => {
 		expect(
 			runJson(["exec", "fixture", "echo", "--message", "ping", "--count", "2", "--json"]),
 		).toEqual({ message: "pingping" });
+		const unknownOperation = run(["exec", "fixture", "missing-operation"]);
+		expect(unknownOperation.status).toBe(4);
+		expect(unknownOperation.stdout).toBe("");
+		expect(unknownOperation.stderr).toContain("unknown command 'missing-operation'");
+		const malformedOperation = run([
+			"exec",
+			"fixture",
+			"echo",
+			"--message",
+			"ok",
+			"--unknown-flag",
+		]);
+		expect(malformedOperation.status).toBe(2);
+		expect(malformedOperation.stdout).toBe("");
+		expect(malformedOperation.stderr).toContain("unknown option '--unknown-flag'");
 
 		expect(run(["instance", "create", "review"]).stdout).toBe("created review\n");
 		expect(runJson(["instance", "list", "--json"])).toEqual([
