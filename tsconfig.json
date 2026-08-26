@@ -3,6 +3,7 @@
 	"references": [
 		{ "path": "packages/localhost2137" },
 		{ "path": "packages/plugin-testkit" },
-		{ "path": "plugins/slack" }
+		{ "path": "plugins/slack" },
+		{ "path": "plugins/stripe" }
 	]
 }
