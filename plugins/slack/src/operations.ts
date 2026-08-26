@@ -1,6 +1,6 @@
 import {
-	LocalhostError,
 	defineOperation,
+	LocalhostError,
 	type OperationDefinition,
 	type RunningPluginContext,
 } from "localhost2137";
@@ -62,9 +62,8 @@ const sendMessageInput: z.ZodObject<{
 	threadTs: z.string().optional(),
 });
 
-const messageOutput: z.ZodObject<{
+const listedMessageOutput: z.ZodObject<{
 	channel: z.ZodString;
-	eventId: z.ZodNullable<z.ZodString>;
 	id: z.ZodString;
 	text: z.ZodString;
 	threadTs: z.ZodNullable<z.ZodString>;
@@ -72,13 +71,22 @@ const messageOutput: z.ZodObject<{
 	userId: z.ZodString;
 }> = z.object({
 	channel: z.string(),
-	eventId: z.string().nullable(),
 	id: z.string(),
 	text: z.string(),
 	threadTs: z.string().nullable(),
 	ts: z.string(),
 	userId: z.string(),
 });
+
+const sentMessageOutput: z.ZodObject<{
+	channel: z.ZodString;
+	eventId: z.ZodNullable<z.ZodString>;
+	id: z.ZodString;
+	text: z.ZodString;
+	threadTs: z.ZodNullable<z.ZodString>;
+	ts: z.ZodString;
+	userId: z.ZodString;
+}> = listedMessageOutput.extend({ eventId: z.string().nullable() });
 
 const listMessagesInput: z.ZodObject<{
 	channel: z.ZodString;
@@ -88,7 +96,7 @@ const listMessagesInput: z.ZodObject<{
 	limit: z.number().int().min(1).max(999).default(100),
 });
 
-const messageListOutput: z.ZodArray<typeof messageOutput> = z.array(messageOutput);
+const messageListOutput: z.ZodArray<typeof listedMessageOutput> = z.array(listedMessageOutput);
 
 type SlackBoundOperation<Input extends z.ZodObject, Output extends z.ZodType> = OperationDefinition<
 	"slack",
@@ -103,7 +111,7 @@ interface SlackOperations {
 	readonly createChannel: SlackBoundOperation<typeof createChannelInput, typeof channelOutput>;
 	readonly createUser: SlackBoundOperation<typeof createUserInput, typeof userOutput>;
 	readonly listMessages: SlackBoundOperation<typeof listMessagesInput, typeof messageListOutput>;
-	readonly sendMessage: SlackBoundOperation<typeof sendMessageInput, typeof messageOutput>;
+	readonly sendMessage: SlackBoundOperation<typeof sendMessageInput, typeof sentMessageOutput>;
 }
 
 export function createSlackOperations(
@@ -151,7 +159,7 @@ export function createSlackOperations(
 	const sendMessage = bindOperation({
 		description: "Send a user message and emit one local Slack Events API callback",
 		input: sendMessageInput,
-		output: messageOutput,
+		output: sentMessageOutput,
 		run: (context, input) =>
 			runSlackOperation(dependencies, "sendMessage", context, () => {
 				const actor = context.state.service.requireUser(input.from);
@@ -170,7 +178,7 @@ export function createSlackOperations(
 						message: created.message,
 					});
 				}
-				return operationMessage(created.message, created.deliveryEventId);
+				return sentOperationMessage(created.message, created.deliveryEventId);
 			}),
 	});
 
@@ -182,7 +190,7 @@ export function createSlackOperations(
 			runSlackOperation(dependencies, "listMessages", context, () =>
 				context.state.service
 					.listMessages(input.channel, { limit: input.limit })
-					.map((message) => operationMessage(message, null)),
+					.map(listedOperationMessage),
 			),
 	});
 
@@ -195,7 +203,7 @@ export function createSlackOperations(
 	});
 }
 
-function operationMessage(
+function listedOperationMessage(
 	message: Readonly<{
 		channelId: string;
 		id: string;
@@ -204,17 +212,22 @@ function operationMessage(
 		ts: string;
 		userId: string;
 	}>,
-	eventId: string | null,
 ) {
 	return {
 		channel: message.channelId,
-		eventId,
 		id: message.id,
 		text: message.text,
 		threadTs: message.threadTs,
 		ts: message.ts,
 		userId: message.userId,
 	};
+}
+
+function sentOperationMessage(
+	message: Parameters<typeof listedOperationMessage>[0],
+	eventId: string | null,
+) {
+	return { ...listedOperationMessage(message), eventId };
 }
 
 function runSlackOperation<Value>(

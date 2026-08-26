@@ -1,9 +1,9 @@
-import { defineConfig } from "localhost2137";
 import type {
 	ContractHarnessConfigOptions,
 	ContractHarnessResources,
 	PluginContractFixture,
 } from "@localhost2137/plugin-testkit";
+import { defineConfig } from "localhost2137";
 import { createSlackPlugin } from "../../src/plugin.js";
 
 const PINNED_TIME = "2026-01-02T03:04:05.000Z";
@@ -33,7 +33,7 @@ export const slackContractFixture = Object.freeze({
 		]),
 		configModule: new URL("./slack-durability.config.ts", import.meta.url),
 		expectedInitial: Object.freeze([]),
-		expectedPersisted: Object.freeze([message(null)]),
+		expectedPersisted: Object.freeze([listedMessage()]),
 		expectedWrite: message("Ev000001"),
 		read: Object.freeze({
 			input: Object.freeze({ channel: "general" }),
@@ -147,7 +147,7 @@ export const slackContractFixture = Object.freeze({
 		}),
 		Object.freeze({
 			cli: "flags" as const,
-			expected: [message(null, "contract operation")],
+			expected: [listedMessage("contract operation")],
 			input: Object.freeze({ channel: "general" }),
 			key: "listMessages" as const,
 		}),
@@ -258,9 +258,12 @@ function config(eventsUrl: string) {
 }
 
 function message(eventId: string | null, text = "durable") {
+	return Object.freeze({ ...listedMessage(text), eventId });
+}
+
+function listedMessage(text = "durable") {
 	return Object.freeze({
 		channel: "C000001",
-		eventId,
 		id: "M000001",
 		text,
 		threadTs: null,

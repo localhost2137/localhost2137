@@ -76,8 +76,8 @@ Deliberate v0.1 differences:
 | `createUser` | create a user with an optional admin flag |
 | `createChannel` | create a public channel; the installed bot joins automatically |
 | `addUserToChannel` | add a user by ID or exact name, idempotently |
-| `sendMessage` | simulate a member message and enqueue one Events API callback |
-| `listMessages` | inspect newest-first channel messages |
+| `sendMessage` | simulate a member message; its result includes the enqueued callback `eventId`, or `null` when Events are disabled |
+| `listMessages` | inspect newest-first channel messages; list items omit delivery-only `eventId` |
 
 Public Web API routes and control operations call the same `SlackService`; neither adapter calls the
 other. Expected operation failures use structured localhost2137 errors, while public routes map the

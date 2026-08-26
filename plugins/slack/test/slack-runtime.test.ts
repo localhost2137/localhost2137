@@ -126,6 +126,7 @@ describe("Slack runtime integration", () => {
 			const messages = await instance.slack.listMessages({ channel: "general" });
 			expect(messages).toHaveLength(1);
 			expect(messages[0]).toMatchObject({ text: "pong", userId: "U000000" });
+			expect(messages[0]).not.toHaveProperty("eventId");
 		} finally {
 			await instance.destroy();
 		}

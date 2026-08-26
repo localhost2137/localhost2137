@@ -23,7 +23,8 @@ the packed-package workflow and captured commands and observed output in
 
    The declared production inventory is `createUser`, `createChannel`, `addUserToChannel`,
    `sendMessage`, and `listMessages`; descriptions and JSON Schemas come from those same operation
-   descriptors.
+   descriptors. `sendMessage` reports its callback `eventId`; persisted `listMessages` items omit
+   that delivery-only field.
 5. Build a normal Bolt app with connection metadata:
 
    ```ts

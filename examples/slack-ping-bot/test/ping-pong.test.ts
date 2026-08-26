@@ -1,8 +1,8 @@
 import { createServer } from "node:net";
+import { slack } from "@localhost2137/slack";
 import { defineConfig } from "localhost2137";
 import { createTestRuntime } from "localhost2137/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { slack } from "@localhost2137/slack";
 import { buildPingPongBot, type PingPongBot } from "../src/bot.js";
 
 const runtimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
@@ -50,6 +50,7 @@ describe("official Slack Bolt ping-pong bot", () => {
 			const messages = await instance.slack.listMessages({ channel: channel.id });
 			expect(messages.map(({ text }) => text)).toEqual(["pong", "ping"]);
 			expect(messages[0]).toMatchObject({ userId: "U000000" });
+			expect(messages[0]).not.toHaveProperty("eventId");
 		} finally {
 			await instance.destroy();
 		}
