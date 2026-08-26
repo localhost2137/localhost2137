@@ -86,8 +86,8 @@ export default defineConfig([
 							regex: "(^|/)localhost2137/src(/|$)",
 						},
 						{
-							message: "The test kit may import only localhost2137 or localhost2137/testing.",
-							regex: "^localhost2137/(?!testing$).*$",
+							message: "The test kit may import only localhost2137, /testing, or /client.",
+							regex: "^localhost2137/(?!(testing|client)$).*$",
 						},
 					],
 				},

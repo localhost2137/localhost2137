@@ -23,6 +23,7 @@ describe("plugin test-kit import boundary", () => {
 	it.each([
 		'import type { RuntimeConfig } from "localhost2137";',
 		'import type { TestRuntime } from "localhost2137/testing";',
+		'import type { RuntimeClient } from "localhost2137/client";',
 	])("allows public package import %s", async (source) => {
 		expect(await restrictedImportMessages(source)).toEqual([]);
 	});

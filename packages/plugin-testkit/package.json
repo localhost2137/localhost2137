@@ -17,6 +17,15 @@
 	],
 	"scripts": {
 		"build": "tsc -b",
-		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+		"typecheck:fixtures": "tsc -p tsconfig.type-fixtures.json --pretty false"
+	},
+	"peerDependencies": {
+		"localhost2137": "0.0.0"
+	},
+	"devDependencies": {
+		"hono": "4.13.4",
+		"localhost2137": "workspace:*",
+		"zod": "4.4.3"
 	}
 }
