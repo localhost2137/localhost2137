@@ -1,0 +1,147 @@
+---
+title: Provider compatibility
+description: Read compatibility as a bounded, versioned set of executable claims rather than a promise that a plugin reproduces an entire provider.
+---
+
+A plugin is not “compatible with a provider” in the abstract. It is compatible with particular
+requests, responses, state transitions, events, and client versions under stated conditions.
+
+That narrower wording is not legal caution. It is what makes the claim useful. An application needs
+to know whether its own integration path is covered, not what percentage of a provider's product
+catalog has been copied.
+
+## Compatibility has several layers
+
+An endpoint name is only the beginning of a compatibility claim:
+
+| Layer | Questions the claim must answer |
+| --- | --- |
+| Routing | Which methods and paths exist? Which query shapes select them? |
+| Transport | Which authentication, headers, encodings, status codes, and error envelopes are accepted or returned? |
+| Data | Which fields, defaults, identities, pagination rules, and validation constraints are represented? |
+| State | Which sequences and invariants connect one request to later requests? Which changes are atomic? |
+| Time and delivery | Which timestamps, scheduled transitions, callbacks, signatures, retries, ordering, and duplicate rules are modeled? |
+| Client | Which SDK, adapter, or raw HTTP versions and configurations have actually exercised the surface? |
+
+A route can return the right happy-path JSON while accepting an encoding the provider would reject.
+An SDK call can succeed while pagination, errors, or a later webhook remain wrong. A callback can
+contain familiar fields while using the wrong signature or redelivery rule. Each is partial evidence,
+not a percentage score that can be averaged into “mostly compatible.”
+
+The relevant layers depend on the application. A read-only reporting job may care about list
+pagination but never callbacks. A webhook consumer may care about byte-level signatures and stable
+event identity without using the provider's SDK at all.
+
+## SDK success proves one path
+
+An official SDK is valuable executable evidence because it emits the client's real serialization
+and authentication fields and applies its response parsing and other client assumptions. It does
+not enlarge the plugin's surface. A passing call supports only the request, outcome, and client
+version the scenario actually asserts; authentication rejection and other negative behavior need
+their own cases.
+
+An adapter does not change that boundary. The first-party Stripe adapter rewrites the SDK's fixed
+origin to an instance-scoped local URL while preserving its request path and query. It does not add
+missing resources, emulate SDK retries, or make untested SDK versions compatible.
+
+The same distinction applies when an SDK initializes successfully. Initialization may call one
+identity endpoint and establish that its response is sufficient. It does not prove that every later
+method used by the client has been implemented.
+
+Treat the resolved SDK version as part of the evidence. A passing example against one locked version
+does not silently establish a range of older and newer versions. A plugin may support a wider range,
+but that range needs its own statement and tests.
+
+## Stateful compatibility is about sequences
+
+Stateful emulation earns its cost when later behavior depends on earlier actions. That also means a
+support matrix made only of endpoint names is incomplete.
+
+For example, creating a subscription is not just one accepted request. The useful claim may include
+retrieving it, canceling it, advancing time, producing an invoice exactly once for a committed time
+window, and exposing the result through the same API. A chat message may need to appear in history,
+obey membership rules, emit a signed event, survive restart, and preserve ordering.
+
+Not every plugin must implement every sequence. It must identify the sequences it does implement and
+test the invariants that connect them. A broad list of routes with unrelated fixtures may be less
+useful than a small coherent slice supporting one real application workflow.
+
+[Operations and emulated APIs](/operations-and-apis) explains how provider routes and privileged
+operations can share domain behavior without pretending that an operation proves HTTP compatibility.
+
+## Unsupported behavior should be visible
+
+An unsupported request should not return a plausible success merely to keep an application moving.
+That turns a known gap into a passing test and makes the compatibility boundary harder to inspect.
+
+Useful plugin documentation distinguishes:
+
+- supported behavior with executable evidence;
+- deliberate local differences whose consequences are understood;
+- unsupported behavior that fails visibly;
+- behavior that has not been verified.
+
+Those categories are not interchangeable. “Unsupported” says the plugin deliberately rejects or
+omits the behavior. “Unverified” says no reliable claim has been established yet. A deliberate
+difference can be acceptable for a local test only when it does not bypass the defect that test is
+supposed to expose.
+
+Public routes should fail in the provider's shape where that failure is part of the supported
+surface. Control operations use localhost2137's structured error model because they are a separate
+privileged interface. A test-only operation or response field must not patch over a missing
+application-facing contract.
+
+## Evidence has different jobs
+
+No single test suite establishes every compatibility layer:
+
+| Evidence | What it can establish |
+| --- | --- |
+| Runtime plugin contract | Import behavior, lifecycle, isolation, persistence, reset, seed, public mounting, operation adapters, and version migration mechanics. |
+| Protocol fixtures | Exact request encodings and normalized responses for selected provider cases. |
+| SDK or application examples | One real client path across the documented local surface. |
+| Plugin semantic tests | Domain transactions, state sequences, signatures, retries, recovery, ordering, and meaningful negative cases. |
+| Provider-facing checks | Provider-owned account configuration and selected external contracts that a local implementation cannot prove. |
+
+The generic `@localhost2137/plugin-testkit` contract proves runtime integration. It does not know
+provider rules and cannot certify provider fidelity. Conversely, a protocol fixture says little
+about lifecycle cleanup or recovery unless a separate test exercises those properties.
+
+Evidence should fail when the production plugin drifts. Harnesses that replace the production
+factory, add test-only operations, or normalize away meaningful differences can make a large suite
+say very little.
+
+## Compatibility is versioned
+
+At least four moving parts affect a result: the plugin package, localhost2137 runtime, application
+client or SDK, and external provider contract. Pinning packages removes one source of variation from
+a local failure; it does not prevent the provider or SDK from evolving.
+
+Read a compatibility statement together with the installed versions that produced its evidence.
+After an upgrade, rerun the application path that matters instead of assuming a semver range proves
+behavior. Keep a provider-facing check where external drift would create material risk.
+
+The runtime version governs plugin integration and lifecycle contracts. It cannot make a plugin's
+provider behavior current. Updating the runtime alone is not evidence that an emulator now matches a
+new provider field, event, or error rule.
+
+## Make the application claim concrete
+
+Before depending on a plugin, write the claim as a sequence a test could falsify:
+
+```text
+given this starting world
+when the application sends or receives these provider-shaped requests
+then these application and service effects occur
+under these installed versions and documented limits
+```
+
+Map each step to the plugin's support notes and executable examples. Include the errors, callbacks,
+time transitions, or retries that change the application's behavior, not every provider feature that
+exists. If one required step is unsupported or unverified, the local scenario cannot establish the
+whole claim.
+
+[Using plugins](/plugins/using) gives the installation-time checklist. The
+[Slack](/first-party/slack) and [Stripe](/first-party/stripe) references show concrete support
+matrices and deliberate differences. [Choose the right test boundary](/test-boundaries) explains
+what evidence to retain outside the emulator.

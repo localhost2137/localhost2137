@@ -53,6 +53,8 @@ do not rename variables after generation and imply that automatic multi-mount wi
 A useful plugin states the endpoints and behaviors it supports, the SDK or request encodings it has
 actually exercised, and material differences from the external service. “Compatible” without a
 surface and executable test does not tell you whether an integration will work.
+[Provider compatibility](/compatibility) separates routing, transport, data, state, delivery, client,
+and version claims so this checklist can be applied to one application path.
 
 When behavior is missing, report the precise gap. Do not add test-only responses around the plugin
 that make the application pass without exercising the intended service behavior.
