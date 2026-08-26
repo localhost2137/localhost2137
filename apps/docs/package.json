@@ -26,6 +26,7 @@
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "1.53.1",
 		"@react-router/dev": "8.3.0",
+		"@react-router/node": "8.3.0",
 		"@tailwindcss/vite": "4.3.3",
 		"@types/mdx": "2.0.14",
 		"@types/node": "24.13.3",
