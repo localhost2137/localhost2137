@@ -14,7 +14,7 @@ import { assertSelectedServiceIdentity } from "./service-identity.js";
 const INSTANCE_ID = "dev";
 const DAEMON_DEADLINE_MS = 10_000;
 
-export const contractProcessEnvironment: Readonly<{
+const contractProcessEnvironment: Readonly<{
 	events: string;
 	failUpdate: string;
 	storage: string;

@@ -28,7 +28,7 @@ export function lifecycleRecorder(): Readonly<{
 	});
 }
 
-export const quietInstrumentation: ContractInstrumentation = Object.freeze({
+const quietInstrumentation: ContractInstrumentation = Object.freeze({
 	record: (_event: ContractLifecycleEvent) => undefined,
 });
 
