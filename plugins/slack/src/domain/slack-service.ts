@@ -141,8 +141,7 @@ export class SlackService {
 		if (!this.#database.channels.hasMember(channel.id, user.id)) {
 			throw new SlackError("not_in_channel", `Slack user ${user.id} is not in ${channel.id}.`);
 		}
-		const text = input.text.trim();
-		if (text.length === 0)
+		if (input.text.trim().length === 0)
 			throw new SlackError("invalid_arguments", "Slack message text is empty.");
 		if (input.threadTs) {
 			const parent = this.#database.messages.findByTimestamp(input.threadTs);
@@ -157,7 +156,7 @@ export class SlackService {
 			const message = this.#database.messages.create({
 				channelId: channel.id,
 				now: input.now,
-				text,
+				text: input.text,
 				...(input.threadTs ? { threadTs: input.threadTs } : {}),
 				userId: user.id,
 			});

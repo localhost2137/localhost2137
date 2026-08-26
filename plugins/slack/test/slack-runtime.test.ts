@@ -132,6 +132,41 @@ describe("Slack runtime integration", () => {
 		}
 	});
 
+	it("preserves surrounding message whitespace across control, form, and JSON paths", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const channel = await instance.slack.createChannel({ name: "general" });
+			const controlled = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: "U000000",
+				text: "  control text  ",
+			});
+			expect(controlled.text).toBe("  control text  ");
+
+			const form = await slackRequest(instance.slack.connection.apiUrl, "chat.postMessage", {
+				channel: channel.id,
+				text: "  form text  ",
+				token: instance.slack.connection.botToken,
+			});
+			expect(await form.json()).toMatchObject({ message: { text: "  form text  " }, ok: true });
+
+			const json = await slackJson(
+				instance.slack.connection.apiUrl,
+				"chat.postMessage",
+				{ channel: channel.id, text: "  JSON text  " },
+				instance.slack.connection.botToken,
+			);
+			expect(await json.json()).toMatchObject({ message: { text: "  JSON text  " }, ok: true });
+
+			expect(
+				(await instance.slack.listMessages({ channel: channel.id })).map(({ text }) => text),
+			).toEqual(["  JSON text  ", "  form text  ", "  control text  "]);
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("accepts form-token authentication and rejects malformed request transports", async () => {
 		const runtime = await startRuntime(slack, null);
 		const instance = await runtime.createInstance();
@@ -471,7 +506,7 @@ describe("Slack runtime integration", () => {
 			const message = await instance.slack.sendMessage({
 				channel: channel.id,
 				from: ada.id,
-				text: "ping",
+				text: "  signed ping  ",
 			});
 			await instance.idle();
 			const delivery = await received.promise;
@@ -486,7 +521,7 @@ describe("Slack runtime integration", () => {
 				}),
 			).toBe(true);
 			expect(JSON.parse(delivery.body)).toMatchObject({
-				event: { channel: channel.id, text: "ping", ts: message.ts, user: ada.id },
+				event: { channel: channel.id, text: "  signed ping  ", ts: message.ts, user: ada.id },
 				event_id: message.eventId,
 				type: "event_callback",
 			});
