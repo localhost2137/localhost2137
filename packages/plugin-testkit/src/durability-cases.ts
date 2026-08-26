@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, parse } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ServiceRecord } from "localhost2137";
 import { connectRuntime, type RuntimeClient } from "localhost2137/client";
@@ -139,7 +139,6 @@ interface RunningDaemon {
 
 interface SpawnedDaemon {
 	readonly closed: Promise<number | null>;
-	ownDaemon(pid: number): void;
 	readonly process: ChildProcess;
 	stop(): Promise<number | null>;
 }
@@ -169,6 +168,7 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 	await writeFile(eventsPath, "", "utf8");
 	const activeStops = new Set<() => Promise<number | null>>();
 	const daemonCwd = await nearestPackageRoot(fileURLToPath(fixture.durability.configModule));
+	const daemonBin = await resolveHostBin();
 	const spawnOwned = async (version: number, failUpdate: boolean): Promise<SpawnedDaemon> => {
 		await Promise.all([
 			rm(join(root, "control-token"), { force: true }),
@@ -177,13 +177,10 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 		const port = await availablePort();
 		const inheritedEnvironment = { ...process.env };
 		delete inheritedEnvironment.LOCALHOST_CONTROL_TOKEN;
-		const packageManager = pnpmCommand();
 		const child = spawn(
-			packageManager.command,
+			process.execPath,
 			[
-				...packageManager.prefix,
-				"exec",
-				"localhost",
+				daemonBin,
 				"--config",
 				fileURLToPath(fixture.durability.configModule),
 				"dev",
@@ -192,7 +189,6 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 			],
 			{
 				cwd: daemonCwd,
-				detached: process.platform !== "win32",
 				env: {
 					...inheritedEnvironment,
 					[contractProcessEnvironment.deliveryUrl]: resources.harness.deliveryUrl,
@@ -205,11 +201,10 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 			},
 		);
 		const closed = processExit(child);
-		let daemonPid: number | undefined;
 		let stopPromise: Promise<number | null> | undefined;
 		const stop = (): Promise<number | null> => {
 			if (!stopPromise) {
-				stopPromise = stopProcessTree(child, closed, daemonPid);
+				stopPromise = stopOwnedProcess(child, closed);
 				void stopPromise.then(
 					() => activeStops.delete(stop),
 					() => activeStops.delete(stop),
@@ -220,12 +215,6 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 		activeStops.add(stop);
 		return Object.freeze({
 			closed,
-			ownDaemon: (pid: number) => {
-				if (daemonPid !== undefined && daemonPid !== pid) {
-					throw new Error("Durability daemon ownership changed after readiness.");
-				}
-				daemonPid = pid;
-			},
 			process: child,
 			stop,
 		});
@@ -245,7 +234,11 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 			const daemon = await spawnOwned(version, failUpdate);
 			try {
 				const descriptor = await waitForDescriptor(root, daemon);
-				daemon.ownDaemon(descriptor.pid);
+				assertContract(
+					descriptor.pid === daemon.process.pid,
+					caseName,
+					"runtime descriptor pid differs from the owned daemon process",
+				);
 				const token = (await readFile(join(root, "control-token"), "utf8")).trim();
 				const client = connectRuntime({ token, url: descriptor.url });
 				await assertSelectedServiceIdentity(client, INSTANCE_ID, fixture, caseName, version);
@@ -353,29 +346,17 @@ function processExit(process: ChildProcess): Promise<number | null> {
 	});
 }
 
-async function stopProcessTree(
+async function stopOwnedProcess(
 	child: ChildProcess,
 	closed: Promise<number | null>,
-	daemonPid: number | undefined,
 ): Promise<number | null> {
-	const processGroup = process.platform !== "win32" && child.pid ? -child.pid : undefined;
-	if (daemonPid !== undefined) signalOwnedProcess(daemonPid, "SIGINT");
-	if (processGroup !== undefined) signalOwnedProcess(processGroup, "SIGINT");
-	else if (daemonPid === undefined && child.exitCode === null && child.signalCode === null) {
-		child.kill("SIGINT");
-	}
+	if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
 	try {
-		const exitCode = await withinCleanupDeadline(closed);
-		if (daemonPid !== undefined) await ensureOwnedProcessExited(daemonPid);
-		return exitCode;
+		return await withinCleanupDeadline(closed);
 	} catch (cause) {
 		if (!(cause instanceof ProcessCleanupTimeoutError)) throw cause;
-		if (daemonPid !== undefined) signalOwnedProcess(daemonPid, "SIGKILL");
-		if (processGroup !== undefined) signalOwnedProcess(processGroup, "SIGKILL");
-		else if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-		const exitCode = await withinCleanupDeadline(closed);
-		if (daemonPid !== undefined) await ensureOwnedProcessExited(daemonPid);
-		return exitCode;
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		return withinCleanupDeadline(closed);
 	}
 }
 
@@ -398,49 +379,35 @@ async function withinCleanupDeadline<Value>(promise: Promise<Value>): Promise<Va
 	}
 }
 
-async function ensureOwnedProcessExited(pid: number): Promise<void> {
-	const deadline = Date.now() + 2_000;
-	while (ownedProcessExists(pid) && Date.now() < deadline) await tick();
-	if (!ownedProcessExists(pid)) return;
-	signalOwnedProcess(pid, "SIGKILL");
-	const killDeadline = Date.now() + 2_000;
-	while (ownedProcessExists(pid) && Date.now() < killDeadline) await tick();
-	if (ownedProcessExists(pid)) {
-		throw new ProcessCleanupTimeoutError();
+async function resolveHostBin(): Promise<string> {
+	const manifestPath = fileURLToPath(import.meta.resolve("localhost2137/package.json"));
+	const packageRoot = dirname(manifestPath);
+	const manifest: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
+	if (typeof manifest !== "object" || manifest === null) {
+		throw new TypeError("localhost2137 package manifest must be an object.");
 	}
+	const bin = Reflect.get(manifest, "bin");
+	const target =
+		typeof bin === "object" && bin !== null ? Reflect.get(bin, "localhost") : undefined;
+	if (typeof target !== "string" || isAbsolute(target)) {
+		throw new TypeError("localhost2137 package manifest must declare a relative bin.localhost.");
+	}
+	const candidate = resolve(packageRoot, target);
+	if (!isWithin(packageRoot, candidate)) {
+		throw new TypeError("localhost2137 bin.localhost resolves outside its package root.");
+	}
+	const [realRoot, realBin] = await Promise.all([realpath(packageRoot), realpath(candidate)]);
+	if (!isWithin(realRoot, realBin)) {
+		throw new TypeError(
+			"localhost2137 bin.localhost resolves through a path outside its package root.",
+		);
+	}
+	return realBin;
 }
 
-function ownedProcessExists(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (cause) {
-		if (hasCode(cause, "ESRCH")) return false;
-		throw cause;
-	}
-}
-
-function signalOwnedProcess(pid: number, signal: NodeJS.Signals): void {
-	try {
-		process.kill(pid, signal);
-	} catch (cause) {
-		if (!hasCode(cause, "ESRCH")) throw cause;
-	}
-}
-
-function pnpmCommand(): Readonly<{ command: string; prefix: readonly string[] }> {
-	const npmExecPath = process.env.npm_execpath;
-	if (
-		npmExecPath &&
-		isAbsolute(npmExecPath) &&
-		/^pnpm(?:\.c?js|\.mjs)?$/i.test(basename(npmExecPath))
-	) {
-		return Object.freeze({ command: process.execPath, prefix: Object.freeze([npmExecPath]) });
-	}
-	return Object.freeze({
-		command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
-		prefix: Object.freeze([]),
-	});
+function isWithin(root: string, candidate: string): boolean {
+	const path = relative(root, candidate);
+	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
 async function nearestPackageRoot(fromFile: string): Promise<string> {

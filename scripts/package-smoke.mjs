@@ -149,8 +149,10 @@ async function main() {
 			throw new Error("Package smoke requires the localhost2137 host package");
 		}
 		const runtimeAuthoringSmoke = `
+import { spawnSync } from "node:child_process";
+import { readFileSync, realpathSync } from "node:fs";
 import { Hono } from "hono";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { defineOperation, definePlugin } from "localhost2137";
 import { connectRuntime } from "localhost2137/client";
@@ -163,6 +165,41 @@ if (typeof connectRuntime !== "function" || typeof createTestRuntime !== "functi
 }
 if (typeof createPluginContractCases !== "function") {
 	throw new Error("Packed plugin testkit entry point is incomplete");
+}
+
+const hostManifestPath = fileURLToPath(import.meta.resolve("localhost2137/package.json"));
+const hostPackageRoot = dirname(hostManifestPath);
+const hostManifest = JSON.parse(readFileSync(hostManifestPath, "utf8"));
+const hostBinTarget = hostManifest.bin?.localhost;
+if (typeof hostBinTarget !== "string" || isAbsolute(hostBinTarget)) {
+	throw new Error("Packed localhost2137 manifest has no relative bin.localhost");
+}
+const hostBinPath = resolve(hostPackageRoot, hostBinTarget);
+const hostBinRelative = relative(hostPackageRoot, hostBinPath);
+if (
+	hostBinRelative === "" ||
+	hostBinRelative === ".." ||
+	hostBinRelative.startsWith(\`..\${sep}\`) ||
+	isAbsolute(hostBinRelative)
+) {
+	throw new Error("Packed localhost2137 bin.localhost escapes its package root");
+}
+const realHostRoot = realpathSync(hostPackageRoot);
+const realHostBin = realpathSync(hostBinPath);
+const realBinRelative = relative(realHostRoot, realHostBin);
+if (
+	realBinRelative === "" ||
+	realBinRelative === ".." ||
+	realBinRelative.startsWith(\`..\${sep}\`) ||
+	isAbsolute(realBinRelative)
+) {
+	throw new Error("Packed localhost2137 bin.localhost escapes through a resolved path");
+}
+const hostBinHelp = spawnSync(process.execPath, [realHostBin, "--help"], {
+	encoding: "utf8",
+});
+if (hostBinHelp.status !== 0 || !hostBinHelp.stdout.includes("Usage: localhost")) {
+	throw new Error("Packed localhost2137 binary was not directly executable with Node");
 }
 
 const bindPackedOperation = defineOperation();
@@ -321,7 +358,7 @@ void packedPlugin({ config: { token: "fixture" } });
 		if (installedHostManifest.bin?.localhost !== "./dist/bin.js") {
 			throw new Error("Packed localhost2137 package does not declare the localhost binary");
 		}
-		for (const subpath of [".", "./client", "./testing"]) {
+		for (const subpath of [".", "./client", "./testing", "./package.json"]) {
 			if (!installedHostManifest.exports?.[subpath]) {
 				throw new Error(`Packed localhost2137 package is missing export ${subpath}`);
 			}

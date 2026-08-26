@@ -48,5 +48,8 @@ variables and builds the same plugin-family variant:
 - `LOCALHOST2137_CONTRACT_VERSION`
 - `LOCALHOST2137_CONTRACT_FAIL_UPDATE`
 
-The runner invokes the local `localhost` binary through pnpm from the config module's nearest package
-root. Daemon output and control tokens are never included in assertion failures.
+The runner resolves `localhost2137/package.json` through package exports, validates that
+`bin.localhost` remains inside the installed package root, and invokes that file with the current
+Node executable from the config module's nearest package root. The spawned child must be the daemon
+PID reported by the runtime descriptor, and cleanup signals only that exact owned process. Daemon
+output and control tokens are never included in assertion failures.
