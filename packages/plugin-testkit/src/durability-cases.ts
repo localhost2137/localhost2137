@@ -136,6 +136,7 @@ interface RunningDaemon {
 
 interface SpawnedDaemon {
 	readonly closed: Promise<number | null>;
+	ownDaemon(pid: number): void;
 	readonly process: ChildProcess;
 	stop(): Promise<number | null>;
 }
@@ -190,10 +191,11 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 			},
 		);
 		const closed = processExit(child);
+		let daemonPid: number | undefined;
 		let stopPromise: Promise<number | null> | undefined;
 		const stop = (): Promise<number | null> => {
 			if (!stopPromise) {
-				stopPromise = stopProcessTree(child, closed);
+				stopPromise = stopProcessTree(child, closed, daemonPid);
 				void stopPromise.then(
 					() => activeStops.delete(stop),
 					() => activeStops.delete(stop),
@@ -202,7 +204,17 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 			return stopPromise;
 		};
 		activeStops.add(stop);
-		return Object.freeze({ closed, process: child, stop });
+		return Object.freeze({
+			closed,
+			ownDaemon: (pid: number) => {
+				if (daemonPid !== undefined && daemonPid !== pid) {
+					throw new Error("Durability daemon ownership changed after readiness.");
+				}
+				daemonPid = pid;
+			},
+			process: child,
+			stop,
+		});
 	};
 	const owner: DurabilityOwner = Object.freeze({
 		events: async () =>
@@ -219,6 +231,7 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 			const daemon = await spawnOwned(version, failUpdate);
 			try {
 				const descriptor = await waitForDescriptor(root, daemon);
+				daemon.ownDaemon(descriptor.pid);
 				const token = (await readFile(join(root, "control-token"), "utf8")).trim();
 				const client = connectRuntime({ token, url: descriptor.url });
 				await assertSelectedServiceIdentity(client, INSTANCE_ID, fixture, caseName, version);
@@ -259,7 +272,7 @@ async function execute<Services extends ServiceRecord>(
 async function waitForDescriptor(
 	root: string,
 	daemon: SpawnedDaemon,
-): Promise<Readonly<{ url: string }>> {
+): Promise<Readonly<{ pid: number; url: string }>> {
 	const deadline = Date.now() + DAEMON_DEADLINE_MS;
 	while (Date.now() < deadline) {
 		const descriptor = await readDescriptor(root);
@@ -285,12 +298,17 @@ async function waitForFailure(root: string, daemon: SpawnedDaemon): Promise<numb
 	throw new Error("Durability daemon neither failed nor became ready before its deadline.");
 }
 
-async function readDescriptor(root: string): Promise<Readonly<{ url: string }> | undefined> {
+async function readDescriptor(
+	root: string,
+): Promise<Readonly<{ pid: number; url: string }> | undefined> {
 	try {
 		const decoded: unknown = JSON.parse(await readFile(join(root, "runtime.json"), "utf8"));
 		if (typeof decoded !== "object" || decoded === null) return undefined;
 		const url = Reflect.get(decoded, "url");
-		return typeof url === "string" ? Object.freeze({ url }) : undefined;
+		const pid = Reflect.get(decoded, "pid");
+		return typeof url === "string" && Number.isSafeInteger(pid) && Number(pid) > 0
+			? Object.freeze({ pid: Number(pid), url })
+			: undefined;
 	} catch (cause) {
 		if (hasCode(cause, "ENOENT") || cause instanceof SyntaxError) return undefined;
 		throw cause;
@@ -324,20 +342,26 @@ function processExit(process: ChildProcess): Promise<number | null> {
 async function stopProcessTree(
 	child: ChildProcess,
 	closed: Promise<number | null>,
+	daemonPid: number | undefined,
 ): Promise<number | null> {
 	const processGroup = process.platform !== "win32" && child.pid ? -child.pid : undefined;
-	if (processGroup !== undefined) signalProcessGroup(processGroup, "SIGINT");
-	else if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
+	if (daemonPid !== undefined) signalOwnedProcess(daemonPid, "SIGINT");
+	if (processGroup !== undefined) signalOwnedProcess(processGroup, "SIGINT");
+	else if (daemonPid === undefined && child.exitCode === null && child.signalCode === null) {
+		child.kill("SIGINT");
+	}
 	try {
 		const exitCode = await withinCleanupDeadline(closed);
-		await tick();
-		await tick();
+		if (daemonPid !== undefined) await ensureOwnedProcessExited(daemonPid);
 		return exitCode;
 	} catch (cause) {
 		if (!(cause instanceof ProcessCleanupTimeoutError)) throw cause;
-		if (processGroup !== undefined) signalProcessGroup(processGroup, "SIGKILL");
+		if (daemonPid !== undefined) signalOwnedProcess(daemonPid, "SIGKILL");
+		if (processGroup !== undefined) signalOwnedProcess(processGroup, "SIGKILL");
 		else if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-		return withinCleanupDeadline(closed);
+		const exitCode = await withinCleanupDeadline(closed);
+		if (daemonPid !== undefined) await ensureOwnedProcessExited(daemonPid);
+		return exitCode;
 	}
 }
 
@@ -360,9 +384,31 @@ async function withinCleanupDeadline<Value>(promise: Promise<Value>): Promise<Va
 	}
 }
 
-function signalProcessGroup(processGroup: number, signal: NodeJS.Signals): void {
+async function ensureOwnedProcessExited(pid: number): Promise<void> {
+	const deadline = Date.now() + 2_000;
+	while (ownedProcessExists(pid) && Date.now() < deadline) await tick();
+	if (!ownedProcessExists(pid)) return;
+	signalOwnedProcess(pid, "SIGKILL");
+	const killDeadline = Date.now() + 2_000;
+	while (ownedProcessExists(pid) && Date.now() < killDeadline) await tick();
+	if (ownedProcessExists(pid)) {
+		throw new ProcessCleanupTimeoutError();
+	}
+}
+
+function ownedProcessExists(pid: number): boolean {
 	try {
-		process.kill(processGroup, signal);
+		process.kill(pid, 0);
+		return true;
+	} catch (cause) {
+		if (hasCode(cause, "ESRCH")) return false;
+		throw cause;
+	}
+}
+
+function signalOwnedProcess(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(pid, signal);
 	} catch (cause) {
 		if (!hasCode(cause, "ESRCH")) throw cause;
 	}
