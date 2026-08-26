@@ -1,4 +1,9 @@
 import { createRequestHandler } from "react-router";
+import {
+	getMarkdownPage,
+	isMarkdownPath,
+	markdownNotFoundResponse,
+} from "../lib/markdown-resource";
 
 const handleRequest = createRequestHandler(
 	() => import("virtual:react-router/server-build"),
@@ -6,7 +11,11 @@ const handleRequest = createRequestHandler(
 );
 
 export default {
-	fetch(request: Request): Promise<Response> {
+	fetch(request: Request): Response | Promise<Response> {
+		const pathname = new URL(request.url).pathname;
+		if (isMarkdownPath(pathname) && !getMarkdownPage(pathname)) {
+			return markdownNotFoundResponse();
+		}
 		return handleRequest(request);
 	},
 };

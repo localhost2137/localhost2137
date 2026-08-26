@@ -17,7 +17,7 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
 }
 
 export async function loader({ params }: Route.LoaderArgs) {
-	const slugs = params["*"].split("/").filter(Boolean);
+	const slugs = (params["*"] ?? "").split("/").filter(Boolean);
 	const page = source.getPage(slugs);
 	if (!page) throw new Response("Not found", { status: 404 });
 

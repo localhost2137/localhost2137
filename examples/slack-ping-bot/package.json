@@ -15,6 +15,7 @@
 	},
 	"devDependencies": {
 		"@localhost2137/slack": "workspace:*",
+		"@types/express": "5.0.6",
 		"@types/node": "24.13.3",
 		"localhost2137": "workspace:*",
 		"typescript": "6.0.3",

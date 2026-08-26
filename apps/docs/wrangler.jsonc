@@ -2,11 +2,7 @@
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "localhost2137-docs",
 	"compatibility_date": "2026-08-26",
-	"compatibility_flags": ["nodejs_compat"],
 	"main": "./workers/app.ts",
-	"assets": {
-		"directory": "./build/client"
-	},
 	"observability": {
 		"enabled": true
 	},

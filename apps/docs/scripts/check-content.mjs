@@ -93,18 +93,44 @@ assert(layout.includes('from "fumadocs-ui/layouts/glass/page"'));
 const stylesheet = await readFile(join(docsRoot, "app/global.css"), "utf8");
 assert(stylesheet.includes('@import "fumadocs-ui/css/generated/glass.css"'));
 
-const routes = await readFile(join(docsRoot, "app/routes.ts"), "utf8");
-for (const route of [
-	'route("api/search", "routes/search.ts")',
-	'route("llms.txt", "routes/llms-index.ts")',
-	'route("llms-full.txt", "routes/llms-full.ts")',
-	'route("index.md", "routes/markdown.ts"',
-	'route(":page.md", "routes/markdown.ts"',
-	'route(":section/:page.md", "routes/markdown.ts"',
-	'route("*", "routes/docs.tsx")',
+const routeModule = await import("../app/routes.ts");
+const routeConfig = routeModule.default;
+assert(
+	routeConfig.some((entry) => entry.file === "routes/docs.tsx" && entry.index === true),
+	"The root docs page must use a native index route.",
+);
+assert(
+	routeConfig.some((entry) => entry.file === "routes/docs.tsx" && entry.path === "*"),
+	"Nested docs pages must use the docs splat route.",
+);
+for (const [path, file] of [
+	["api/search", "routes/search.ts"],
+	["llms.txt", "routes/llms-index.ts"],
+	["llms-full.txt", "routes/llms-full.ts"],
 ]) {
-	assert(routes.includes(route), `Missing React Router route: ${route}`);
+	assert(
+		routeConfig.some((entry) => entry.file === file && entry.path === path),
+		`Missing React Router resource route: ${path}`,
+	);
 }
+
+const expectedContentMarkdownPaths = files.map((file) =>
+	file === "index.mdx" ? "index.md" : `${file.slice(0, -".mdx".length)}.md`,
+);
+assert.deepEqual(
+	routeModule.markdownRoutePaths,
+	expectedContentMarkdownPaths,
+	"Markdown routes must be derived recursively from the content tree.",
+);
+assert.deepEqual(
+	routeConfig.filter((entry) => entry.file === "routes/markdown.ts").map((entry) => entry.path),
+	expectedContentMarkdownPaths,
+	"Every content page must have one exact Markdown resource route.",
+);
+assert(
+	routeModule.markdownRoutePaths.every((path) => !path.includes(":")),
+	"Markdown routes must not use depth-specific dynamic segments.",
+);
 
 const viteConfig = await readFile(join(docsRoot, "vite.config.ts"), "utf8");
 for (const plugin of ["cloudflare(", "fumadocsMdx(", "tailwindcss(", "reactRouter("]) {
@@ -120,11 +146,15 @@ assert(reactRouterConfig.includes("ssr: true"), "Docs must keep server rendering
 const worker = await readFile(join(docsRoot, "workers/app.ts"), "utf8");
 assert(worker.includes('import("virtual:react-router/server-build")'));
 assert(worker.includes("createRequestHandler"));
+assert(worker.includes("isMarkdownPath(pathname)"));
+assert(worker.includes("markdownNotFoundResponse()"));
 
 const wrangler = JSON.parse(await readFile(join(docsRoot, "wrangler.jsonc"), "utf8"));
 assert.equal(wrangler.name, "localhost2137-docs");
 assert.equal(wrangler.main, "./workers/app.ts");
-assert.equal(wrangler.assets?.directory, "./build/client");
+assert.equal(wrangler.compatibility_date, "2026-08-26");
+assert(!("compatibility_flags" in wrangler));
+assert(!("assets" in wrangler), "The Vite plugin owns generated asset-directory wiring.");
 assert.equal(wrangler.observability?.enabled, true);
 assert.deepEqual(wrangler.routes, [
 	{
@@ -139,6 +169,17 @@ assert(!packageManifest.dependencies?.next && !packageManifest.devDependencies?.
 assert.equal(packageManifest.scripts.build, "react-router build");
 assert.equal(packageManifest.scripts.dev, "react-router dev");
 assert.equal(packageManifest.scripts.deploy, "pnpm build && wrangler deploy");
+
+const workspaceConfig = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
+assert(/^autoInstallPeers: false$/m.test(workspaceConfig));
+assert(/^minimumReleaseAge: 1440$/m.test(workspaceConfig));
+const lockfile = await readFile(join(repositoryRoot, "pnpm-lock.yaml"), "utf8");
+assert(/^ {2}autoInstallPeers: false$/m.test(lockfile));
+assert(!/^ {2}next@/m.test(lockfile), "The lockfile must not resolve Next.js.");
+assert(!/@next\/swc/.test(lockfile), "The lockfile must not resolve Next.js SWC packages.");
+const installedPackages = await readdir(join(repositoryRoot, "node_modules/.pnpm"));
+assert(!installedPackages.some((name) => /^next@|^@next\+/.test(name)));
+await assertMissing(join(docsRoot, "node_modules/next"));
 
 for (const retiredPath of [
 	"next-env.d.ts",
@@ -173,6 +214,7 @@ for (const route of [
 	"app/routes/llms-index.ts",
 	"app/routes/llms-full.ts",
 	"app/routes/markdown.ts",
+	"lib/markdown-resource.ts",
 ]) {
 	assert((await readFile(join(docsRoot, route), "utf8")).length > 0, `Missing ${route}.`);
 }
