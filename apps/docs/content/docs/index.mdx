@@ -34,7 +34,8 @@ general plugin ecosystem without learning each provider's rules in its kernel.
 ## The normal loop
 
 1. Configure installed plugins in ordinary TypeScript.
-2. Start `localhost dev`; the persistent `dev` world starts empty.
+2. Start `localhost dev`; it creates the persistent `dev` world empty only when it is absent. Later
+   starts preserve that world until you reset it.
 3. Pass generated connection values to the application's existing SDK or service adapter.
 4. Arrange and inspect state through plugin operations.
 5. Exercise the application through its normal provider-facing boundary.
@@ -42,4 +43,5 @@ general plugin ecosystem without learning each provider's rules in its kernel.
 7. Reset or destroy the world when it no longer matters.
 
 Instances isolate plugin state and storage. They do not create separate plugin configuration or
-callback URLs. Read the parallel-callback limitation before assuming event or webhook isolation.
+callback URLs. Before assuming event or webhook isolation, read the
+[parallel-callback limitation](/limitations#parallel-callbacks-need-an-application-rule).

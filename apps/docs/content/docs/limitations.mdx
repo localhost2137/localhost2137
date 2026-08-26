@@ -98,10 +98,3 @@ code, screenshots, traces, snapshots, or build artifacts.
 The first-party Slack and Stripe plugins use `better-sqlite3`. A package manager may compile the
 native module when no matching prebuild exists. Node.js 24 is the supported baseline. Treat a compiler
 toolchain failure as an installation issue, not an emulator compatibility result.
-
-## New plugin contract fixtures
-
-The current `@localhost2137/plugin-testkit` version contract requires positive versions ordered
-`old < current < future`. A genuinely new state-version-1 plugin has no honest predecessor. Do not
-fabricate one or increment the schema only to satisfy the fixture. Use focused public tests until the
-plugin has a real historical schema, then add the full upgrade proof.

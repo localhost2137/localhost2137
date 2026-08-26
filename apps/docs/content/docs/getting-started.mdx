@@ -5,19 +5,34 @@ description: Configure one emulator plugin, start the local runtime, and exercis
 
 localhost2137 requires Node.js 24 or later. This repository and every documented workflow use pnpm.
 
-## Install the runtime and a plugin
+## Try the repository today
 
-Add the runtime and whichever emulator plugin your application needs. Slack is used here because it
-has a small setup surface; it is one plugin, not a special runtime mode.
+The workspace packages are currently private and unpublished. A registry install is therefore not a
+runnable evaluation path yet. From a checkout of this repository, run the Stripe SDK example:
+
+```sh
+pnpm install
+pnpm --filter @localhost2137/example-stripe-sdk test
+```
+
+That test starts a temporary runtime, drives the emulator through the official Stripe SDK, advances
+its clock, and cleans up the instance. The repository also contains checked-in Slack and
+parallel-worker examples.
+
+## Install after publication
+
+After the packages are published, add the runtime and whichever emulator plugin your application
+needs. Slack is used here because it has a small setup surface; it is one plugin, not a special
+runtime mode.
 
 ```sh
 pnpm add -D localhost2137 @localhost2137/slack
-pnpm exec localhost init
 ```
 
-`localhost init` creates `localhost.config.ts` when one does not exist and adds
-`.localhost2137/` to `.gitignore`. It does not choose or install service plugins, and it refuses to
-replace an existing config.
+Create `localhost.config.ts` manually using the next section. `pnpm exec localhost init` is a
+reviewed documentation-first command and is not implemented in the current CLI. When implemented,
+it will create that file only when absent, add `.localhost2137/` to `.gitignore`, avoid choosing or
+installing plugins, and refuse to replace an existing config.
 
 If the project uses a TypeScript config, its package must use ESM (`"type": "module"`). A project
 that must remain CommonJS can use `localhost.config.mjs` instead.
@@ -54,9 +69,10 @@ instance handles.
 pnpm exec localhost dev
 ```
 
-The daemon creates the persistent `dev` instance if needed, starts configured services, and writes
-app-facing connection variables to `.localhost2137/.env`. Fresh instances are empty except for
-plugin-required identities. Declared seed data is never applied during normal startup.
+The daemon creates the persistent `dev` instance only when absent, starts configured services, and
+writes app-facing connection variables to `.localhost2137/.env`. A new instance is empty except for
+plugin-required identities. Later starts preserve its state until an explicit reset, and declared
+seed data is never applied during normal startup.
 
 In another terminal, inspect the plugin's actual control surface:
 
@@ -77,7 +93,9 @@ pnpm exec localhost exec slack add-user-to-channel \
 Your application should continue using its normal provider SDK or HTTP adapter. Point that boundary
 at the plugin connection values; do not replace application behavior with control operations.
 
-## Start from an executable example
+## Clone an example after the command ships
+
+The reviewed demo-clone contract is also not implemented in the current CLI:
 
 ```sh
 pnpm exec localhost demo clone slack-ping-bot ./slack-ping-bot
@@ -85,9 +103,14 @@ cd ./slack-ping-bot
 pnpm test
 ```
 
-`localhost demo clone <name> [directory]` creates a standalone copy in a new or empty directory,
-installs it with pnpm, and refuses to overwrite existing files. `slack-ping-bot` uses the official
-Slack Bolt SDK and a signed local Events API callback.
+`localhost demo clone <name> [directory]` will create a standalone copy in a new or empty directory,
+install it with pnpm, and refuse to overwrite existing files. `slack-ping-bot` uses the official
+Slack Bolt SDK and a signed local Events API callback. Until that command ships, run the checked-in
+workspace example instead:
+
+```sh
+pnpm --filter @localhost2137/example-slack-ping-bot test
+```
 
 Next, read [Configuration](/configuration) for world templates or [Integration testing](/testing)
 for disposable instances.

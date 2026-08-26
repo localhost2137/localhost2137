@@ -9,47 +9,75 @@ storage directory.
 
 ## In-process typed tests
 
-Use `localhost2137/testing` when config and tests run in the same process. This executable pattern is
-adapted from the Stripe SDK example:
+Use `localhost2137/testing` when config and tests run in the same process. This compact version of
+`examples/stripe-sdk/test/subscription.test.ts` arranges catalog state with operations, calls the
+application's official-SDK adapter, and inspects the result through the runtime:
 
 ```ts
 import { stripe } from "@localhost2137/stripe";
 import { defineConfig } from "localhost2137";
 import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import { createLocalStripe } from "../src/local-stripe.js";
 
-const config = defineConfig({
-  clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
-  services: {
-    stripe: stripe({
-      config: {
-        secretKey: "sk_test_local",
-        webhookSecret: "whsec_local",
-        webhookUrl: null,
-      },
-    }),
-  },
-});
+it("creates and renews a subscription", async () => {
+  const config = defineConfig({
+    clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+    services: {
+      stripe: stripe({
+        config: {
+          secretKey: "sk_test_local_sdk",
+          webhookSecret: "whsec_local_sdk",
+          webhookUrl: null,
+        },
+      }),
+    },
+  });
+  const runtime = await createTestRuntime({
+    config,
+    port: 0,
+    storage: "temporary",
+  });
 
-const runtime = await createTestRuntime({
-  config,
-  port: 0,
-  storage: "temporary",
-});
-
-try {
-  const instance = await runtime.createInstance();
   try {
-    const customer = await instance.stripe.createCustomer({ name: "Ada" });
-    // Pass instance.stripe.connection to the application under test.
-    // Exercise the application's normal SDK/HTTP path, then inspect state.
-    expect(customer.name).toBe("Ada");
+    const instance = await runtime.createInstance();
+    try {
+      const product = await instance.stripe.createProduct({ name: "Pro" });
+      const price = await instance.stripe.createPrice({
+        productId: product.id,
+        unitAmount: 2_500,
+      });
+
+      const client = createLocalStripe(instance.stripe.connection);
+      const customer = await client.customers.create({ name: "Ada" });
+      const subscription = await client.subscriptions.create({
+        customer: customer.id,
+        items: [{ price: price.id }],
+      });
+
+      await instance.clock.advance("30d");
+      const invoices = await instance.stripe.listInvoices({
+        subscriptionId: subscription.id,
+      });
+      expect(invoices.map(({ id }) => id)).toEqual(["in_000001", "in_000002"]);
+      expect(invoices[1]).toMatchObject({
+        amountPaid: 2_500,
+        customerId: customer.id,
+        status: "paid",
+      });
+    } finally {
+      await instance.destroy();
+    }
   } finally {
-    await instance.destroy();
+    await runtime.close();
   }
-} finally {
-  await runtime.close();
-}
+});
 ```
+
+`createLocalStripe` is the example application's small adapter around the official `stripe` package
+and `createStripeSdkFetch`. Product and price setup stays in the control plane; customer and
+subscription creation go through normal SDK calls. Clock advancement and `listInvoices` then inspect
+the resulting emulator state without reaching into its database.
 
 The runtime binds one OS-assigned loopback port and creates temporary storage. The instance handle is
 inferred from `config.services`; each service exposes typed operations and `connection`, while
