@@ -137,6 +137,19 @@ export class InstanceLeaseCoordinator {
 		}
 	}
 
+	/** Acquires retirement ownership without consuming background task failures. */
+	acquireRetirement(options: ExclusiveLeaseOptions): Promise<InstanceLease> {
+		validateTimeout(options.timeoutMs);
+		if (this.#retired) return Promise.reject(new LeaseRetiredError());
+		return this.#waitForExclusive(options);
+	}
+
+	/** Retains retirement ownership without imposing a second caller deadline. */
+	acquireRetirementOwned(): Promise<InstanceLease> {
+		if (this.#retired) return Promise.reject(new LeaseRetiredError());
+		return this.#waitForExclusive({});
+	}
+
 	retire(): void {
 		if (this.#retired) return;
 		this.#retired = true;

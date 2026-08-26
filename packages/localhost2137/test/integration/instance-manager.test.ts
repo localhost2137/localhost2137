@@ -294,6 +294,135 @@ describe("InstanceManager with durable Node storage", () => {
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 	});
 
+	it.each(["reset", "destroy"] as const)(
+		"drains tracked work before %s stop hooks can close storage",
+		async (operation) => {
+			const events: string[] = [];
+			const releaseWork = deferred<void>();
+			const fixture = await managerFixture(
+				instanceTemplate({ stopBarrier: async () => void events.push("stop") }),
+			);
+			await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+			const context = fixture.manager.service("dev", "fixture").runningContext();
+			const tracked = context.tasks.track(
+				"pending delivery",
+				(async () => {
+					await releaseWork.promise;
+					const state = await readFile(context.storage.path("state.json"), "utf8");
+					events.push(`task:${JSON.parse(state).value}`);
+				})(),
+			);
+			const stage = vi.spyOn(fixture.storage, "stageInstance");
+
+			const mutation = fixture.manager[operation](
+				"dev",
+				operation === "reset" ? { seed: false, timeoutMs: 1_000 } : { timeoutMs: 1_000 },
+			);
+			const didSettle = settlementProbe(mutation);
+			await Promise.resolve();
+
+			expect(didSettle()).toBe(false);
+			expect(events).toEqual([]);
+			expect(stage).not.toHaveBeenCalled();
+			releaseWork.resolve(undefined);
+			await tracked;
+			await mutation;
+
+			expect(events).toEqual(["task:dev:1", "stop"]);
+			expect(stage).toHaveBeenCalledOnce();
+			await fixture.manager.stopAll({ timeoutMs: 1_000 });
+		},
+	);
+
+	it.each(["reset", "destroy"] as const)(
+		"drains terminal work tracked by a %s stop hook before staging storage",
+		async (operation) => {
+			const releaseTerminalWork = deferred<void>();
+			const stopEntered = deferred<void>();
+			const terminalReads: string[] = [];
+			const fixture = await managerFixture(
+				instanceTemplate({
+					stopBarrier: async (context) => {
+						void context.tasks.track(
+							"terminal persistence",
+							(async () => {
+								await releaseTerminalWork.promise;
+								terminalReads.push(await readFile(context.storage.path("state.json"), "utf8"));
+							})(),
+						);
+						stopEntered.resolve(undefined);
+					},
+				}),
+			);
+			await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+			const stage = vi.spyOn(fixture.storage, "stageInstance");
+
+			const mutation = fixture.manager[operation](
+				"dev",
+				operation === "reset" ? { seed: false, timeoutMs: 1_000 } : { timeoutMs: 1_000 },
+			);
+			await stopEntered.promise;
+			const didSettle = settlementProbe(mutation);
+			await Promise.resolve();
+
+			expect(didSettle()).toBe(false);
+			expect(stage).not.toHaveBeenCalled();
+			releaseTerminalWork.resolve(undefined);
+			await mutation;
+
+			expect(terminalReads.map((value) => JSON.parse(value).value)).toEqual(["dev:1"]);
+			expect(stage).toHaveBeenCalledOnce();
+			await fixture.manager.stopAll({ timeoutMs: 1_000 });
+		},
+	);
+
+	it("does not restore an instance merely because an already-recorded task failed", async () => {
+		const fixture = await managerFixture(instanceTemplate());
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const context = fixture.manager.service("dev", "fixture").runningContext();
+
+		try {
+			await context.tasks.track("failed delivery", Promise.reject(new Error("delivery failed")));
+		} catch {
+			// The delivery boundary observed the failure; teardown still owns cleanup.
+		} finally {
+			await fixture.manager.destroy("dev", { timeoutMs: 1_000 });
+		}
+
+		await expect(fixture.manager.get("dev")).rejects.toBeInstanceOf(InstanceNotFoundError);
+		expect(await fixture.storage.readInstance(parseInstanceId("dev"))).toBeUndefined();
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+	});
+
+	it("keeps storage open while cooperative work persists after destroy cancellation", async () => {
+		const time = new ManualTime();
+		const fixture = await managerFixture(instanceTemplate(), undefined, {
+			monotonicClock: time,
+			scheduler: time,
+		});
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const context = fixture.manager.service("dev", "fixture").runningContext();
+		const terminalPath = context.storage.path("terminal.json");
+		const terminalWrite = context.tasks.track(
+			"cooperative persistence",
+			(async () => {
+				await abortReason(context.signal);
+				await writeFile(terminalPath, JSON.stringify({ persisted: true }));
+			})(),
+		);
+		const stage = vi.spyOn(fixture.storage, "stageInstance");
+		const destroying = fixture.manager.destroy("dev", { timeoutMs: 10 });
+
+		await Promise.resolve();
+		time.advance(10);
+
+		await expect(destroying).rejects.toBeInstanceOf(MutationTimeoutError);
+		await terminalWrite;
+		expect(stage).not.toHaveBeenCalled();
+		await fixture.manager.stopAll({ timeoutMs: 1_000 });
+		expect(JSON.parse(await readFile(terminalPath, "utf8"))).toEqual({ persisted: true });
+	});
+
 	it("shutdown lets an admitted create finish within its grace period", async () => {
 		const createEntered = deferred<BasePluginContext<unknown>>();
 		const releaseCreate = deferred<void>();

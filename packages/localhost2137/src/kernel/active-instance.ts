@@ -1,4 +1,5 @@
 import { ActiveInstanceGeneration } from "./active-instance-generation.js";
+import { retireActiveInstance } from "./active-instance-retirement.js";
 import { type InstanceId, parseServiceKey } from "./identifiers.js";
 import { ReadonlyInstanceClock } from "./instance-clock.js";
 import { InstanceLeaseCoordinator, type MonotonicClock } from "./instance-leases.js";
@@ -28,7 +29,11 @@ import {
 	StructuredLogRing,
 	type StructuredLogSnapshot,
 } from "./structured-log.js";
-import { InstanceTaskTracker, type TaskScheduler } from "./task-tracker.js";
+import {
+	InstanceTaskTracker,
+	type TaskScheduler,
+	TrackedTaskFailuresError,
+} from "./task-tracker.js";
 import { TrackedPluginFetch } from "./tracked-plugin-fetch.js";
 
 export interface ActiveInstance {
@@ -148,16 +153,15 @@ export class ActiveInstanceFactory {
 			return active;
 		} catch (cause) {
 			const cleanupFailures: unknown[] = [];
-			if (lifecycle.status() === "running" || lifecycle.status() === "seed_failed") {
-				await lifecycle.stopAll(signal).catch((failure: unknown) => cleanupFailures.push(failure));
-			}
-			const report = await generation.close(cause, options.remainingMs());
-			if (report.failures.length > 0 || report.unfinishedLabels.length > 0) {
-				cleanupFailures.push(report);
-			}
-			const settled = await generation.settled();
-			if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
-				cleanupFailures.push(settled);
+			const retirement = retireActiveInstance(active, {
+				remainingMs: options.remainingMs,
+				reason: cause,
+				signal,
+			});
+			const report = await retirement.settled;
+			cleanupFailures.push(...report.blockingFailures);
+			if (report.taskFailures.length > 0) {
+				cleanupFailures.push(new TrackedTaskFailuresError(report.taskFailures));
 			}
 			if (cleanupFailures.length > 0) {
 				throw new AggregateError(

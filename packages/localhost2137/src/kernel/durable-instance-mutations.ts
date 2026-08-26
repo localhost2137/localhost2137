@@ -8,6 +8,10 @@ import {
 	type ActiveInstanceRegistry,
 	InstanceAlreadyExistsError,
 } from "./active-instance-registry.js";
+import {
+	type ActiveInstanceRetirementReport,
+	retireActiveInstance,
+} from "./active-instance-retirement.js";
 import type { InstanceId } from "./identifiers.js";
 import type { MonotonicClock } from "./instance-leases.js";
 import type { InstanceManifestPolicy } from "./instance-manifest-policy.js";
@@ -18,7 +22,7 @@ import {
 } from "./instance-storage.js";
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { MutationScope } from "./mutation-scope.js";
-import type { TaskScheduler } from "./task-tracker.js";
+import { type TaskScheduler, TrackedTaskFailuresError } from "./task-tracker.js";
 
 const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
 const MAX_ROLLBACK_GRACE_MS = 5_000;
@@ -178,7 +182,7 @@ export class DurableInstanceMutations {
 		scope: MutationScope,
 	): Promise<void> {
 		const previous = this.#registry.get(instanceId);
-		const lease = await previous.leases.acquireExclusive({
+		const lease = await previous.leases.acquireRetirement({
 			signal: scope.signal,
 			timeoutMs: scope.remainingMs(),
 		});
@@ -186,8 +190,11 @@ export class DurableInstanceMutations {
 		let staged = false;
 		try {
 			await this.#finalizePendingReset(previous, scope);
-			const retirementFailures = await this.#retire(previous, scope, "instance destroyed");
-			if (retirementFailures.length > 0) throw new AggregateError(retirementFailures);
+			const retirement = await this.#retire(previous, scope, "instance destroyed");
+			if (retirement.blockingFailures.length > 0) {
+				throw new AggregateError(retirement.blockingFailures);
+			}
+			scope.checkpoint();
 			previous.lifecycle.beginDestroy();
 			scope.checkpoint();
 			try {
@@ -230,7 +237,7 @@ export class DurableInstanceMutations {
 		scope: MutationScope,
 	): Promise<InstanceSummary> {
 		const previous = this.#registry.get(instanceId);
-		const lease = await previous.leases.acquireExclusive({
+		const lease = await previous.leases.acquireRetirement({
 			signal: scope.signal,
 			timeoutMs: scope.remainingMs(),
 		});
@@ -241,8 +248,11 @@ export class DurableInstanceMutations {
 		let committedSummary: InstanceSummary | undefined;
 		try {
 			await this.#finalizePendingReset(previous, scope);
-			const retirementFailures = await this.#retire(previous, scope, "instance reset");
-			if (retirementFailures.length > 0) throw new AggregateError(retirementFailures);
+			const retirement = await this.#retire(previous, scope, "instance reset");
+			if (retirement.blockingFailures.length > 0) {
+				throw new AggregateError(retirement.blockingFailures);
+			}
+			scope.checkpoint();
 			previous.lifecycle.beginReset();
 			scope.checkpoint();
 			try {
@@ -335,7 +345,9 @@ export class DurableInstanceMutations {
 			this.#registry.add(started);
 			return summary;
 		} catch (cause) {
-			const cleanupFailures = active ? await this.#retire(active, scope, cause) : [];
+			const cleanupFailures = active
+				? retirementFailures(await this.#retire(active, scope, cause), true)
+				: [];
 			let hasActiveStorage = false;
 			try {
 				hasActiveStorage = (await this.#storage.readInstance(instanceId)) !== undefined;
@@ -364,7 +376,9 @@ export class DurableInstanceMutations {
 		scope: MutationScope,
 		options: AdmittedMutationOptions,
 	): Promise<unknown[]> {
-		const failures = replacement ? await this.#retire(replacement, scope, "reset rolled back") : [];
+		const failures = replacement
+			? retirementFailures(await this.#retire(replacement, scope, "reset rolled back"), true)
+			: [];
 		if (staged) {
 			await this.#storage
 				.discardActiveReplacement(previous.id, transitionId)
@@ -404,25 +418,19 @@ export class DurableInstanceMutations {
 		return failures;
 	}
 
-	async #retire(active: ActiveInstance, scope: MutationScope, reason: unknown): Promise<unknown[]> {
-		const failures: unknown[] = [];
-		active.leases.retire();
-		try {
-			scope.checkpoint();
-			if (active.lifecycle.status() === "running" || active.lifecycle.status() === "seed_failed") {
-				await active.lifecycle.stopAll(scope.signal);
-			}
-			scope.checkpoint();
-			await active.tasks.idle({ signal: scope.signal, timeoutMs: scope.remainingMs() });
-			scope.checkpoint();
-		} catch (failure) {
-			failures.push(failure);
-		}
-		const report = await active.generation.close(reason, scope.remainingMs());
-		if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
-		const settled = await active.generation.settled();
-		if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) failures.push(settled);
-		return failures;
+	async #retire(
+		active: ActiveInstance,
+		scope: MutationScope,
+		reason: unknown,
+	): Promise<ActiveInstanceRetirementReport> {
+		const retirement = retireActiveInstance(active, {
+			remainingMs: () => scope.remainingMs(),
+			reason,
+			signal: scope.signal,
+		});
+		// Mutations expose their caller deadline through OwnedMutation.result, but
+		// continue owning retirement through OwnedMutation.settled.
+		return retirement.settled;
 	}
 
 	async #writeReady(
@@ -531,4 +539,16 @@ function isCommittedWrite(
 	operation: "commit_transition" | "write_instance",
 ): cause is StorageWriteCommittedError {
 	return cause instanceof StorageWriteCommittedError && cause.operation === operation;
+}
+
+function retirementFailures(
+	report: ActiveInstanceRetirementReport,
+	includeTaskFailures: boolean,
+): unknown[] {
+	return [
+		...report.blockingFailures,
+		...(includeTaskFailures && report.taskFailures.length > 0
+			? [new TrackedTaskFailuresError(report.taskFailures)]
+			: []),
+	];
 }

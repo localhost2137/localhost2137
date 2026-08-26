@@ -1,5 +1,9 @@
 import type { ActiveInstance, ActiveInstanceFactory } from "./active-instance.js";
 import type { ActiveInstanceRegistry } from "./active-instance-registry.js";
+import {
+	type ActiveInstanceRetirementReport,
+	retireActiveInstance,
+} from "./active-instance-retirement.js";
 import { parseInstanceId } from "./identifiers.js";
 import type { MonotonicClock } from "./instance-leases.js";
 import type { InstanceManifestPolicy } from "./instance-manifest-policy.js";
@@ -7,7 +11,7 @@ import { type InstanceStoragePort, StorageWriteCommittedError } from "./instance
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { MutationScope, MutationTimeoutError } from "./mutation-scope.js";
 import { RuntimeAdmission, type RuntimeAdmissionLease } from "./runtime-admission.js";
-import type { TaskScheduler } from "./task-tracker.js";
+import { type TaskScheduler, TrackedTaskFailuresError } from "./task-tracker.js";
 
 const STARTUP_TIMEOUT_MS = 30_000;
 
@@ -148,18 +152,12 @@ export class PersistedInstanceRuntime {
 		} catch (cause) {
 			const failures: unknown[] = [cause];
 			for (const active of started.reverse()) {
-				active.leases.retire();
-				await active.lifecycle
-					.stopAll(scope.signal)
-					.catch((failure: unknown) => failures.push(failure));
-				const report = await active.generation.close(cause, scope.remainingMs());
-				if (report.failures.length > 0 || report.unfinishedLabels.length > 0) {
-					failures.push(report);
-				}
-				const settled = await active.generation.settled();
-				if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
-					failures.push(settled);
-				}
+				const retirement = retireActiveInstance(active, {
+					remainingMs: () => scope.remainingMs(),
+					reason: cause,
+					signal: scope.signal,
+				});
+				collectRetirementFailures(await retirement.settled, failures);
 				this.#registry.remove(active);
 			}
 			throw new AggregateError(failures, "Could not start persisted instances.");
@@ -225,20 +223,18 @@ export class PersistedInstanceRuntime {
 			for (const active of [...this.#registry.all()].reverse()) {
 				let lease: { release(): void } | undefined;
 				try {
-					lease = await active.leases.acquireExclusiveOwned();
-					active.leases.retire();
-					await active.lifecycle.stopAll(scope.signal);
+					lease = await active.leases.acquireRetirementOwned();
+					const retirement = retireActiveInstance(active, {
+						remainingMs: () => scope.remainingMs(),
+						reason: closing,
+						signal: scope.signal,
+					});
+					collectRetirementFailures(await retirement.settled, failures);
 				} catch (cause) {
 					failures.push(cause);
 					active.leases.retire();
 				} finally {
 					lease?.release();
-				}
-				const report = await active.generation.close(closing, scope.remainingMs());
-				if (report.failures.length > 0 || report.unfinishedLabels.length > 0) failures.push(report);
-				const settled = await active.generation.settled();
-				if (settled.failures.length > 0 || settled.unfinishedLabels.length > 0) {
-					failures.push(settled);
 				}
 			}
 			const cleanup = await this.#trash.close(scope.remainingMs());
@@ -256,6 +252,16 @@ export class PersistedInstanceRuntime {
 		} finally {
 			scope.signal.removeEventListener("abort", abortRetainedWork);
 		}
+	}
+}
+
+function collectRetirementFailures(
+	report: ActiveInstanceRetirementReport,
+	failures: unknown[],
+): void {
+	failures.push(...report.blockingFailures);
+	if (report.taskFailures.length > 0) {
+		failures.push(new TrackedTaskFailuresError(report.taskFailures));
 	}
 }
 
