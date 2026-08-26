@@ -3,8 +3,9 @@ import { createFixturePlugin } from "./fixture-plugin.js";
 
 const root = process.env.LOCALHOST2137_CONTRACT_STORAGE;
 const eventsPath = process.env.LOCALHOST2137_CONTRACT_EVENTS;
+const eventsUrl = process.env.LOCALHOST2137_CONTRACT_DELIVERY_URL;
 const stateVersion = Number(process.env.LOCALHOST2137_CONTRACT_VERSION);
-if (!root || !eventsPath || !Number.isSafeInteger(stateVersion) || stateVersion < 1) {
+if (!root || !eventsPath || !eventsUrl || !Number.isSafeInteger(stateVersion) || stateVersion < 1) {
 	throw new TypeError("Durability fixture environment is incomplete.");
 }
 
@@ -15,7 +16,7 @@ export default defineConfig({
 			failUpdate: process.env.LOCALHOST2137_CONTRACT_FAIL_UPDATE === "1",
 			stateVersion,
 		})({
-			config: { label: "isolated" },
+			config: { eventsUrl, label: "isolated" },
 			seed: { value: 7 },
 		}),
 	},

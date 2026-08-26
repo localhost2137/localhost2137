@@ -6,9 +6,10 @@ import { basename, dirname, isAbsolute, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ServiceRecord } from "localhost2137";
 import { connectRuntime, type RuntimeClient } from "localhost2137/client";
+import { capture, finishCaptured } from "./cleanup-owner.js";
 import { assertContract, assertContractEqual } from "./contract-assertions.js";
+import { type OwnedContractResources, withContractResources } from "./contract-resources.js";
 import type { PluginContractCase, PluginContractFixture } from "./contract-types.js";
-import { capture, finishCaptured } from "./runtime-owner.js";
 import { assertSelectedServiceIdentity } from "./service-identity.js";
 
 const INSTANCE_ID = "dev";
@@ -16,11 +17,13 @@ const DAEMON_DEADLINE_MS = 10_000;
 
 const contractProcessEnvironment: Readonly<{
 	events: string;
+	deliveryUrl: string;
 	failUpdate: string;
 	storage: string;
 	version: string;
 }> = Object.freeze({
 	events: "LOCALHOST2137_CONTRACT_EVENTS",
+	deliveryUrl: "LOCALHOST2137_CONTRACT_DELIVERY_URL",
 	failUpdate: "LOCALHOST2137_CONTRACT_FAIL_UPDATE",
 	storage: "LOCALHOST2137_CONTRACT_STORAGE",
 	version: "LOCALHOST2137_CONTRACT_VERSION",
@@ -151,6 +154,16 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 	fixture: PluginContractFixture<Services>,
 	work: (owner: DurabilityOwner) => Promise<Value>,
 ): Promise<Value> {
+	return withContractResources({}, (resources) =>
+		withOwnedDurabilityRoot(fixture, resources, work),
+	);
+}
+
+async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
+	fixture: PluginContractFixture<Services>,
+	resources: OwnedContractResources,
+	work: (owner: DurabilityOwner) => Promise<Value>,
+): Promise<Value> {
 	const root = await mkdtemp(join(tmpdir(), "localhost2137-contract-durable-"));
 	const eventsPath = join(root, "events.log");
 	await writeFile(eventsPath, "", "utf8");
@@ -182,6 +195,7 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 				detached: process.platform !== "win32",
 				env: {
 					...inheritedEnvironment,
+					[contractProcessEnvironment.deliveryUrl]: resources.harness.deliveryUrl,
 					[contractProcessEnvironment.events]: eventsPath,
 					[contractProcessEnvironment.failUpdate]: failUpdate ? "1" : "0",
 					[contractProcessEnvironment.storage]: root,

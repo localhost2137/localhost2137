@@ -2,9 +2,10 @@ export { PluginContractAssertionError } from "./contract-assertions.js";
 export type {
 	ContractAuthoringFixture,
 	ContractDurabilityFixture,
-	ContractDynamicInputFixture,
 	ContractHarnessConfigOptions,
+	ContractHarnessResources,
 	ContractHarnessVariant,
+	ContractHttpRequestDescriptor,
 	ContractInstrumentation,
 	ContractLifecycleEvent,
 	ContractOperationCall,

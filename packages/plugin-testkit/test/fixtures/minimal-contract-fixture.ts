@@ -31,9 +31,9 @@ export const minimalContractFixture = Object.freeze({
 		storageEscape: Object.freeze({ input: Object.freeze({}), operation: "read" as const }),
 	}),
 	harness: Object.freeze({
-		createConfig: ({ instrumentation, variant }) => {
+		createConfig: ({ instrumentation, resources, variant }) => {
 			let shouldFailCreate = variant === "create-fails-once";
-			return createFixtureConfig({
+			return createFixtureConfig(resources.deliveryUrl, {
 				failCreateOnce:
 					variant === "create-fails-once"
 						? () => {
@@ -47,16 +47,51 @@ export const minimalContractFixture = Object.freeze({
 				storageEscape: variant === "storage-escape",
 			});
 		},
-		createInvalidConfig: createInvalidFixtureConfig,
-		createService: createFixtureService,
+		createInvalidConfig: (kind, resources) =>
+			createInvalidFixtureConfig(kind, resources.deliveryUrl),
+		createService: (resources) => createFixtureService(resources.deliveryUrl),
 		pluginId: "fixture",
 		stateVersion: 2,
 	}),
 	hono: Object.freeze({
-		expectedBody: Object.freeze({ label: "isolated", value: 0 }),
-		expectedStatus: 200,
-		instanceIdProperty: "instanceId",
-		path: "/value" as const,
+		arrange: Object.freeze({
+			first: Object.freeze({
+				expected: Object.freeze({ label: "isolated", value: 5 }),
+				invoke: Object.freeze({
+					input: Object.freeze({ by: 5 }),
+					operation: "increment" as const,
+				}),
+			}),
+			second: Object.freeze({
+				expected: Object.freeze({ label: "isolated", value: 9 }),
+				invoke: Object.freeze({
+					input: Object.freeze({ by: 9 }),
+					operation: "increment" as const,
+				}),
+			}),
+		}),
+		expected: Object.freeze({
+			first: Object.freeze({
+				data: Object.freeze({ label: "isolated", value: 5 }),
+				status: 200,
+			}),
+			second: Object.freeze({
+				data: Object.freeze({ label: "isolated", value: 9 }),
+				status: 200,
+			}),
+		}),
+		normalize: (body: unknown) => {
+			if (typeof body !== "object" || body === null) return body;
+			return Object.freeze({
+				label: Reflect.get(body, "label"),
+				value: Reflect.get(body, "value"),
+			});
+		},
+		request: (connection) =>
+			Object.freeze({
+				responseBody: "json" as const,
+				url: `${connection.apiUrl}/value`,
+			}),
 	}),
 	invalid: Object.freeze({
 		configPath: Object.freeze(["label"]),
@@ -72,7 +107,7 @@ export const minimalContractFixture = Object.freeze({
 		Object.freeze({
 			cli: "flags" as const,
 			expected: Object.freeze({ queued: true as const }),
-			input: Object.freeze({ url: "data:text/plain,ok" }),
+			input: Object.freeze({ message: "contract operation" }),
 			key: "deliver" as const,
 		}),
 		Object.freeze({
@@ -97,7 +132,9 @@ export const minimalContractFixture = Object.freeze({
 	serviceKey: "fixture" as const,
 	trackedFetch: Object.freeze({
 		expected: Object.freeze({ queued: true as const }),
-		input: (testkitOwnedUrl: string) => Object.freeze({ url: testkitOwnedUrl }),
-		operation: "deliver" as const,
+		invoke: Object.freeze({
+			input: Object.freeze({ message: "tracked delivery" }),
+			operation: "deliver" as const,
+		}),
 	}),
 } satisfies PluginContractFixture<Services>);

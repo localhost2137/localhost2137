@@ -56,21 +56,38 @@ const fixture = {
 		storageEscape: { input: { name: "Ada" }, operation: "greet" as const },
 	},
 	harness: {
-		createConfig: ({ instrumentation, variant }) => {
+		createConfig: ({ instrumentation, resources, variant }) => {
 			instrumentation.record("create");
+			const deliveryUrl: string = resources.deliveryUrl;
+			void deliveryUrl;
 			void variant;
 			return config();
 		},
-		createInvalidConfig: (_kind: "config" | "seed") => ({}),
+		createInvalidConfig: (_kind: "config" | "seed", _resources) => ({}),
 		createService: configured,
 		pluginId: "typed",
 		stateVersion: 2,
 	},
 	hono: {
-		expectedBody: { greeting: "Hello, Ada" },
-		expectedStatus: 200,
-		instanceIdProperty: "instanceId",
-		path: "/greeting" as const,
+		arrange: {
+			first: {
+				expected: { greeting: "Hello, Ada" },
+				invoke: { input: { name: "Ada" }, operation: "greet" as const },
+			},
+			second: {
+				expected: { greeting: "Hello, Grace" },
+				invoke: { input: { name: "Grace" }, operation: "greet" as const },
+			},
+		},
+		expected: {
+			first: { data: { greeting: "Hello, Ada" }, status: 200 },
+			second: { data: { greeting: "Hello, Grace" }, status: 200 },
+		},
+		normalize: (body: unknown) => body,
+		request: (connection) => ({
+			responseBody: "json" as const,
+			url: `${connection.apiUrl}/greeting`,
+		}),
 	},
 	invalid: { configPath: ["greeting"], seedPath: ["name"] },
 	isolation: {
@@ -96,8 +113,7 @@ const fixture = {
 	serviceKey: "typed" as const,
 	trackedFetch: {
 		expected: { greeting: "Hello, dynamic" },
-		input: (_testkitOwnedUrl: string) => ({ name: "dynamic" }),
-		operation: "greet" as const,
+		invoke: { input: { name: "dynamic" }, operation: "greet" as const },
 	},
 } satisfies PluginContractFixture<Services>;
 

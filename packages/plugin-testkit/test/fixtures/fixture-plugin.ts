@@ -20,7 +20,7 @@ export interface FixturePluginDependencies {
 	readonly storageEscape?: boolean;
 }
 
-const configSchema = z.object({ label: z.string() });
+const configSchema = z.object({ eventsUrl: z.url(), label: z.string() });
 const seedSchema = z.object({ value: z.int() });
 type Config = z.output<typeof configSchema>;
 type State = Readonly<{ filePath(): string }>;
@@ -29,11 +29,11 @@ export function createFixturePlugin(dependencies: FixturePluginDependencies = {}
 	const operation = defineOperation<"fixture", State, Config>();
 	const deliver = operation({
 		description: "Queue one tracked outbound fetch",
-		input: z.object({ url: z.url() }),
+		input: z.object({ message: z.string() }),
 		output: z.object({ queued: z.literal(true) }),
 		run: (context, input): { readonly queued: true } => {
 			const delivery = context
-				.fetch(input.url)
+				.fetch(context.config.eventsUrl, { body: input.message, method: "POST" })
 				.then((response) => response.arrayBuffer())
 				.then(() => undefined);
 			void context.tasks.track("fixture delivery body", delivery).catch(() => undefined);
@@ -62,7 +62,6 @@ export function createFixturePlugin(dependencies: FixturePluginDependencies = {}
 	api.get("/value", async (context) => {
 		const runtime = context.get("lh");
 		return context.json({
-			instanceId: runtime.instanceId,
 			label: runtime.config.label,
 			value: await readValue(runtime.state.filePath()),
 		});
@@ -118,34 +117,40 @@ export const fixturePlugin = createFixturePlugin();
 export const fixtureConfig = defineConfig({
 	clock: { mode: "pinned", startAt: "2026-01-02T03:04:05.000Z" },
 	services: {
-		fixture: fixturePlugin({ config: { label: "isolated" }, seed: { value: 7 } }),
+		fixture: fixturePlugin({
+			config: { eventsUrl: "http://127.0.0.1:1/events", label: "isolated" },
+			seed: { value: 7 },
+		}),
 	},
 });
 
-export function createFixtureConfig(dependencies: FixturePluginDependencies = {}) {
+export function createFixtureConfig(
+	eventsUrl: string,
+	dependencies: FixturePluginDependencies = {},
+) {
 	return defineConfig({
 		clock: { mode: "pinned", startAt: "2026-01-02T03:04:05.000Z" },
 		services: {
 			fixture: createFixturePlugin(dependencies)({
-				config: { label: "isolated" },
+				config: { eventsUrl, label: "isolated" },
 				seed: { value: 7 },
 			}),
 		},
 	});
 }
 
-export function createFixtureService() {
+export function createFixtureService(eventsUrl: string) {
 	return createFixturePlugin()({
-		config: { label: "isolated" },
+		config: { eventsUrl, label: "isolated" },
 		seed: { value: 7 },
 	});
 }
 
-export function createInvalidFixtureConfig(kind: "config" | "seed"): unknown {
+export function createInvalidFixtureConfig(kind: "config" | "seed", eventsUrl: string): unknown {
 	const envelope =
 		kind === "config"
-			? { config: { label: 2137 }, seed: { value: 7 } }
-			: { config: { label: "isolated" }, seed: { value: "invalid" } };
+			? { config: { eventsUrl, label: 2137 }, seed: { value: 7 } }
+			: { config: { eventsUrl, label: "isolated" }, seed: { value: "invalid" } };
 	return {
 		services: {
 			fixture: Reflect.apply(createFixturePlugin(), undefined, [envelope]),

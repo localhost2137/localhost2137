@@ -20,7 +20,7 @@ export function assertContractEqual(actual: unknown, expected: unknown, caseName
 	);
 }
 
-function isContractDataEqual(actual: unknown, expected: unknown): boolean {
+export function isContractDataEqual(actual: unknown, expected: unknown): boolean {
 	if (Object.is(actual, expected)) return true;
 	if (Array.isArray(actual) || Array.isArray(expected)) {
 		return (

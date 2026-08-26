@@ -1,6 +1,8 @@
 import type { InstanceHandle, ServiceRecord } from "localhost2137";
 import { createTestRuntime, type TestRuntime } from "localhost2137/testing";
+import { capture, finishCaptured } from "./cleanup-owner.js";
 import { assertContract, dataProperty, isPlainRecord } from "./contract-assertions.js";
+import { type OwnedContractResources, withContractResources } from "./contract-resources.js";
 import type {
 	ContractHarnessVariant,
 	ContractInstrumentation,
@@ -39,21 +41,32 @@ export async function withOwnedInstances<Services extends ServiceRecord, Value>(
 		count: number;
 		instrumentation?: ContractInstrumentation;
 		seed?: boolean;
+		resources?: OwnedContractResources;
 		variant?: ContractHarnessVariant;
 	}>,
 	work: (context: OwnedRuntimeContext<Services>) => Promise<Value>,
 ): Promise<Value> {
+	if (!input.resources) {
+		return withContractResources({}, (resources) =>
+			withOwnedInstances(fixture, { ...input, resources }, work),
+		);
+	}
 	const config = fixture.harness.createConfig({
 		instrumentation: input.instrumentation ?? quietInstrumentation,
+		resources: input.resources.harness,
 		variant: input.variant ?? "base",
 	});
 	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
 	const instances: InstanceHandle<Services>[] = [];
 	const outcome = await capture(async () => {
+		const ids: string[] = [];
 		for (let index = 0; index < input.count; index += 1) {
 			instances.push(await runtime.createInstance({ seed: input.seed ?? false }));
+			const registered = await registeredInstanceIds(runtime, index + 1, input.caseName);
+			const id = registered.find((candidate) => !ids.includes(candidate));
+			assertContract(typeof id === "string", input.caseName, "new instance id was not unique");
+			if (id) ids.push(id);
 		}
-		const ids = await registeredInstanceIds(runtime, input.count, input.caseName);
 		for (const id of ids) {
 			await assertSelectedServiceIdentity(runtime.control, id, fixture, input.caseName);
 		}
@@ -77,11 +90,21 @@ export async function withOwnedRuntime<Services extends ServiceRecord, Value>(
 	fixture: PluginContractFixture<Services>,
 	input: Readonly<{
 		instrumentation: ContractInstrumentation;
+		resources?: OwnedContractResources;
 		variant: ContractHarnessVariant;
 	}>,
 	work: (runtime: TestRuntime<Services>) => Promise<Value>,
 ): Promise<Value> {
-	const config = fixture.harness.createConfig(input);
+	if (!input.resources) {
+		return withContractResources({}, (resources) =>
+			withOwnedRuntime(fixture, { ...input, resources }, work),
+		);
+	}
+	const config = fixture.harness.createConfig({
+		instrumentation: input.instrumentation,
+		resources: input.resources.harness,
+		variant: input.variant,
+	});
 	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
 	const outcome = await capture(() => work(runtime));
 	const cleanupFailures: unknown[] = [];
@@ -109,31 +132,4 @@ export async function registeredInstanceIds<Services extends ServiceRecord>(
 			return typeof id === "string" ? id : "invalid";
 		}),
 	);
-}
-
-export type Captured<Value> =
-	| Readonly<{ status: "fulfilled"; value: Value }>
-	| Readonly<{ reason: unknown; status: "rejected" }>;
-
-export async function capture<Value>(work: () => Promise<Value>): Promise<Captured<Value>> {
-	try {
-		return Object.freeze({ status: "fulfilled", value: await work() });
-	} catch (reason) {
-		return Object.freeze({ reason, status: "rejected" });
-	}
-}
-
-export function finishCaptured<Value>(
-	outcome: Captured<Value>,
-	cleanupFailures: readonly unknown[],
-	label: string,
-): Value {
-	if (outcome.status === "rejected" && cleanupFailures.length > 0) {
-		throw new AggregateError([outcome.reason, ...cleanupFailures], `${label} and cleanup failed.`);
-	}
-	if (outcome.status === "rejected") throw outcome.reason;
-	if (cleanupFailures.length > 0) {
-		throw new AggregateError(cleanupFailures, `${label} cleanup failed.`);
-	}
-	return outcome.value;
 }

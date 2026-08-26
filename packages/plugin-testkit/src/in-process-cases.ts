@@ -1,12 +1,13 @@
-import { createServer } from "node:http";
 import type { ServiceRecord } from "localhost2137";
 import {
 	assertContract,
 	assertContractEqual,
 	dataProperty,
 	errorCode,
+	isContractDataEqual,
 	isPlainRecord,
 } from "./contract-assertions.js";
+import { withContractResources } from "./contract-resources.js";
 import type { PluginContractCase, PluginContractFixture } from "./contract-types.js";
 import { withOwnedInstances } from "./runtime-owner.js";
 import { assertSelectedServiceIdentity } from "./service-identity.js";
@@ -112,26 +113,45 @@ async function honoContract<Services extends ServiceRecord>(
 	fixture: PluginContractFixture<Services>,
 ): Promise<void> {
 	const name = "public Hono routes receive instance context";
-	await withOwnedInstances(fixture, { caseName: name, count: 1 }, async ({ ids, instances }) => {
-		const connection = selectedConnection(requireItem(instances, 0), fixture.serviceKey);
-		const baseUrl = dataProperty(connection, fixture.connection.valueKey);
-		assertContract(typeof baseUrl === "string", name, "selected connection URL is missing");
-		if (typeof baseUrl !== "string") return;
-		const response = await fetch(`${baseUrl}${fixture.hono.path}`);
-		const body: unknown = await response.json();
-		assertContractEqual(response.status, fixture.hono.expectedStatus, name);
-		assertContract(isPlainRecord(body), name, "Hono response body must be an object");
-		if (!isPlainRecord(body)) return;
-		assertContractEqual(
-			dataProperty(body, fixture.hono.instanceIdProperty),
-			requireItem(ids, 0),
-			name,
-		);
-		const businessBody = Object.fromEntries(
-			Object.entries(body).filter(([key]) => key !== fixture.hono.instanceIdProperty),
-		);
-		assertContractEqual(businessBody, fixture.hono.expectedBody, name);
-	});
+	assertContract(
+		!isContractDataEqual(fixture.hono.expected.first.data, fixture.hono.expected.second.data),
+		name,
+		"semantic HTTP expectations must differ between instances",
+	);
+	await withOwnedInstances(
+		fixture,
+		{ caseName: name, count: 2 },
+		async ({ ids, instances, runtime }) => {
+			const firstId = requireItem(ids, 0);
+			const secondId = requireItem(ids, 1);
+			assertContractEqual(
+				await execute(runtime.control, firstId, fixture, fixture.hono.arrange.first.invoke),
+				fixture.hono.arrange.first.expected,
+				name,
+			);
+			assertContractEqual(
+				await execute(runtime.control, secondId, fixture, fixture.hono.arrange.second.invoke),
+				fixture.hono.arrange.second.expected,
+				name,
+			);
+			const [first, second] = await Promise.all([
+				requestSemanticData(
+					fixture.hono.request(
+						selectedConnection(requireItem(instances, 0), fixture.serviceKey) as never,
+					),
+					fixture.hono.normalize,
+				),
+				requestSemanticData(
+					fixture.hono.request(
+						selectedConnection(requireItem(instances, 1), fixture.serviceKey) as never,
+					),
+					fixture.hono.normalize,
+				),
+			]);
+			assertContractEqual(first, fixture.hono.expected.first, name);
+			assertContractEqual(second, fixture.hono.expected.second, name);
+		},
+	);
 }
 
 async function connectionContract<Services extends ServiceRecord>(
@@ -205,63 +225,67 @@ async function trackedFetchContract<Services extends ServiceRecord>(
 	fixture: PluginContractFixture<Services>,
 ): Promise<void> {
 	const name = "tracked fetch work is drained by idle";
-	await withOwnedInstances(fixture, { caseName: name, count: 1 }, async ({ ids, runtime }) => {
-		const entered = deferred<void>();
-		const release = deferred<void>();
-		let deliveries = 0;
-		const server = createServer(async (_request, response) => {
-			deliveries += 1;
-			entered.resolve();
-			await release.promise;
-			response.writeHead(204).end();
-		});
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", reject);
-			server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-		});
-		const address = server.address();
-		if (!address || typeof address === "string") {
-			server.close();
-			throw new Error("Contract delivery server has no TCP address.");
-		}
-		let scenarioFailure: unknown;
-		let didFail = false;
-		try {
-			const id = requireItem(ids, 0);
-			const actual = await runtime.control.executeOperation(
-				id,
-				fixture.serviceKey,
-				fixture.trackedFetch.operation,
-				fixture.trackedFetch.input(`http://127.0.0.1:${address.port}/delivery`) as never,
-			);
-			assertContractEqual(actual, fixture.trackedFetch.expected, name);
-			await entered.promise;
-			let idleSettled = false;
-			const idle = runtime.control.idle(id).then(() => {
-				idleSettled = true;
-			});
-			await Promise.resolve();
-			assertContract(!idleSettled, name, "idle settled before tracked fetch completed");
-			release.resolve();
-			await idle;
-			assertContractEqual(deliveries, 1, name);
-		} catch (cause) {
-			didFail = true;
-			scenarioFailure = cause;
-		}
-		release.resolve();
-		const closeFailure = await new Promise<unknown>((resolve) =>
-			server.close((cause) => resolve(cause)),
+	await withContractResources({ holdDelivery: true }, async (resources) => {
+		await withOwnedInstances(
+			fixture,
+			{ caseName: name, count: 1, resources },
+			async ({ ids, runtime }) => {
+				const id = requireItem(ids, 0);
+				const actual = await runtime.control.executeOperation(
+					id,
+					fixture.serviceKey,
+					fixture.trackedFetch.invoke.operation,
+					fixture.trackedFetch.invoke.input as never,
+				);
+				assertContractEqual(actual, fixture.trackedFetch.expected, name);
+				await waitForFirstDelivery(resources.deliveries.entered, name);
+				let idleSettled = false;
+				const idle = runtime.control.idle(id).then(() => {
+					idleSettled = true;
+				});
+				await Promise.resolve();
+				assertContract(!idleSettled, name, "idle settled before tracked fetch completed");
+				resources.deliveries.release();
+				await idle;
+				assertContractEqual(resources.deliveries.count(), 1, name);
+			},
 		);
-		if (didFail && closeFailure) {
-			throw new AggregateError(
-				[scenarioFailure, closeFailure],
-				"Tracked fetch case and server cleanup failed.",
-			);
-		}
-		if (didFail) throw scenarioFailure;
-		if (closeFailure) throw closeFailure;
 	});
+}
+
+async function requestSemanticData(
+	descriptor: Readonly<{
+		body?: string;
+		headers?: Readonly<Record<string, string>>;
+		method?: string;
+		responseBody: "json" | "text";
+		url: string;
+	}>,
+	normalize: (body: unknown) => unknown,
+): Promise<Readonly<{ data: unknown; status: number }>> {
+	const response = await fetch(descriptor.url, {
+		...(descriptor.body === undefined ? {} : { body: descriptor.body }),
+		...(descriptor.headers === undefined ? {} : { headers: descriptor.headers }),
+		...(descriptor.method === undefined ? {} : { method: descriptor.method }),
+	});
+	const body: unknown =
+		descriptor.responseBody === "json" ? await response.json() : await response.text();
+	return Object.freeze({ data: normalize(body), status: response.status });
+}
+
+async function waitForFirstDelivery(delivery: Promise<void>, caseName: string): Promise<void> {
+	let timeout: NodeJS.Timeout | undefined;
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timeout = setTimeout(
+			() => reject(new Error(`${caseName}: operation did not reach the owned delivery receiver`)),
+			1_000,
+		);
+	});
+	try {
+		await Promise.race([delivery, deadline]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
 }
 
 async function resetContract<Services extends ServiceRecord>(
@@ -355,14 +379,6 @@ function toCliName(value: string): string {
 		.replace(/([a-z\d])([A-Z])/g, "$1-$2")
 		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
 		.toLowerCase();
-}
-
-function deferred<Value>() {
-	let resolvePromise: (value: Value | PromiseLike<Value>) => void = () => undefined;
-	const promise = new Promise<Value>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return Object.freeze({ promise, resolve: resolvePromise });
 }
 
 function contractCase(name: string, run: () => Promise<void>): PluginContractCase {

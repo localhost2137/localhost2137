@@ -114,17 +114,17 @@ describe("plugin contract testkit API", () => {
 
 	it("preserves undefined rejections after owned runtime cleanup", async () => {
 		const candidate = mutableFixture();
-		candidate.trackedFetch = {
-			...candidate.trackedFetch,
-			input: () => {
+		candidate.hono = {
+			...candidate.hono,
+			normalize: () => {
 				throw undefined;
 			},
 		};
-		const trackedFetchCase = createPluginContractCases(candidate as never)[13];
-		if (!trackedFetchCase) throw new TypeError("Tracked-fetch case is missing.");
+		const honoCase = createPluginContractCases(candidate as never)[10];
+		if (!honoCase) throw new TypeError("Semantic HTTP case is missing.");
 		let didReject = false;
 		try {
-			await trackedFetchCase.run();
+			await honoCase.run();
 		} catch (cause) {
 			didReject = true;
 			expect(cause).toBeUndefined();
@@ -152,12 +152,29 @@ describe("plugin contract testkit API", () => {
 		const candidate = mutableFixture();
 		candidate.harness = {
 			...candidate.harness,
-			createConfig: ({ instrumentation }) =>
-				createFixtureConfig({ record: instrumentation.record }),
+			createConfig: ({ instrumentation, resources }) =>
+				createFixtureConfig(resources.deliveryUrl, { record: instrumentation.record }),
 		};
 		await expect(caseAt(candidate, 8).run()).rejects.toThrow(
 			"selected operation did not reject its invalid output",
 		);
+	});
+
+	it("bounds a tracked operation that never reaches its configured receiver", async () => {
+		const candidate = mutableFixture();
+		candidate.harness = {
+			...candidate.harness,
+			createConfig: ({ instrumentation }) =>
+				createFixtureConfig("data:text/plain,not-the-owned-receiver", {
+					record: instrumentation.record,
+				}),
+		};
+		const startedAt = Date.now();
+		await expect(caseAt(candidate, 13).run()).rejects.toThrow(
+			"operation did not reach the owned delivery receiver",
+		);
+		expect(Date.now() - startedAt).toBeLessThan(2_500);
+		await expect(caseAt(mutableFixture(), 13).run()).resolves.toBeUndefined();
 	});
 });
 
@@ -167,6 +184,7 @@ function mutableFixture() {
 		authoring: { ...minimalContractFixture.authoring },
 		durability: { ...minimalContractFixture.durability },
 		harness: { ...minimalContractFixture.harness },
+		hono: { ...minimalContractFixture.hono },
 		operations: [...minimalContractFixture.operations] as unknown[],
 		trackedFetch: { ...minimalContractFixture.trackedFetch },
 	};

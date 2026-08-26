@@ -8,6 +8,7 @@ import {
 	isPlainRecord,
 	isRecordObject,
 } from "./contract-assertions.js";
+import { withContractResources } from "./contract-resources.js";
 import type { PluginContractCase, PluginContractFixture } from "./contract-types.js";
 import { collisionServiceKeys, issuePath } from "./fixture-validation.js";
 import {
@@ -48,14 +49,20 @@ async function invalidSelectedServiceCase<Services extends ServiceRecord>(
 		kind === "config"
 			? "invalid config reports its schema path"
 			: "invalid seed reports its schema path";
-	const config = fixture.harness.createInvalidConfig(kind);
 	const expectedPath = issuePath([
 		"services",
 		fixture.serviceKey,
 		kind,
 		...(kind === "config" ? fixture.invalid.configPath : fixture.invalid.seedPath),
 	]);
-	await expectConfigInvalid(config, name, (issue) => dataProperty(issue, "path") === expectedPath);
+	await withContractResources({}, async ({ harness }) => {
+		const config = fixture.harness.createInvalidConfig(kind, harness);
+		await expectConfigInvalid(
+			config,
+			name,
+			(issue) => dataProperty(issue, "path") === expectedPath,
+		);
+	});
 }
 
 async function collisionCase<Services extends ServiceRecord>(
@@ -63,12 +70,6 @@ async function collisionCase<Services extends ServiceRecord>(
 ): Promise<void> {
 	const name = "connection environment collisions identify the configuration path";
 	const [first, second] = collisionServiceKeys(fixture.serviceKey);
-	const config = {
-		services: {
-			[first]: fixture.harness.createService(),
-			[second]: fixture.harness.createService(),
-		},
-	};
 	const expectedPath = issuePath([
 		"services",
 		second,
@@ -77,17 +78,25 @@ async function collisionCase<Services extends ServiceRecord>(
 		"env",
 		fixture.connection.environmentName,
 	]);
-	await expectConfigInvalid(config, name, (issue) => {
-		const message = dataProperty(issue, "message");
-		return (
-			dataProperty(issue, "code") === "env_collision" &&
-			dataProperty(issue, "path") === expectedPath &&
-			dataProperty(issue, "serviceKey") === second &&
-			typeof message === "string" &&
-			message.includes(`"${first}"`) &&
-			message.includes(`"${second}"`) &&
-			message.includes(`"${fixture.connection.environmentName}"`)
-		);
+	await withContractResources({}, async ({ harness }) => {
+		const config = {
+			services: {
+				[first]: fixture.harness.createService(harness),
+				[second]: fixture.harness.createService(harness),
+			},
+		};
+		await expectConfigInvalid(config, name, (issue) => {
+			const message = dataProperty(issue, "message");
+			return (
+				dataProperty(issue, "code") === "env_collision" &&
+				dataProperty(issue, "path") === expectedPath &&
+				dataProperty(issue, "serviceKey") === second &&
+				typeof message === "string" &&
+				message.includes(`"${first}"`) &&
+				message.includes(`"${second}"`) &&
+				message.includes(`"${fixture.connection.environmentName}"`)
+			);
+		});
 	});
 }
 

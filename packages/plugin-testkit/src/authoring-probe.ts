@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ServiceRecord } from "localhost2137";
+import { capture, finishCaptured } from "./cleanup-owner.js";
 import { assertContract, assertContractEqual, isPlainRecord } from "./contract-assertions.js";
 import type { PluginContractCase, PluginContractFixture } from "./contract-types.js";
-import { capture, finishCaptured } from "./runtime-owner.js";
 
 const CASE_NAME = "authoring has no import or configuration side effects";
 const CHILD_DEADLINE_MS = 5_000;

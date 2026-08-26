@@ -79,8 +79,13 @@ export interface ContractInstrumentation {
 	record(event: ContractLifecycleEvent): void;
 }
 
+export interface ContractHarnessResources {
+	readonly deliveryUrl: string;
+}
+
 export interface ContractHarnessConfigOptions {
 	readonly instrumentation: ContractInstrumentation;
+	readonly resources: ContractHarnessResources;
 	readonly variant: ContractHarnessVariant;
 }
 
@@ -91,9 +96,9 @@ export interface SelectedPluginHarness<
 	/** Build the selected service through the same production plugin factory used by every variant. */
 	createConfig(options: ContractHarnessConfigOptions): RuntimeConfig<Services>;
 	/** Build an intentionally invalid selected-service envelope. This pre-readiness variant is trusted. */
-	createInvalidConfig(kind: "config" | "seed"): unknown;
+	createInvalidConfig(kind: "config" | "seed", resources: ContractHarnessResources): unknown;
 	/** Build one base service so the testkit can mount the same family twice for collision checks. */
-	createService(): Services[ServiceKey];
+	createService(resources: ContractHarnessResources): Services[ServiceKey];
 	readonly pluginId: string;
 	readonly stateVersion: number;
 }
@@ -122,17 +127,12 @@ export interface ContractDurabilityFixture<
 	readonly write: ContractOperationCall<Services, ServiceKey>;
 }
 
-export interface ContractDynamicInputFixture<
-	Services extends ServiceRecord,
-	ServiceKey extends ContractServiceKey<Services>,
-	OperationKey extends ContractOperationKey<Services, ServiceKey> = ContractOperationKey<
-		Services,
-		ServiceKey
-	>,
-> {
-	readonly expected: ContractOperationOutput<Services, ServiceKey, OperationKey>;
-	input(testkitOwnedUrl: string): ContractOperationInput<Services, ServiceKey, OperationKey>;
-	readonly operation: OperationKey;
+export interface ContractHttpRequestDescriptor {
+	readonly body?: string;
+	readonly headers?: Readonly<Record<string, string>>;
+	readonly method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
+	readonly responseBody: "json" | "text";
+	readonly url: string;
 }
 
 interface PluginContractFixtureBase<
@@ -151,10 +151,24 @@ interface PluginContractFixtureBase<
 	}>;
 	readonly harness: SelectedPluginHarness<Services, ServiceKey>;
 	readonly hono: Readonly<{
-		readonly expectedBody: unknown;
-		readonly expectedStatus: number;
-		readonly instanceIdProperty: string;
-		readonly path: `/${string}`;
+		readonly arrange: Readonly<{
+			readonly first: Readonly<{
+				expected: unknown;
+				invoke: ContractOperationCall<Services, ServiceKey>;
+			}>;
+			readonly second: Readonly<{
+				expected: unknown;
+				invoke: ContractOperationCall<Services, ServiceKey>;
+			}>;
+		}>;
+		readonly expected: Readonly<{
+			readonly first: Readonly<{ data: unknown; status: number }>;
+			readonly second: Readonly<{ data: unknown; status: number }>;
+		}>;
+		normalize(responseBody: unknown): unknown;
+		request(
+			connection: InstanceHandle<Services>[ServiceKey]["connection"],
+		): ContractHttpRequestDescriptor;
 	}>;
 	readonly invalid: Readonly<{
 		readonly configPath: readonly PropertyKey[];
@@ -174,7 +188,10 @@ interface PluginContractFixtureBase<
 		readonly read: ContractOperationCall<Services, ServiceKey>;
 	}>;
 	readonly serviceKey: ServiceKey;
-	readonly trackedFetch: ContractDynamicInputFixture<Services, ServiceKey>;
+	readonly trackedFetch: Readonly<{
+		readonly expected: unknown;
+		readonly invoke: ContractOperationCall<Services, ServiceKey>;
+	}>;
 }
 
 /**

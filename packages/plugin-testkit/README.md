@@ -5,8 +5,11 @@ with any test runner, or execute them serially with `runPluginContract`.
 
 The fixture declares inputs and expected data. The testkit owns runtime and instance creation,
 operation execution, control introspection, local HTTP delivery, daemon restarts, assertions, and
-failure-safe cleanup. Its only black-box callback receives a testkit-owned delivery URL and must only
-construct the selected operation's dynamic input.
+failure-safe cleanup. Before configuration, it creates a frozen resource descriptor containing the
+owned delivery URL and passes that descriptor to the selected-plugin harness. Operation inputs stay
+declarative. HTTP fixture callbacks may only build a request descriptor from the selected
+connection and normalize a semantic response body; the testkit performs the requests and
+assertions.
 
 ## Selected-plugin harness
 
@@ -22,7 +25,9 @@ The invalid config, invalid seed, failed-create, failed-update, and future-versi
 can fail before introspection and therefore remain a documented harness trust boundary. Identity is
 nominal rather than cryptographic: a dishonest harness can reproduce an ID and inventory while
 substituting another implementation. Review must ensure the harness really calls the production
-factory, and that the dynamic-input callback only builds input from its supplied URL.
+factory, uses the supplied resource descriptor only as production configuration, and exposes no
+test-only operation or response field. The two-instance HTTP scenario must arrange distinct state
+through selected production operations and observe it through a public route.
 
 ## Child-process checks
 
@@ -39,6 +44,7 @@ variables and builds the same plugin-family variant:
 
 - `LOCALHOST2137_CONTRACT_STORAGE`
 - `LOCALHOST2137_CONTRACT_EVENTS`
+- `LOCALHOST2137_CONTRACT_DELIVERY_URL`
 - `LOCALHOST2137_CONTRACT_VERSION`
 - `LOCALHOST2137_CONTRACT_FAIL_UPDATE`
 
