@@ -95,7 +95,7 @@ Verify at least:
 - two instances cannot share state;
 - operation input and output validation is real;
 - public routes receive only their instance's running context;
-- reset, explicit seed, restart, upgrade, and future-version rejection behave correctly;
+- reset, explicit seed, restart, and future-version rejection behave correctly, plus upgrade behavior when a real predecessor exists;
 - outbound work is tracked and recovery produces no duplicate durable effect;
 - connection URLs and exported environment values are instance-correct;
 - package typecheck, build, tests, and public import surface pass.
