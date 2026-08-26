@@ -12,7 +12,6 @@ import type { PluginContractCase, PluginContractFixture } from "./contract-types
 import { collisionServiceKeys, issuePath } from "./fixture-validation.js";
 import {
 	lifecycleRecorder,
-	quietInstrumentation,
 	registeredInstanceIds,
 	withOwnedInstances,
 	withOwnedRuntime,

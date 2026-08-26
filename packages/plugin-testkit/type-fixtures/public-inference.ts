@@ -1,5 +1,7 @@
 import {
+	type ContractOperationInput,
 	type ContractOperationKey,
+	type ContractOperationOutput,
 	createPluginContractCases,
 	type PluginContractFixture,
 	runPluginContract,
@@ -31,86 +33,88 @@ const plugin = definePlugin({
 		start: (): State => ({ ready: true }),
 	},
 	operations: { greet },
-	stateVersion: 1,
+	stateVersion: 2,
 });
-const config = defineConfig({
-	services: { typed: plugin({ config: { greeting: "Hello" } }) },
-});
-const observation = () => ({ actual: true, expected: true });
-const invalid = { create: () => ({}), expectedPath: "$.services.typed" };
+const configured = () => plugin({ config: { greeting: "Hello" } });
+const config = () => defineConfig({ services: { typed: configured() } });
+type Services = ReturnType<typeof config>["services"];
 
 const fixture = {
-	authoring: { sideEffects: observation },
+	authoring: { exportName: "config", module: new URL("./typed.config.js", import.meta.url) },
+	connection: { environmentName: "TYPED_URL", valueKey: "apiUrl" as const },
 	durability: {
-		futureVersion: observation,
-		restartPersistence: observation,
-		stateUpgrade: observation,
+		configModule: new URL("./typed.config.js", import.meta.url),
+		expectedInitial: { greeting: "Hello, Ada" },
+		expectedPersisted: { greeting: "Hello, Ada" },
+		expectedWrite: { greeting: "Hello, Grace" },
+		read: { input: { name: "Ada" }, operation: "greet" as const },
+		versions: { current: 2, future: 3, old: 1 },
+		write: { input: { name: "Grace" }, operation: "greet" as const },
 	},
-	invalid: { config: invalid, environmentCollision: invalid, seed: invalid },
-	lifecycle: {
-		createFailureRecovery: observation,
-		ordering: observation,
-		updateFailureRecovery: observation,
+	faults: {
+		invalidOutput: { input: { name: "Ada" }, operation: "greet" as const },
+		storageEscape: { input: { name: "Ada" }, operation: "greet" as const },
 	},
-	probes: {
-		connection: {
-			environmentName: "TYPED_URL",
-			readUrl: (instance) => instance.typed.connection.apiUrl,
+	harness: {
+		createConfig: ({ instrumentation, variant }) => {
+			instrumentation.record("create");
+			void variant;
+			return config();
 		},
-		honoContext: async (instance) => {
-			// @ts-expect-error fixture callbacks preserve configured operation input types
-			void instance.typed.greet({ name: 2137 });
-			return {
-				actual: await instance.typed.greet({ name: "Ada" }),
-				expected: { greeting: "Hello, Ada" },
-			};
-		},
-		isolation: {
-			expectedFresh: "Hello, Ada",
-			expectedMutated: "Hello, Grace",
-			mutate: async (instance) => {
-				await instance.typed.greet({ name: "Grace" });
-			},
-			read: async (instance) => (await instance.typed.greet({ name: "Ada" })).greeting,
-		},
-		outputValidation: observation,
-		reset: {
-			expectedEmpty: "Hello, Ada",
-			expectedSeeded: "Hello, Ada",
-			mutate: async (instance) => {
-				await instance.typed.greet({ name: "Grace" });
-			},
-			read: async (instance) => (await instance.typed.greet({ name: "Ada" })).greeting,
-		},
-		storageEscape: observation,
-		trackedFetchAndIdle: async (instance) => ({
-			actual: await instance.typed.greet({ name: "Ada" }),
+		createInvalidConfig: (_kind: "config" | "seed") => ({}),
+		createService: configured,
+		pluginId: "typed",
+		stateVersion: 2,
+	},
+	hono: {
+		expectedBody: { greeting: "Hello, Ada" },
+		expectedStatus: 200,
+		instanceIdProperty: "instanceId",
+		path: "/greeting" as const,
+	},
+	invalid: { configPath: ["greeting"], seedPath: ["name"] },
+	isolation: {
+		expectedFresh: { greeting: "Hello, Ada" },
+		expectedMutated: { greeting: "Hello, Grace" },
+		mutate: { input: { name: "Grace" }, operation: "greet" as const },
+		read: { input: { name: "Ada" }, operation: "greet" as const },
+	},
+	operations: [
+		{
+			cli: "flags" as const,
 			expected: { greeting: "Hello, Ada" },
-		}),
+			input: { name: "Ada" },
+			key: "greet" as const,
+		},
+	],
+	reset: {
+		expectedEmpty: { greeting: "Hello, Ada" },
+		expectedSeeded: { greeting: "Hello, Ada" },
+		mutate: { input: { name: "Grace" }, operation: "greet" as const },
+		read: { input: { name: "Ada" }, operation: "greet" as const },
 	},
-	world: {
-		createConfig: () => config,
-		operations: [
-			{
-				cli: "flags" as const,
-				invoke: async (instance) => ({
-					actual: await instance.typed.greet({ name: "Ada" }),
-					expected: { greeting: "Hello, Ada" },
-				}),
-				key: "greet",
-			},
-		],
-		serviceKey: "typed" as const,
+	serviceKey: "typed" as const,
+	trackedFetch: {
+		expected: { greeting: "Hello, dynamic" },
+		input: (_testkitOwnedUrl: string) => ({ name: "dynamic" }),
+		operation: "greet" as const,
 	},
-} satisfies PluginContractFixture<typeof config.services>;
+} satisfies PluginContractFixture<Services>;
 
 const cases = createPluginContractCases(fixture);
 const caseName: string | undefined = cases[0]?.name;
-const operationKey: "greet" | undefined = fixture.world.operations[0]?.key;
+const operationKey: "greet" | undefined = fixture.operations[0]?.key;
+const validInput: ContractOperationInput<Services, "typed", "greet"> = { name: "Ada" };
+const validOutput: ContractOperationOutput<Services, "typed", "greet"> = { greeting: "Hello" };
 // @ts-expect-error selected-service operation keys reject misspellings
-const missingOperation: ContractOperationKey<typeof config.services, "typed"> = "missing";
+const missingOperation: ContractOperationKey<Services, "typed"> = "missing";
+// @ts-expect-error declarative operation input preserves the production operation input type
+const invalidInput: ContractOperationInput<Services, "typed", "greet"> = { name: 2137 };
 const run: Promise<void> = runPluginContract(fixture);
 void caseName;
+void invalidInput;
 void missingOperation;
 void operationKey;
 void run;
+void validInput;
+void validOutput;

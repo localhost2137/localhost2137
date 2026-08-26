@@ -1,27 +1,49 @@
 import { describe, expect, it } from "vitest";
 import { createPluginContractCases, PluginContractAssertionError } from "../src/index.js";
+import { createFixtureConfig } from "./fixtures/fixture-plugin.js";
+import { minimalContractFixture } from "./fixtures/minimal-contract-fixture.js";
+
+const CASE_NAMES = Object.freeze([
+	"authoring has no import or configuration side effects",
+	"invalid config reports its schema path",
+	"invalid seed reports its schema path",
+	"connection environment collisions identify the configuration path",
+	"lifecycle follows create/update/start/seed/stop order",
+	"create failure is recoverable",
+	"update failure is recoverable",
+	"operations validate, introspect, and expose unique CLI representations",
+	"invalid operation output is rejected",
+	"simultaneous instances never share state",
+	"public Hono routes receive instance context",
+	"plugin storage rejects escape paths",
+	"connections and environment values are instance-correct",
+	"tracked fetch work is drained by idle",
+	"reset is empty and reset with seed applies once",
+	"state persists across runtime restart",
+	"future stored state versions are rejected",
+	"state-version upgrades preserve data",
+]);
 
 describe("plugin contract testkit API", () => {
-	it("publishes a fixed, immutable case inventory", () => {
-		const cases: unknown = Reflect.apply(createPluginContractCases, undefined, [fixture()]);
-		expect(cases).toHaveLength(18);
+	it("publishes the fixed, immutable case inventory", () => {
+		const cases = createPluginContractCases(minimalContractFixture);
 		expect(cases).toSatisfy(Object.isFrozen);
-		expect(new Set(Reflect.apply(Array.prototype.map, cases, [caseName]))).toHaveLength(18);
+		expect(cases.map(({ name }) => name)).toEqual(CASE_NAMES);
 	});
 
 	it.each([
 		["an empty operation inventory", []],
-		["an invalid operation key", [{ cli: "flags", invoke: observe, key: "not-valid" }]],
+		["an invalid operation key", [{ cli: "flags", expected: {}, input: {}, key: "not-valid" }]],
 		[
 			"a duplicate operation key",
 			[
-				{ cli: "flags", invoke: observe, key: "inspect" },
-				{ cli: "json", invoke: observe, key: "inspect" },
+				{ cli: "flags", expected: {}, input: {}, key: "read" },
+				{ cli: "json", expected: {}, input: {}, key: "read" },
 			],
 		],
 	])("rejects %s", (_label, operations) => {
-		const candidate = fixture();
-		candidate.world.operations = operations;
+		const candidate = mutableFixture();
+		candidate.operations = operations;
 		expect(() => Reflect.apply(createPluginContractCases, undefined, [candidate])).toThrow(
 			TypeError,
 		);
@@ -41,79 +63,78 @@ describe("plugin contract testkit API", () => {
 			code: "CONFIG_INVALID",
 			details: { issues: [{ path: "$.services.fixture" }] },
 		});
-		const candidate = fixture();
-		candidate.invalid.config.create = () => {
-			throw forged;
+		const candidate = mutableFixture();
+		candidate.harness = {
+			...candidate.harness,
+			createInvalidConfig: () => {
+				throw forged;
+			},
 		};
-		const cases: unknown = Reflect.apply(createPluginContractCases, undefined, [candidate]);
-		const invalidConfigCase = Array.isArray(cases) ? cases[1] : undefined;
-		await expect(
-			Reflect.apply(Reflect.get(invalidConfigCase, "run"), invalidConfigCase, []),
-		).rejects.toBe(forged);
+		const invalidConfigCase = createPluginContractCases(candidate as never)[1];
+		if (!invalidConfigCase) throw new TypeError("Invalid-config case is missing.");
+		await expect(invalidConfigCase.run()).rejects.toBe(forged);
 	});
 
-	it("preserves undefined rejections after owned cleanup", async () => {
-		const candidate = fixture();
-		candidate.probes.honoContext = () => Promise.reject(undefined);
-		const cases: unknown = Reflect.apply(createPluginContractCases, undefined, [candidate]);
-		const honoCase = Array.isArray(cases) ? cases[10] : undefined;
+	it("preserves undefined rejections after owned runtime cleanup", async () => {
+		const candidate = mutableFixture();
+		candidate.trackedFetch = {
+			...candidate.trackedFetch,
+			input: () => {
+				throw undefined;
+			},
+		};
+		const trackedFetchCase = createPluginContractCases(candidate as never)[13];
+		if (!trackedFetchCase) throw new TypeError("Tracked-fetch case is missing.");
 		let didReject = false;
 		try {
-			await Reflect.apply(Reflect.get(honoCase, "run"), honoCase, []);
+			await trackedFetchCase.run();
 		} catch (cause) {
 			didReject = true;
 			expect(cause).toBeUndefined();
 		}
 		expect(didReject).toBe(true);
 	});
+
+	it("rejects a fixture that names the wrong selected plugin", async () => {
+		const candidate = mutableFixture();
+		candidate.harness = { ...candidate.harness, pluginId: "different" };
+		await expect(caseAt(candidate, 7).run()).rejects.toThrow(
+			"selected plugin id differs from public introspection",
+		);
+	});
+
+	it("rejects a fixture whose inventory omits a selected-plugin operation", async () => {
+		const candidate = mutableFixture();
+		candidate.operations = candidate.operations.slice(0, 2);
+		await expect(caseAt(candidate, 7).run()).rejects.toThrow(
+			"selected operation inventory differs from the declared fixture inventory",
+		);
+	});
+
+	it("rejects a harness that substitutes the base variant for a requested fault", async () => {
+		const candidate = mutableFixture();
+		candidate.harness = {
+			...candidate.harness,
+			createConfig: ({ instrumentation }) =>
+				createFixtureConfig({ record: instrumentation.record }),
+		};
+		await expect(caseAt(candidate, 8).run()).rejects.toThrow(
+			"selected operation did not reject its invalid output",
+		);
+	});
 });
 
-function fixture() {
-	const invalid = { create: () => ({}), expectedPath: "$.services.fixture" };
+function mutableFixture() {
 	return {
-		authoring: { sideEffects: observe },
-		durability: {
-			futureVersion: observe,
-			restartPersistence: observe,
-			stateUpgrade: observe,
-		},
-		invalid: { config: invalid, environmentCollision: invalid, seed: invalid },
-		lifecycle: {
-			createFailureRecovery: observe,
-			ordering: observe,
-			updateFailureRecovery: observe,
-		},
-		probes: {
-			connection: { environmentName: "FIXTURE_URL", readUrl: () => "http://localhost" },
-			honoContext: observe,
-			isolation: {
-				expectedFresh: 0,
-				expectedMutated: 1,
-				mutate: async () => undefined,
-				read: async () => 0,
-			},
-			outputValidation: observe,
-			reset: {
-				expectedEmpty: 0,
-				expectedSeeded: 1,
-				mutate: async () => undefined,
-				read: async () => 0,
-			},
-			storageEscape: observe,
-			trackedFetchAndIdle: observe,
-		},
-		world: {
-			createConfig: () => ({ services: {} }),
-			operations: [{ cli: "flags", invoke: observe, key: "inspect" }],
-			serviceKey: "fixture",
-		},
+		...minimalContractFixture,
+		harness: { ...minimalContractFixture.harness },
+		operations: [...minimalContractFixture.operations] as unknown[],
+		trackedFetch: { ...minimalContractFixture.trackedFetch },
 	};
 }
 
-function caseName(value: unknown): unknown {
-	return typeof value === "object" && value !== null ? Reflect.get(value, "name") : undefined;
-}
-
-function observe() {
-	return { actual: true, expected: true };
+function caseAt(candidate: ReturnType<typeof mutableFixture>, index: number) {
+	const contractCase = createPluginContractCases(candidate as never)[index];
+	if (!contractCase) throw new TypeError(`Contract case ${index} is missing.`);
+	return contractCase;
 }

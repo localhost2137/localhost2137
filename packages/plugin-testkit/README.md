@@ -1,13 +1,46 @@
 # `@localhost2137/plugin-testkit`
 
-Framework-neutral contract cases for localhost2137 plugins. Register the returned cases with any
-test runner, or execute the full suite with `runPluginContract`.
+Framework-neutral contract cases for localhost2137 plugins. Register the returned 18 named cases
+with any test runner, or execute them serially with `runPluginContract`.
 
-The fixture is trusted executable test code. The testkit owns runtime orchestration, cleanup,
-generic invariants, and assertions, but it cannot infer plugin-specific business semantics. Every
-factory and probe must exercise the selected configured service and return observed facts; returning
-a synthetic `{ actual, expected }` match proves nothing about the plugin.
+The fixture declares inputs and expected data. The testkit owns runtime and instance creation,
+operation execution, control introspection, local HTTP delivery, daemon restarts, assertions, and
+failure-safe cleanup. Its only black-box callback receives a testkit-owned delivery URL and must only
+construct the selected operation's dynamic input.
 
-Keep the fixture beside the plugin, include every published operation in `world.operations`, and run
-the suite in CI. The selected service key narrows operation keys at compile time, while runtime
-introspection verifies that the inventory is complete.
+## Selected-plugin harness
+
+Keep one development-only harness beside the plugin. Every base, fault, and historical-version
+variant must call the same production plugin factory, retain the same plugin ID, service key, and
+public operation inventory, and vary behavior only through injected dependencies or lifecycle
+version configuration. Fault variants alter existing operations or hooks; they do not add test-only
+operations to the production surface.
+
+Every successfully booted variant is checked through public control introspection for the exact
+selected service key, plugin ID, state version, and operation inventory before its scenario runs.
+The invalid config, invalid seed, failed-create, failed-update, and future-version downgrade paths
+can fail before introspection and therefore remain a documented harness trust boundary. Identity is
+nominal rather than cryptographic: a dishonest harness can reproduce an ID and inventory while
+substituting another implementation. Review must ensure the harness really calls the production
+factory, and that the dynamic-input callback only builds input from its supplied URL.
+
+## Child-process checks
+
+The authoring case imports the declared file URL in a fresh bounded child, validates its named config
+export, and compares cwd, environment, cwd files, and Node-reported active resources before and after
+import. Stdout and stderr are independently required to stay empty, while the result travels over
+IPC. The child and temporary cwd are always cleaned up. This operational check cannot detect effects
+that are completely reversed before the second snapshot, short-lived detached work, concealed
+external-system writes, or resources Node does not report.
+
+Durability uses the declared CLI config module and a testkit-owned process, free port, storage root,
+descriptor, control token, deadline, and cleanup. The module reads these standardized environment
+variables and builds the same plugin-family variant:
+
+- `LOCALHOST2137_CONTRACT_STORAGE`
+- `LOCALHOST2137_CONTRACT_EVENTS`
+- `LOCALHOST2137_CONTRACT_VERSION`
+- `LOCALHOST2137_CONTRACT_FAIL_UPDATE`
+
+The runner invokes the local `localhost` binary through pnpm from the config module's nearest package
+root. Daemon output and control tokens are never included in assertion failures.
