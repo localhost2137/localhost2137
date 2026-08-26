@@ -1,8 +1,12 @@
 import type Database from "better-sqlite3";
+import {
+	MAX_SLACK_TIMESTAMP_MICROSECONDS,
+	parseSlackTimestamp,
+} from "../domain/slack-timestamp.js";
 import { LOCAL_BOT_NAME, LOCAL_BOT_USER_ID } from "../slack-identities.js";
 import { insertSequencedId, reconcileSequenceId, type SequenceKind } from "./id-sequence.js";
 
-export const CURRENT_DATABASE_VERSION = 4;
+export const CURRENT_DATABASE_VERSION = 5;
 
 interface Migration {
 	readonly version: number;
@@ -109,6 +113,16 @@ const migrations: readonly Migration[] = [
 			reserveCanonicalBotName(database);
 		},
 	},
+	{
+		version: 5,
+		apply(database) {
+			reconcileMessageTimestamps(database);
+			database.exec(`
+				CREATE INDEX messages_channel_ts_microseconds
+				ON messages(channel_id, CAST(REPLACE(ts, '.', '') AS INTEGER) DESC);
+			`);
+		},
+	},
 ];
 
 export function migrateDatabase(database: Database.Database): void {
@@ -152,6 +166,59 @@ function tableExists(database: Database.Database, name: string): boolean {
 function reconcileRows(database: Database.Database, kind: SequenceKind, query: string): void {
 	const rows = database.prepare(query).all() as Array<{ id: string }>;
 	for (const row of rows) reconcileSequenceId(database, kind, row.id);
+}
+
+function reconcileMessageTimestamps(database: Database.Database): void {
+	const rows = database.prepare("SELECT id, ts FROM messages").all() as Array<{
+		id: unknown;
+		ts: unknown;
+	}>;
+	let maximum = 0n;
+	const timestamps = new Set<bigint>();
+	for (const row of rows) {
+		if (typeof row.id !== "string" || typeof row.ts !== "string") {
+			throw new Error("Slack persisted message timestamps must be stored as TEXT values.");
+		}
+		const timestamp = parseSlackTimestamp(row.ts);
+		if (timestamp === undefined) {
+			throw new Error(`Slack persisted message ${row.id} has invalid timestamp ${row.ts}.`);
+		}
+		if (timestamps.has(timestamp)) {
+			throw new Error(
+				`Slack persisted message ${row.id} duplicates timestamp ${row.ts} at microsecond precision.`,
+			);
+		}
+		timestamps.add(timestamp);
+		if (timestamp > maximum) maximum = timestamp;
+	}
+
+	const counter = readMessageTimestampCounter(database);
+	const reconciled = counter !== undefined && counter > maximum ? counter : maximum;
+	database
+		.prepare(
+			`INSERT INTO counters(kind, value) VALUES ('message_ts', ?)
+			 ON CONFLICT(kind) DO UPDATE SET value = excluded.value`,
+		)
+		.run(reconciled);
+}
+
+function readMessageTimestampCounter(database: Database.Database): bigint | undefined {
+	const row = database
+		.prepare("SELECT value, typeof(value) AS storage_type FROM counters WHERE kind = 'message_ts'")
+		.safeIntegers(true)
+		.get() as { storage_type: unknown; value: unknown } | undefined;
+	if (row === undefined) return undefined;
+	if (
+		row.storage_type !== "integer" ||
+		typeof row.value !== "bigint" ||
+		row.value < 0n ||
+		row.value > MAX_SLACK_TIMESTAMP_MICROSECONDS
+	) {
+		throw new Error(
+			"Slack message timestamp counter must be a non-negative SQLite INTEGER within the supported microsecond range.",
+		);
+	}
+	return row.value;
 }
 
 interface PersistedUserIdentity {

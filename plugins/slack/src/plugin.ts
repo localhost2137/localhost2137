@@ -1,4 +1,4 @@
-import { definePlugin, type ConnectionMetadata, type PluginFactory } from "localhost2137";
+import { type ConnectionMetadata, definePlugin, type PluginFactory } from "localhost2137";
 import { createSlackApi } from "./api/routes.js";
 import { slackConfigSchema, slackSeedSchema } from "./config.js";
 import { createSlackLifecycle } from "./lifecycle.js";
@@ -28,7 +28,7 @@ export type SlackPluginFactory = PluginFactory<
 >;
 
 export function createSlackPlugin(dependencies: SlackPluginDependencies = {}): SlackPluginFactory {
-	const stateVersion = dependencies.stateVersion ?? 4;
+	const stateVersion = dependencies.stateVersion ?? 5;
 	if (!Number.isSafeInteger(stateVersion) || stateVersion < 1) {
 		throw new TypeError("Slack plugin stateVersion must be a positive safe integer.");
 	}

@@ -210,6 +210,223 @@ describe("Slack persistence", () => {
 		}
 	});
 
+	it.each([2, 3, 4] as const)(
+		"reconciles a pre-counter version-%s database before same-instant restart writes",
+		async (legacyVersion) => {
+			const root = await mkdtemp(join(tmpdir(), "localhost2137-slack-"));
+			roots.push(root);
+			const path = join(root, "slack.sqlite");
+			let database = new SlackDatabase(path);
+			try {
+				migrateDatabase(database.raw());
+				const service = new SlackService(database);
+				service.initialize(config(), now);
+				const channel = service.createChannel({ name: "general", now });
+				const first = service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "before migration",
+					user: "U000000",
+				}).message;
+				downgradeTimestampMigration(database, legacyVersion);
+				database.raw().prepare("DELETE FROM counters WHERE kind = 'message_ts'").run();
+				database.close();
+
+				database = new SlackDatabase(path);
+				migrateDatabase(database.raw());
+				expect(messageTimestampCounter(database)).toBe(1_767_225_600_000_000n);
+				database.close();
+
+				database = new SlackDatabase(path);
+				const restarted = new SlackService(database);
+				restarted.initialize(config(), now);
+				expect(
+					restarted.postMessage({
+						channel: channel.id,
+						emitEvent: false,
+						now,
+						text: "after migration",
+						user: "U000000",
+					}).message,
+				).toMatchObject({ id: "M000002", ts: "1767225600.000001" });
+				expect(first.ts).toBe("1767225600.000000");
+			} finally {
+				database.close();
+			}
+		},
+	);
+
+	it.each([
+		{ expected: 1_767_225_600_000_000n, name: "lower", value: 1n },
+		{
+			expected: 1_767_225_600_000_100n,
+			name: "higher",
+			value: 1_767_225_600_000_100n,
+		},
+	] as const)("keeps the $name timestamp reconciliation bound", async ({ expected, value }) => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "persisted",
+				user: "U000000",
+			});
+			downgradeTimestampMigration(database, 4);
+			database.raw().prepare("UPDATE counters SET value = ? WHERE kind = 'message_ts'").run(value);
+			migrateDatabase(database.raw());
+			expect(messageTimestampCounter(database)).toBe(expected);
+		} finally {
+			database.close();
+		}
+	});
+
+	it("initializes an empty version-4 timestamp counter and exact ordering index", async () => {
+		const database = await migratedDatabase();
+		try {
+			downgradeTimestampMigration(database, 4);
+			database.raw().prepare("DELETE FROM counters WHERE kind = 'message_ts'").run();
+			migrateDatabase(database.raw());
+			expect(messageTimestampCounter(database)).toBe(0n);
+			expect(
+				database
+					.raw()
+					.prepare(
+						"SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'messages_channel_ts_microseconds'",
+					)
+					.get(),
+			).toEqual({ present: 1 });
+		} finally {
+			database.close();
+		}
+	});
+
+	it.each(["not-a-timestamp", "9223372036854.775808"])(
+		"rejects persisted message timestamp %s transactionally",
+		async (timestamp) => {
+			const database = await migratedDatabase();
+			try {
+				const service = new SlackService(database);
+				service.initialize(config(), now);
+				const channel = service.createChannel({ name: "general", now });
+				const message = service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "persisted",
+					user: "U000000",
+				}).message;
+				downgradeTimestampMigration(database, 4);
+				database
+					.raw()
+					.prepare("UPDATE messages SET ts = ? WHERE id = ?")
+					.run(timestamp, message.id);
+				expect(() => migrateDatabase(database.raw())).toThrow(
+					new RegExp(`message ${message.id} has invalid timestamp`),
+				);
+				expect(database.raw().pragma("user_version", { simple: true })).toBe(4);
+				expect(database.messages.getById(message.id).ts).toBe(timestamp);
+				expect(timestampOrderingIndex(database)).toBeUndefined();
+			} finally {
+				database.close();
+			}
+		},
+	);
+
+	it("rejects duplicate persisted timestamps at exact microsecond precision", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "first",
+				user: "U000000",
+			});
+			const second = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "second",
+				user: "U000000",
+			}).message;
+			downgradeTimestampMigration(database, 4);
+			database
+				.raw()
+				.prepare("UPDATE messages SET ts = ? WHERE id = ?")
+				.run("01767225600.000000", second.id);
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/duplicates timestamp 01767225600\.000000 at microsecond precision/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(4);
+			expect(timestampOrderingIndex(database)).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
+	it.each([
+		{ name: "REAL", value: 1.5 },
+		{ name: "TEXT", value: "corrupt" },
+		{ name: "out-of-range REAL", value: 1e30 },
+	] as const)("rejects a $name timestamp counter with an invariant error", async ({ value }) => {
+		const database = await migratedDatabase();
+		try {
+			downgradeTimestampMigration(database, 4);
+			database.raw().prepare("UPDATE counters SET value = ? WHERE kind = 'message_ts'").run(value);
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/Slack message timestamp counter must be a non-negative SQLite INTEGER/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(4);
+			expect(timestampOrderingIndex(database)).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rolls back all version-5 changes when counter reconciliation fails", async () => {
+		const database = await migratedDatabase();
+		try {
+			downgradeTimestampMigration(database, 4);
+			database.raw().prepare("DELETE FROM counters WHERE kind = 'message_ts'").run();
+			database.raw().exec(`
+				CREATE TRIGGER reject_message_timestamp_counter
+				BEFORE INSERT ON counters
+				WHEN NEW.kind = 'message_ts'
+				BEGIN
+					SELECT RAISE(ABORT, 'injected timestamp reconciliation failure');
+				END;
+			`);
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/injected timestamp reconciliation failure/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(4);
+			expect(messageTimestampCounter(database)).toBeUndefined();
+			expect(timestampOrderingIndex(database)).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rejects a future database without applying timestamp migration work", async () => {
+		const database = await migratedDatabase();
+		try {
+			database.raw().pragma(`user_version = ${CURRENT_DATABASE_VERSION + 1}`);
+			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 5/);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(6);
+		} finally {
+			database.close();
+		}
+	});
+
 	it("reconciles explicit numeric user and channel IDs without consuming semantic IDs", async () => {
 		const database = await migratedDatabase();
 		try {
@@ -381,7 +598,7 @@ describe("Slack persistence", () => {
 			const channel = service.createChannel({ name: "general", now });
 			database
 				.raw()
-				.prepare("INSERT INTO counters(kind, value) VALUES ('message_ts', ?)")
+				.prepare("UPDATE counters SET value = ? WHERE kind = 'message_ts'")
 				.run(9_223_372_036_854_775_807n);
 			expect(() =>
 				service.postMessage({
@@ -418,7 +635,7 @@ describe("Slack persistence", () => {
 					userId: "U404",
 				}),
 			).toThrow(/FOREIGN KEY constraint failed/);
-			expect(messageTimestampCounter(database)).toBeUndefined();
+			expect(messageTimestampCounter(database)).toBe(0n);
 			expect(
 				database.raw().prepare("SELECT value FROM counters WHERE kind = 'message'").get(),
 			).toBeUndefined();
@@ -570,8 +787,8 @@ async function versionTwoConflictDatabase(): Promise<SlackDatabase> {
 			'M000001', 'C000001', 'U000000', 'legacy message',
 			'1767225600.000000', 1767225600000, NULL, 0
 		);
-		PRAGMA user_version = 2;
 	`);
+	downgradeTimestampMigration(database, 2);
 	return database;
 }
 
@@ -585,7 +802,7 @@ async function botNameConflictDatabase(userId: "U000000" | "U000007"): Promise<S
 		.raw()
 		.prepare("INSERT INTO counters(kind, value) VALUES ('user', ?)")
 		.run(userId === "U000000" ? 0 : 7);
-	database.raw().pragma("user_version = 3");
+	downgradeTimestampMigration(database, 3);
 	return database;
 }
 
@@ -605,4 +822,18 @@ function messageTimestampCounter(database: SlackDatabase): bigint | undefined {
 		.safeIntegers(true)
 		.get() as { value: bigint } | undefined;
 	return row?.value;
+}
+
+function downgradeTimestampMigration(database: SlackDatabase, version: 2 | 3 | 4): void {
+	database.raw().exec("DROP INDEX IF EXISTS messages_channel_ts_microseconds");
+	database.raw().pragma(`user_version = ${version}`);
+}
+
+function timestampOrderingIndex(database: SlackDatabase): unknown {
+	return database
+		.raw()
+		.prepare(
+			"SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'messages_channel_ts_microseconds'",
+		)
+		.get();
 }
