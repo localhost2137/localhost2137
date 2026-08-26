@@ -1,5 +1,3 @@
-import type { ContractObservation } from "./contract-types.js";
-
 export class PluginContractAssertionError extends Error {
 	readonly caseName: string;
 
@@ -14,17 +12,11 @@ export function assertContract(condition: boolean, caseName: string, message: st
 	if (!condition) throw new PluginContractAssertionError(caseName, message);
 }
 
-export function assertObservation(caseName: string, observation: unknown): void {
+export function assertContractEqual(actual: unknown, expected: unknown, caseName: string): void {
 	assertContract(
-		isObservation(observation),
+		isContractDataEqual(actual, expected),
 		caseName,
-		"probe must return exact actual/expected data properties",
-	);
-	if (!isObservation(observation)) return;
-	assertContract(
-		isContractDataEqual(observation.actual, observation.expected),
-		caseName,
-		`observation differed (actual ${render(observation.actual)}, expected ${render(observation.expected)})`,
+		`result differed (actual ${render(actual)}, expected ${render(expected)})`,
 	);
 }
 
@@ -66,18 +58,8 @@ export function isRecordObject(value: unknown): value is Readonly<Record<Propert
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isObservation(value: unknown): value is ContractObservation {
-	if (!isPlainRecord(value)) return false;
-	const keys = Reflect.ownKeys(value);
-	return (
-		keys.length === 2 &&
-		keys.includes("actual") &&
-		keys.includes("expected") &&
-		keys.every((key) => {
-			const descriptor = Object.getOwnPropertyDescriptor(value, key);
-			return descriptor?.enumerable === true && "value" in descriptor;
-		})
-	);
+export function errorCode(failure: unknown): unknown {
+	return isRecordObject(failure) ? dataProperty(failure, "code") : undefined;
 }
 
 function render(value: unknown): string {

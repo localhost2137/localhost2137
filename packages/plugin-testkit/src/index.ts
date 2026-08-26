@@ -1,13 +1,21 @@
 export { PluginContractAssertionError } from "./contract-assertions.js";
 export type {
-	ContractObservation,
-	ContractObservationProbe,
+	ContractAuthoringFixture,
+	ContractDurabilityFixture,
+	ContractDynamicInputFixture,
+	ContractHarnessConfigOptions,
+	ContractHarnessVariant,
+	ContractInstrumentation,
+	ContractLifecycleEvent,
+	ContractOperationCall,
+	ContractOperationInput,
 	ContractOperationKey,
+	ContractOperationOutput,
 	ContractServiceKey,
-	InvalidConfigurationFixture,
 	OperationContractFixture,
 	PluginContractCase,
 	PluginContractFixture,
+	SelectedPluginHarness,
 } from "./contract-types.js";
 export {
 	createPluginContractCases,
