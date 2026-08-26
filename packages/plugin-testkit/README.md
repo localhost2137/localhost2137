@@ -51,7 +51,10 @@ variables and builds the same plugin-family variant:
 - `LOCALHOST2137_CONTRACT_FAIL_UPDATE`
 
 The runner resolves `localhost2137/package.json` through package exports, validates that
-`bin.localhost` remains inside the installed package root, and invokes that file with the current
-Node executable from the config module's nearest package root. The spawned child must be the daemon
-PID reported by the runtime descriptor, and cleanup signals only that exact owned process. Daemon
-output and control tokens are never included in assertion failures.
+`bin.localhost` remains inside the installed package root, and imports that file inside a shipped
+testkit supervisor after validating the fixed CLI argument shape. The supervisor is the daemon
+process, so its child PID must equal the runtime descriptor PID. Cleanup sends one private IPC
+shutdown message; the supervisor emits `SIGINT` inside its own process so the existing CLI cleanup
+path runs consistently across operating systems. Exit and active-file/lock removal are bounded,
+with `SIGKILL` sent only to that exact child as a fallback. No control token crosses IPC or argv, and
+daemon output and control tokens are never included in assertion failures.

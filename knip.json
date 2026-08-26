@@ -11,6 +11,7 @@
 		"packages/plugin-testkit": {
 			"entry": [
 				"src/authoring-child.ts",
+				"src/durability-supervisor.ts",
 				"test/fixtures/authoring-output.config.ts",
 				"type-fixtures/public-inference.ts"
 			],

@@ -166,6 +166,11 @@ if (typeof connectRuntime !== "function" || typeof createTestRuntime !== "functi
 if (typeof createPluginContractCases !== "function") {
 	throw new Error("Packed plugin testkit entry point is incomplete");
 }
+const testkitEntryPath = fileURLToPath(import.meta.resolve("@localhost2137/plugin-testkit"));
+const testkitSupervisorPath = join(dirname(testkitEntryPath), "durability-supervisor.js");
+if (!readFileSync(testkitSupervisorPath, "utf8").includes("plugin-testkit:shutdown:v1")) {
+	throw new Error("Packed plugin testkit durability supervisor is missing");
+}
 
 const hostManifestPath = fileURLToPath(import.meta.resolve("localhost2137/package.json"));
 const hostPackageRoot = dirname(hostManifestPath);

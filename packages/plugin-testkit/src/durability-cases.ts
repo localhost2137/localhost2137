@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ServiceRecord } from "localhost2137";
 import { connectRuntime, type RuntimeClient } from "localhost2137/client";
@@ -10,6 +10,7 @@ import { capture, finishCaptured } from "./cleanup-owner.js";
 import { assertContract, assertContractEqual } from "./contract-assertions.js";
 import { type OwnedContractResources, withContractResources } from "./contract-resources.js";
 import type { PluginContractCase, PluginContractFixture } from "./contract-types.js";
+import { stopSupervisedProcess } from "./durability-process.js";
 import { assertSelectedServiceIdentity } from "./service-identity.js";
 
 const INSTANCE_ID = "dev";
@@ -168,43 +169,43 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 	await writeFile(eventsPath, "", "utf8");
 	const activeStops = new Set<() => Promise<number | null>>();
 	const daemonCwd = await nearestPackageRoot(fileURLToPath(fixture.durability.configModule));
-	const daemonBin = await resolveHostBin();
+	const supervisorSource = supervisorModuleUrl();
 	const spawnOwned = async (version: number, failUpdate: boolean): Promise<SpawnedDaemon> => {
-		await Promise.all([
-			rm(join(root, "control-token"), { force: true }),
-			rm(join(root, "runtime.json"), { force: true }),
-		]);
+		await waitForDurabilityRelease(root);
 		const port = await availablePort();
 		const inheritedEnvironment = { ...process.env };
 		delete inheritedEnvironment.LOCALHOST_CONTROL_TOKEN;
-		const child = spawn(
-			process.execPath,
-			[
-				daemonBin,
-				"--config",
-				fileURLToPath(fixture.durability.configModule),
-				"dev",
-				"--port",
-				String(port),
-			],
-			{
-				cwd: daemonCwd,
-				env: {
-					...inheritedEnvironment,
-					[contractProcessEnvironment.deliveryUrl]: resources.harness.deliveryUrl,
-					[contractProcessEnvironment.events]: eventsPath,
-					[contractProcessEnvironment.failUpdate]: failUpdate ? "1" : "0",
-					[contractProcessEnvironment.storage]: root,
-					[contractProcessEnvironment.version]: String(version),
-				},
-				stdio: ["ignore", "ignore", "ignore"],
-			},
+		const childArguments = [fileURLToPath(supervisorSource)];
+		if (supervisorSource.pathname.endsWith(".ts")) {
+			childArguments.unshift("--experimental-strip-types");
+		}
+		childArguments.push(
+			"--config",
+			fileURLToPath(fixture.durability.configModule),
+			"dev",
+			"--port",
+			String(port),
 		);
+		const child = spawn(process.execPath, childArguments, {
+			cwd: daemonCwd,
+			env: {
+				...inheritedEnvironment,
+				[contractProcessEnvironment.deliveryUrl]: resources.harness.deliveryUrl,
+				[contractProcessEnvironment.events]: eventsPath,
+				[contractProcessEnvironment.failUpdate]: failUpdate ? "1" : "0",
+				[contractProcessEnvironment.storage]: root,
+				[contractProcessEnvironment.version]: String(version),
+			},
+			stdio: ["ignore", "ignore", "ignore", "ipc"],
+		});
 		const closed = processExit(child);
 		let stopPromise: Promise<number | null> | undefined;
 		const stop = (): Promise<number | null> => {
 			if (!stopPromise) {
-				stopPromise = stopOwnedProcess(child, closed);
+				stopPromise = stopSupervisedProcess(child, closed).then(async (result) => {
+					if (!result.forced) await waitForDurabilityRelease(root);
+					return result.exitCode;
+				});
 				void stopPromise.then(
 					() => activeStops.delete(stop),
 					() => activeStops.delete(stop),
@@ -346,68 +347,26 @@ function processExit(process: ChildProcess): Promise<number | null> {
 	});
 }
 
-async function stopOwnedProcess(
-	child: ChildProcess,
-	closed: Promise<number | null>,
-): Promise<number | null> {
-	if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
-	try {
-		return await withinCleanupDeadline(closed);
-	} catch (cause) {
-		if (!(cause instanceof ProcessCleanupTimeoutError)) throw cause;
-		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-		return withinCleanupDeadline(closed);
+async function waitForDurabilityRelease(root: string): Promise<void> {
+	const paths = [join(root, "control-token"), join(root, "lock"), join(root, "runtime.json")];
+	const deadline = Date.now() + 2_000;
+	while (Date.now() < deadline) {
+		if (!(await anyPathExists(paths))) return;
+		await tick();
 	}
+	throw new Error("Durability daemon retained active runtime files or its storage lock.");
 }
 
-class ProcessCleanupTimeoutError extends Error {
-	constructor() {
-		super("Durability process exceeded its cleanup deadline.");
-		this.name = "ProcessCleanupTimeoutError";
+async function anyPathExists(paths: readonly string[]): Promise<boolean> {
+	for (const path of paths) {
+		try {
+			await access(path);
+			return true;
+		} catch (cause) {
+			if (!hasCode(cause, "ENOENT")) throw cause;
+		}
 	}
-}
-
-async function withinCleanupDeadline<Value>(promise: Promise<Value>): Promise<Value> {
-	let timeout: NodeJS.Timeout | undefined;
-	const deadline = new Promise<never>((_resolve, reject) => {
-		timeout = setTimeout(() => reject(new ProcessCleanupTimeoutError()), 2_000);
-	});
-	try {
-		return await Promise.race([promise, deadline]);
-	} finally {
-		if (timeout) clearTimeout(timeout);
-	}
-}
-
-async function resolveHostBin(): Promise<string> {
-	const manifestPath = fileURLToPath(import.meta.resolve("localhost2137/package.json"));
-	const packageRoot = dirname(manifestPath);
-	const manifest: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
-	if (typeof manifest !== "object" || manifest === null) {
-		throw new TypeError("localhost2137 package manifest must be an object.");
-	}
-	const bin = Reflect.get(manifest, "bin");
-	const target =
-		typeof bin === "object" && bin !== null ? Reflect.get(bin, "localhost") : undefined;
-	if (typeof target !== "string" || isAbsolute(target)) {
-		throw new TypeError("localhost2137 package manifest must declare a relative bin.localhost.");
-	}
-	const candidate = resolve(packageRoot, target);
-	if (!isWithin(packageRoot, candidate)) {
-		throw new TypeError("localhost2137 bin.localhost resolves outside its package root.");
-	}
-	const [realRoot, realBin] = await Promise.all([realpath(packageRoot), realpath(candidate)]);
-	if (!isWithin(realRoot, realBin)) {
-		throw new TypeError(
-			"localhost2137 bin.localhost resolves through a path outside its package root.",
-		);
-	}
-	return realBin;
-}
-
-function isWithin(root: string, candidate: string): boolean {
-	const path = relative(root, candidate);
-	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+	return false;
 }
 
 async function nearestPackageRoot(fromFile: string): Promise<string> {
@@ -435,6 +394,14 @@ async function nearestPackageRoot(fromFile: string): Promise<string> {
 
 function tick(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+function supervisorModuleUrl(): URL {
+	const extension = extname(fileURLToPath(import.meta.url));
+	return new URL(
+		extension === ".ts" ? "./durability-supervisor.ts" : "./durability-supervisor.js",
+		import.meta.url,
+	);
 }
 
 function hasCode(value: unknown, expected: string): boolean {
