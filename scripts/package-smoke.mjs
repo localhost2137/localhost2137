@@ -293,6 +293,42 @@ const packedStripeRuntime = await createTestRuntime({
 });
 const packedStripeInstance = await packedStripeRuntime.createInstance();
 try {
+	let adapterRequest;
+	const packedStripeFetch = createStripeSdkFetch(
+		packedStripeInstance.stripe.connection.apiUrl,
+		async (input, init) => {
+			const request = new Request(input, init);
+			adapterRequest = {
+				authorization: request.headers.get("authorization"),
+				body: await request.text(),
+				contentType: request.headers.get("content-type"),
+				method: request.method,
+				url: request.url,
+			};
+			return new Response(null, { status: 204 });
+		},
+	);
+	const adapterResponse = await packedStripeFetch(
+		new Request("https://api.stripe.com/v1/customers?limit=2", {
+			body: "name=Packed+Adapter",
+			headers: {
+				authorization: "Bearer sk_test_packed_smoke",
+				"content-type": "application/x-www-form-urlencoded",
+			},
+			method: "POST",
+		}),
+	);
+	if (
+		adapterResponse.status !== 204 ||
+		adapterRequest?.url !==
+			packedStripeInstance.stripe.connection.apiUrl + "/v1/customers?limit=2" ||
+		adapterRequest.method !== "POST" ||
+		adapterRequest.authorization !== "Bearer sk_test_packed_smoke" ||
+		adapterRequest.contentType !== "application/x-www-form-urlencoded" ||
+		adapterRequest.body !== "name=Packed+Adapter"
+	) {
+		throw new Error("Packed Stripe SDK adapter did not preserve request semantics");
+	}
 	const customer = await packedStripeInstance.stripe.createCustomer({ name: "Packed Ada" });
 	const product = await packedStripeInstance.stripe.createProduct({ name: "Packed Pro" });
 	const price = await packedStripeInstance.stripe.createPrice({
