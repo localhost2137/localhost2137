@@ -13,6 +13,7 @@ export type {
 	ContractOperationKey,
 	ContractOperationOutput,
 	ContractServiceKey,
+	ContractStartupRecoveryDurabilityFixture,
 	ContractTimeAdvanceDurabilityFixture,
 	OperationContractFixture,
 	PluginContractCase,

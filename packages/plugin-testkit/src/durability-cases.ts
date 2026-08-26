@@ -50,6 +50,13 @@ export function durabilityCases<Services extends ServiceRecord>(
 			),
 		);
 	}
+	if (fixture.durability.startupRecovery) {
+		cases.push(
+			contractCase("pending delivery recovers before restart readiness", () =>
+				startupRecoveryCase(fixture),
+			),
+		);
+	}
 	return Object.freeze(cases);
 }
 
@@ -226,14 +233,42 @@ async function timeAdvanceRecoveryCase<Services extends ServiceRecord>(
 	});
 }
 
+async function startupRecoveryCase<Services extends ServiceRecord>(
+	fixture: PluginContractFixture<Services>,
+): Promise<void> {
+	const name = "pending delivery recovers before restart readiness";
+	const specification = fixture.durability.startupRecovery;
+	if (!specification) throw new TypeError("Startup-recovery durability specification is missing.");
+	await withDurabilityRoot(
+		fixture,
+		async (owner) => {
+			const first = await owner.start(fixture.durability.versions.current, {}, name);
+			for (const call of specification.arrange) await execute(first.client, fixture, call);
+			await owner.deliveryEntered();
+			assertContractEqual(owner.deliveryCount(), specification.deliveries.afterInterruption, name);
+
+			await first.crash();
+			owner.releaseDeliveries();
+
+			const second = await owner.start(fixture.durability.versions.current, {}, name);
+			assertContractEqual(owner.deliveryCount(), specification.deliveries.afterRecovery, name);
+			await assertObservations(second.client, fixture, specification.observations, name);
+			await second.stop();
+		},
+		{ holdDelivery: true },
+	);
+}
+
 interface RunningDaemon {
 	readonly client: RuntimeClient;
+	crash(): Promise<number | null>;
 	stop(): Promise<number | null>;
 }
 
 interface SpawnedDaemon {
 	readonly closed: Promise<number | null>;
 	readonly process: ChildProcess;
+	crash(): Promise<number | null>;
 	stop(): Promise<number | null>;
 }
 
@@ -251,19 +286,22 @@ interface PendingTimeAdvance {
 }
 
 interface DurabilityOwner {
+	deliveryEntered(): Promise<void>;
 	deliveryCount(): number;
 	events(): Promise<readonly string[]>;
 	expectFailure(version: number, faults: DurabilityFaults): Promise<number | null>;
 	pendingTimeAdvance(caseName: string): Promise<PendingTimeAdvance | undefined>;
+	releaseDeliveries(): void;
 	start(version: number, faults: DurabilityFaults, caseName: string): Promise<RunningDaemon>;
 }
 
 async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 	fixture: PluginContractFixture<Services>,
 	work: (owner: DurabilityOwner) => Promise<Value>,
+	resources: Readonly<{ holdDelivery?: boolean }> = {},
 ): Promise<Value> {
-	return withContractResources({}, (resources) =>
-		withOwnedDurabilityRoot(fixture, resources, work),
+	return withContractResources(resources, (ownedResources) =>
+		withOwnedDurabilityRoot(fixture, ownedResources, work),
 	);
 }
 
@@ -308,8 +346,10 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 			stdio: ["ignore", "ignore", "ignore", "ipc"],
 		});
 		const closed = processExit(child);
+		let crashPromise: Promise<number | null> | undefined;
 		let stopPromise: Promise<number | null> | undefined;
 		const stop = (): Promise<number | null> => {
+			if (crashPromise) return crashPromise;
 			if (!stopPromise) {
 				stopPromise = stopSupervisedProcess(child, closed).then(async (result) => {
 					if (!result.forced) await waitForDurabilityRelease(root);
@@ -322,14 +362,31 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 			}
 			return stopPromise;
 		};
+		const crash = (): Promise<number | null> => {
+			if (stopPromise) return Promise.reject(new TypeError("Cannot crash a stopping daemon."));
+			if (!crashPromise) {
+				if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+				crashPromise = closed.then(async (exitCode) => {
+					await clearCrashedRuntimeOwnership(root);
+					return exitCode;
+				});
+				void crashPromise.then(
+					() => activeStops.delete(stop),
+					() => activeStops.delete(stop),
+				);
+			}
+			return crashPromise;
+		};
 		activeStops.add(stop);
 		return Object.freeze({
 			closed,
+			crash,
 			process: child,
 			stop,
 		});
 	};
 	const owner: DurabilityOwner = Object.freeze({
+		deliveryEntered: () => resources.deliveries.entered,
 		deliveryCount: resources.deliveries.count,
 		events: async () =>
 			Object.freeze((await readFile(eventsPath, "utf8")).split("\n").filter(Boolean)),
@@ -342,6 +399,7 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 			}
 		},
 		pendingTimeAdvance: (caseName: string) => readPendingTimeAdvance(root, caseName),
+		releaseDeliveries: resources.deliveries.release,
 		start: async (version: number, faults: DurabilityFaults, caseName: string) => {
 			const daemon = await spawnOwned(version, faults);
 			try {
@@ -354,7 +412,7 @@ async function withOwnedDurabilityRoot<Services extends ServiceRecord, Value>(
 				const token = (await readFile(join(root, "control-token"), "utf8")).trim();
 				const client = connectRuntime({ token, url: descriptor.url });
 				await assertSelectedServiceIdentity(client, INSTANCE_ID, fixture, caseName, version);
-				return Object.freeze({ client, stop: daemon.stop });
+				return Object.freeze({ client, crash: daemon.crash, stop: daemon.stop });
 			} catch (cause) {
 				const cleanup = await capture(() => daemon.stop());
 				if (cleanup.status === "rejected") {
@@ -579,6 +637,14 @@ async function waitForDurabilityRelease(root: string): Promise<void> {
 		await tick();
 	}
 	throw new Error("Durability daemon retained active runtime files or its storage lock.");
+}
+
+async function clearCrashedRuntimeOwnership(root: string): Promise<void> {
+	await Promise.all(
+		["control-token", "lock", "runtime.json"].map((name) =>
+			rm(join(root, name), { force: true, recursive: true }),
+		),
+	);
 }
 
 async function anyPathExists(paths: readonly string[]): Promise<boolean> {

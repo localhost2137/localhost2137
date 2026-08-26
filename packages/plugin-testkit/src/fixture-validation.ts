@@ -60,11 +60,14 @@ export function validateFixture<Services extends ServiceRecord>(
 		throw new TypeError("Durability versions must be strictly ordered old < current < future.");
 	}
 	validateTimeAdvanceFixture(fixture);
+	validateStartupRecoveryFixture(fixture);
 }
 
 function fixtureCalls<Services extends ServiceRecord>(fixture: PluginContractFixture<Services>) {
 	return [
 		...fixture.durability.arrange,
+		...(fixture.durability.startupRecovery?.arrange ?? []),
+		...(fixture.durability.startupRecovery?.observations.map(({ read }) => read) ?? []),
 		...(fixture.durability.timeAdvance?.arrange ?? []),
 		...(fixture.durability.timeAdvance?.observations.map(({ read }) => read) ?? []),
 		fixture.durability.read,
@@ -80,6 +83,41 @@ function fixtureCalls<Services extends ServiceRecord>(fixture: PluginContractFix
 		...fixture.trackedFetch.arrange,
 		fixture.trackedFetch.invoke,
 	] as const;
+}
+
+function validateStartupRecoveryFixture<Services extends ServiceRecord>(
+	fixture: PluginContractFixture<Services>,
+): void {
+	const startupRecovery = fixture.durability.startupRecovery;
+	if (startupRecovery === undefined) return;
+	if (!isPlainRecord(startupRecovery)) {
+		throw new TypeError("Durability startupRecovery must be a plain object.");
+	}
+	if (!Array.isArray(startupRecovery.arrange) || startupRecovery.arrange.length === 0) {
+		throw new TypeError("Durability startupRecovery must declare arrangement operations.");
+	}
+	if (!Array.isArray(startupRecovery.observations) || startupRecovery.observations.length === 0) {
+		throw new TypeError("Durability startupRecovery must declare at least one observation.");
+	}
+	for (const observation of startupRecovery.observations) {
+		if (!isPlainRecord(observation) || !isPlainRecord(observation.read)) {
+			throw new TypeError("Durability startupRecovery observations must contain operation reads.");
+		}
+	}
+	if (!isPlainRecord(startupRecovery.deliveries)) {
+		throw new TypeError("Durability startupRecovery deliveries must be a plain object.");
+	}
+	const { afterInterruption, afterRecovery } = startupRecovery.deliveries;
+	if (
+		!Number.isSafeInteger(afterInterruption) ||
+		afterInterruption < 1 ||
+		!Number.isSafeInteger(afterRecovery) ||
+		afterRecovery < afterInterruption
+	) {
+		throw new TypeError(
+			"Durability startupRecovery delivery counts must be positive and monotonic.",
+		);
+	}
 }
 
 function validateTimeAdvanceFixture<Services extends ServiceRecord>(

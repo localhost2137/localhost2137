@@ -121,6 +121,8 @@ export interface ContractDurabilityFixture<
 	readonly expectedPersisted: unknown;
 	readonly expectedWrite: unknown;
 	readonly read: ContractOperationCall<Services, ServiceKey>;
+	/** Optional abrupt-process proof for durable work reconciled during lifecycle.onStarted. */
+	readonly startupRecovery?: ContractStartupRecoveryDurabilityFixture<Services, ServiceKey>;
 	/**
 	 * Optional real-process proof for plugins that reconcile durable state after virtual time moves.
 	 * The daemon config must use the exported time-advance fixture protocol when the fault is enabled.
@@ -132,6 +134,23 @@ export interface ContractDurabilityFixture<
 		old: number;
 	}>;
 	readonly write: ContractOperationCall<Services, ServiceKey>;
+}
+
+export interface ContractStartupRecoveryDurabilityFixture<
+	Services extends ServiceRecord,
+	ServiceKey extends ContractServiceKey<Services>,
+> {
+	/** Public operations that commit state and begin at least one held remote delivery. */
+	readonly arrange: readonly ContractOperationCall<Services, ServiceKey>[];
+	readonly deliveries: Readonly<{
+		readonly afterInterruption: number;
+		readonly afterRecovery: number;
+	}>;
+	/** Each observation is asserted after restart to reject duplicate durable effects. */
+	readonly observations: readonly Readonly<{
+		readonly expected: unknown;
+		readonly read: ContractOperationCall<Services, ServiceKey>;
+	}>[];
 }
 
 export interface ContractTimeAdvanceDurabilityFixture<

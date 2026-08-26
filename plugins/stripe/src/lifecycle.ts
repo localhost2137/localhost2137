@@ -28,6 +28,12 @@ export function createStripeLifecycle(dependencies: StripePluginDependencies): S
 			await dependencies.afterTimeReconciled?.(context, advance);
 			await context.state.webhooks.reconcile(context, eventIds);
 		},
+		async onStarted(context) {
+			await context.state.webhooks.reconcile(
+				context,
+				context.state.services.billing.pendingWebhookEventIds(),
+			);
+		},
 		seed(context, seed) {
 			dependencies.recordLifecycle?.("seed");
 			context.state.database.transaction(() => {

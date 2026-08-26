@@ -120,6 +120,29 @@ describe("plugin contract testkit API", () => {
 		expect(() => createPluginContractCases(candidate as never)).toThrow(TypeError);
 	});
 
+	it.each([
+		[
+			"startup recovery without arrangement",
+			{
+				arrange: [],
+				deliveries: { afterInterruption: 1, afterRecovery: 2 },
+				observations: [{ expected: { value: 0 }, read: { input: {}, operation: "read" } }],
+			},
+		],
+		[
+			"non-monotonic startup-recovery delivery counts",
+			{
+				arrange: [{ input: { value: "arranged" }, operation: "write" }],
+				deliveries: { afterInterruption: 2, afterRecovery: 1 },
+				observations: [{ expected: { value: 0 }, read: { input: {}, operation: "read" } }],
+			},
+		],
+	] as const)("rejects %s", (_label, startupRecovery) => {
+		const candidate = mutableFixture();
+		candidate.durability = { ...candidate.durability, startupRecovery };
+		expect(() => createPluginContractCases(candidate as never)).toThrow(TypeError);
+	});
+
 	it("provides a stable assertion error with case context", () => {
 		const failure = new PluginContractAssertionError("state isolation", "values differed");
 		expect(failure).toMatchObject({

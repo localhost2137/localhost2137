@@ -10,6 +10,25 @@ const PINNED_TIME = "2026-01-02T03:04:05.000Z";
 
 type StripeContractServices = ReturnType<typeof createStripeContractConfig>["services"];
 
+const catalogArrange = Object.freeze([
+	Object.freeze({
+		input: Object.freeze({ name: "Ada" }),
+		operation: "createCustomer" as const,
+	}),
+	Object.freeze({ input: Object.freeze({ name: "Pro" }), operation: "createProduct" as const }),
+	Object.freeze({
+		input: Object.freeze({ productId: "prod_000001", unitAmount: 2_500 }),
+		operation: "createPrice" as const,
+	}),
+]);
+const subscriptionArrange = Object.freeze([
+	...catalogArrange,
+	Object.freeze({
+		input: Object.freeze({ customerId: "cus_000001", priceId: "price_000001" }),
+		operation: "createSubscription" as const,
+	}),
+]);
+
 export const stripeContractFixture = Object.freeze({
 	authoring: Object.freeze({
 		exportName: "stripeAuthoringConfig",
@@ -20,41 +39,28 @@ export const stripeContractFixture = Object.freeze({
 		valueKey: "apiUrl" as const,
 	}),
 	durability: Object.freeze({
-		arrange: Object.freeze([
-			Object.freeze({
-				input: Object.freeze({ name: "Ada" }),
-				operation: "createCustomer" as const,
-			}),
-			Object.freeze({ input: Object.freeze({ name: "Pro" }), operation: "createProduct" as const }),
-			Object.freeze({
-				input: Object.freeze({ productId: "prod_000001", unitAmount: 2_500 }),
-				operation: "createPrice" as const,
-			}),
-		]),
+		arrange: catalogArrange,
 		configModule: new URL("./stripe-durability.config.ts", import.meta.url),
 		expectedInitial: Object.freeze([]),
 		expectedPersisted: Object.freeze([invoice()]),
 		expectedWrite: subscription(),
 		read: Object.freeze({ input: Object.freeze({}), operation: "listInvoices" as const }),
-		timeAdvance: Object.freeze({
-			arrange: Object.freeze([
+		startupRecovery: Object.freeze({
+			arrange: subscriptionArrange,
+			deliveries: Object.freeze({ afterInterruption: 1, afterRecovery: 2 }),
+			observations: Object.freeze([
 				Object.freeze({
-					input: Object.freeze({ name: "Ada" }),
-					operation: "createCustomer" as const,
+					expected: Object.freeze([invoice()]),
+					read: Object.freeze({ input: Object.freeze({}), operation: "listInvoices" as const }),
 				}),
 				Object.freeze({
-					input: Object.freeze({ name: "Pro" }),
-					operation: "createProduct" as const,
-				}),
-				Object.freeze({
-					input: Object.freeze({ productId: "prod_000001", unitAmount: 2_500 }),
-					operation: "createPrice" as const,
-				}),
-				Object.freeze({
-					input: Object.freeze({ customerId: "cus_000001", priceId: "price_000001" }),
-					operation: "createSubscription" as const,
+					expected: Object.freeze([event()]),
+					read: Object.freeze({ input: Object.freeze({}), operation: "listEvents" as const }),
 				}),
 			]),
+		}),
+		timeAdvance: Object.freeze({
+			arrange: subscriptionArrange,
 			deliveries: Object.freeze({
 				afterArrange: 1,
 				afterCommittedAdvance: 1,
