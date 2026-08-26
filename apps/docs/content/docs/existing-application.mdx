@@ -1,0 +1,153 @@
+---
+title: Run an existing application
+description: Point an application's existing service boundary at one daemon instance without adding local behavior branches.
+---
+
+This guide starts with an installed plugin already present in `localhost.config.ts`. If that is not
+true yet, first [evaluate the plugin](/plugins/using) and add it through
+[Configuration](/configuration).
+
+The goal is to change where the application connects, not how it behaves:
+
+```text
+production connection ──> existing application adapter ──> external service
+local connection      ──> existing application adapter ──> emulated service
+```
+
+The provider SDK, HTTP client, webhook handler, or service adapter should remain the application's
+boundary in both cases. localhost2137 operations belong to local setup and inspection code, not the
+production application. For callbacks, the traffic direction reverses, but the application still
+uses its normal handler and the plugin config selects its local destination.
+
+## Confirm the configurable boundary
+
+Find where the application constructs its provider client. Identify the endpoint and credentials it
+already reads from configuration or environment variables. The installed plugin documents which
+connection values it supplies and which provider interface it supports.
+
+If the application hard-codes a provider endpoint, make that endpoint configurable at the client
+construction boundary. Avoid a broad `if (local)` branch: selecting an endpoint or credential is
+configuration; changing requests, responses, or business rules is a second implementation that the
+local run would no longer test.
+
+Some official SDKs accept a base URL directly. Others need a plugin-supplied transport adapter to
+support a path-scoped local endpoint. Use only the approach the installed plugin documents.
+
+## Start the persistent development world
+
+In one terminal, start the project daemon:
+
+```sh
+pnpm exec localhost dev
+```
+
+The daemon loads the config once, starts configured services, and creates the empty persistent `dev`
+instance only when it does not already exist. Its ready output lists public service URLs, the
+generated environment file, and exported variable names. Restart the daemon after changing config.
+
+Do not copy the runtime control token into application configuration. The application needs only the
+plugin-owned connection values.
+
+## Inspect and inject the connection
+
+In another terminal, render the exact app-facing environment for `dev`:
+
+```sh
+pnpm exec localhost env --format json
+```
+
+This is the quickest check that the installed plugin exports the names the application expects. It
+also exposes an endpoint-selection mistake before it looks like missing emulator state.
+
+Run the application's normal development command with those values:
+
+```sh
+pnpm exec localhost run -- pnpm dev
+```
+
+`localhost run` starts exactly one child command in the current project. For that child only, plugin
+connection variables override same-named inherited values; other environment variables and standard
+streams remain attached. Ctrl-C is forwarded. The command is not a process manager and does not
+restart the child.
+
+If the application's environment names differ, map the plugin values explicitly at the existing
+configuration boundary. Do not make application code read `.localhost2137` runtime metadata or the
+control token. The daemon also writes `.localhost2137/.env` for tools that already load dotenv files,
+but `localhost run` makes the selected environment ownership explicit.
+
+## Arrange the world through discovered operations
+
+Ask the running service for its actual control surface instead of copying operation names from
+another plugin or version:
+
+```sh
+pnpm exec localhost describe <service> --json
+pnpm exec localhost exec <service> --help
+pnpm exec localhost exec <service> <operation> --help
+```
+
+Then invoke only the setup operation the scenario needs:
+
+```sh
+pnpm exec localhost exec <service> <operation> [generated flags] --json
+```
+
+Simple operation inputs become flags. Generated help tells you when a nested input requires
+`--input-json`. Keep this step in a development script, test, or explicit setup command; the
+application should not gain a localhost2137 control-client dependency.
+
+## Exercise the application, then observe
+
+Trigger the behavior through the application's normal entry point: an HTTP request to the app, a
+job, a command, or another real application interface. That is the part that proves the application
+still speaks the provider-shaped protocol.
+
+Use application output as the primary result. When the scenario also needs emulator state, inspect
+it through a documented plugin operation. Runtime logs help establish which boundary actually ran:
+
+```sh
+pnpm exec localhost logs <service> --tail 50 --json
+```
+
+The log stream distinguishes public API requests, control operations, lifecycle work, and outbound
+deliveries. It is diagnostic evidence, not a replacement for an application assertion.
+
+If setup data exists but the application cannot see it, compare the instance and service in the
+application's connection URL with the target used by `exec`. [Operations and emulated APIs](/operations-and-apis)
+explains why setup operations and application traffic share state without being interchangeable.
+
+## Use another world without another application branch
+
+Create a named instance when you want an independent scenario under the same runtime config:
+
+```sh
+pnpm exec localhost instance create review-42
+pnpm exec localhost env --instance review-42 --format json
+pnpm exec localhost run --instance review-42 -- pnpm dev
+```
+
+Every setup and inspection command for that scenario must also target `review-42`. Prefer explicit
+`--instance` flags in reusable scripts:
+
+```sh
+pnpm exec localhost exec <service> <operation> --instance review-42 [generated flags] --json
+pnpm exec localhost logs <service> --instance review-42 --tail 50 --json
+```
+
+Destroy the named world when the scenario is finished:
+
+```sh
+pnpm exec localhost instance destroy review-42
+```
+
+For the long-lived `dev` world, reset is usually more useful than destroy. Reset is empty unless
+`--seed` is explicit:
+
+```sh
+pnpm exec localhost instance reset dev
+```
+
+Named instances isolate state, not plugin config or application callback URLs. Read
+[Instances and isolation](/instances#where-the-boundary-stops) before using one shared callback
+receiver for parallel worlds. For automated ownership and deterministic cleanup, continue with
+[Integration testing](/testing).
