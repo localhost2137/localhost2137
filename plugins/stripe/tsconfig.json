@@ -1,0 +1,10 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "dist",
+		"rootDir": "src",
+		"tsBuildInfoFile": "../../node_modules/.cache/typescript/plugin-stripe.tsbuildinfo"
+	},
+	"include": ["src/**/*.ts"],
+	"references": [{ "path": "../../packages/localhost2137" }]
+}

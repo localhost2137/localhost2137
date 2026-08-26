@@ -129,6 +129,28 @@ importers:
         specifier: workspace:*
         version: link:../../packages/localhost2137
 
+  plugins/stripe:
+    dependencies:
+      '@types/better-sqlite3':
+        specifier: 7.6.13
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
+      hono:
+        specifier: 4.13.4
+        version: 4.13.4
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@localhost2137/plugin-testkit':
+        specifier: workspace:*
+        version: link:../../packages/plugin-testkit
+      localhost2137:
+        specifier: workspace:*
+        version: link:../../packages/localhost2137
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':
