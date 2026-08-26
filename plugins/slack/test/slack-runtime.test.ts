@@ -1,0 +1,282 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { defineConfig } from "localhost2137";
+import { createTestRuntime } from "localhost2137/testing";
+import { afterEach, describe, expect, it } from "vitest";
+import { verifySlackRequestSignature } from "../src/events/request-signature.js";
+import { slack } from "../src/index.js";
+import { createSlackPlugin } from "../src/plugin.js";
+
+const ownedServers: Array<ReturnType<typeof createServer>> = [];
+const ownedRuntimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
+
+afterEach(async () => {
+	await Promise.all(ownedRuntimes.splice(0).map((runtime) => runtime.close()));
+	await Promise.all(
+		ownedServers
+			.splice(0)
+			.map(
+				(server) =>
+					new Promise<void>((resolve, reject) =>
+						server.close((cause) => (cause ? reject(cause) : resolve())),
+					),
+			),
+	);
+});
+
+describe("Slack runtime integration", () => {
+	it("shares one world across typed operations and Slack-compatible HTTP", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const ada = await instance.slack.createUser({ admin: true, name: "Ada" });
+			const channel = await instance.slack.createChannel({ name: "General" });
+			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
+
+			const invalid = await slackRequest(instance.slack.connection.apiUrl, "users.list", {
+				token: "bad-token",
+			});
+			expect(invalid.status).toBe(200);
+			expect(await invalid.json()).toEqual({ error: "invalid_auth", ok: false });
+
+			const users = await slackRequest(instance.slack.connection.apiUrl, "users.list", {
+				token: instance.slack.connection.botToken,
+			});
+			expect(await users.json()).toMatchObject({
+				members: [
+					{ id: "U000000", is_bot: true },
+					{ id: ada.id, is_admin: true, name: "Ada" },
+				],
+				ok: true,
+				response_metadata: { next_cursor: "" },
+			});
+
+			const posted = await slackRequest(instance.slack.connection.apiUrl, "chat.postMessage", {
+				channel: channel.id,
+				text: "pong",
+				token: instance.slack.connection.botToken,
+			});
+			expect(await posted.json()).toMatchObject({
+				channel: channel.id,
+				message: { bot_id: "B000001", subtype: "bot_message", text: "pong" },
+				ok: true,
+			});
+
+			const messages = await instance.slack.listMessages({ channel: "general" });
+			expect(messages).toHaveLength(1);
+			expect(messages[0]).toMatchObject({ text: "pong", userId: "U000000" });
+		} finally {
+			await instance.destroy();
+		}
+	});
+
+	it("uses stable method-bound cursor pagination", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			await instance.slack.createUser({ name: "Ada" });
+			await instance.slack.createUser({ name: "Grace" });
+			const first = await slackGet(instance.slack.connection.apiUrl, "users.list", {
+				limit: "1",
+				token: instance.slack.connection.botToken,
+			});
+			const firstBody = await first.json();
+			expect(firstBody).toMatchObject({ members: [{ id: "U000000" }], ok: true });
+			const cursor = responseCursor(firstBody);
+			expect(cursor).not.toBe("");
+
+			const second = await slackGet(instance.slack.connection.apiUrl, "users.list", {
+				cursor,
+				limit: "1",
+				token: instance.slack.connection.botToken,
+			});
+			expect(await second.json()).toMatchObject({ members: [{ id: "U000001" }], ok: true });
+
+			const wrongMethod = await slackGet(instance.slack.connection.apiUrl, "conversations.list", {
+				cursor,
+				token: instance.slack.connection.botToken,
+			});
+			expect(await wrongMethod.json()).toEqual({ error: "invalid_cursor", ok: false });
+		} finally {
+			await instance.destroy();
+		}
+	});
+
+	it("delivers a correctly signed stable message event and drains it with idle", async () => {
+		const received = deferred<ReceivedRequest>();
+		const receiver = await startReceiver(async (request, response) => {
+			received.resolve(await readRequest(request));
+			response.writeHead(204).end();
+		});
+		const runtime = await startRuntime(slack, receiver.url);
+		const instance = await runtime.createInstance();
+		try {
+			const ada = await instance.slack.createUser({ name: "Ada" });
+			const channel = await instance.slack.createChannel({ name: "general" });
+			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
+			const message = await instance.slack.sendMessage({
+				channel: channel.id,
+				from: ada.id,
+				text: "ping",
+			});
+			await instance.idle();
+			const delivery = await received.promise;
+			const timestamp = requiredHeader(delivery.headers, "x-slack-request-timestamp");
+			const signature = requiredHeader(delivery.headers, "x-slack-signature");
+			expect(
+				verifySlackRequestSignature({
+					body: delivery.body,
+					secret: instance.slack.connection.signingSecret,
+					signature,
+					timestamp,
+				}),
+			).toBe(true);
+			expect(JSON.parse(delivery.body)).toMatchObject({
+				event: { channel: channel.id, text: "ping", ts: message.ts, user: ada.id },
+				event_id: message.eventId,
+				type: "event_callback",
+			});
+		} finally {
+			await instance.destroy();
+		}
+	});
+
+	it.each([
+		{ name: "non-2xx", status: 503 },
+		{ name: "timeout", status: undefined },
+	])("records and surfaces a single $name delivery failure", async ({ status }) => {
+		const receiver = await startReceiver(async (_request, response) => {
+			if (status === undefined) await new Promise<void>(() => undefined);
+			response.writeHead(status ?? 204).end();
+		});
+		const runtime = await startRuntime(createSlackPlugin({ deliveryTimeoutMs: 30 }), receiver.url);
+		const instance = await runtime.createInstance();
+		try {
+			const ada = await instance.slack.createUser({ name: "Ada" });
+			const channel = await instance.slack.createChannel({ name: "general" });
+			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
+			await instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "ping" });
+			await expect(instance.idle()).rejects.toThrow(/tracked task|failed/i);
+			const logs = await runtime.control.logs(await instanceIdFrom(runtime), {
+				serviceKey: "slack",
+			});
+			expect(JSON.stringify(logs)).toContain(status === undefined ? "failed" : "503");
+		} finally {
+			await instance.destroy();
+		}
+	});
+});
+
+async function startRuntime(plugin: typeof slack, eventsUrl: string | null) {
+	const runtime = await createTestRuntime({
+		config: defineConfig({
+			clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+			services: {
+				slack: plugin({
+					config: {
+						botToken: "xoxb-local-test",
+						eventsUrl,
+						signingSecret: "local-signing-secret",
+						workspaceName: "Local Test",
+					},
+				}),
+			},
+		}),
+		port: 0,
+		storage: "temporary",
+	});
+	ownedRuntimes.push(runtime);
+	return runtime;
+}
+
+async function slackRequest(
+	apiUrl: string,
+	method: string,
+	values: Readonly<Record<string, string>>,
+): Promise<Response> {
+	const body = new URLSearchParams(values);
+	const token = body.get("token");
+	body.delete("token");
+	return fetch(`${apiUrl}${method}`, {
+		body,
+		headers: {
+			authorization: `Bearer ${token}`,
+			"content-type": "application/x-www-form-urlencoded; charset=utf-8",
+		},
+		method: "POST",
+	});
+}
+
+async function slackGet(
+	apiUrl: string,
+	method: string,
+	values: Readonly<Record<string, string>>,
+): Promise<Response> {
+	const query = new URLSearchParams(values);
+	const token = query.get("token");
+	query.delete("token");
+	return fetch(`${apiUrl}${method}?${query}`, {
+		headers: { authorization: `Bearer ${token}` },
+	});
+}
+
+interface ReceivedRequest {
+	readonly body: string;
+	readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+}
+
+async function readRequest(request: IncomingMessage): Promise<ReceivedRequest> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of request) chunks.push(Buffer.from(chunk));
+	return Object.freeze({ body: Buffer.concat(chunks).toString("utf8"), headers: request.headers });
+}
+
+async function startReceiver(
+	handler: (request: IncomingMessage, response: ServerResponse) => Promise<void>,
+): Promise<Readonly<{ url: string }>> {
+	const server = createServer((request, response) => {
+		void handler(request, response).catch(() => response.destroy());
+	});
+	ownedServers.push(server);
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen({ host: "127.0.0.1", port: 0 }, resolve);
+	});
+	const address = server.address() as AddressInfo;
+	return Object.freeze({ url: `http://127.0.0.1:${address.port}/slack/events` });
+}
+
+function responseCursor(body: unknown): string {
+	return String(
+		Reflect.get(Reflect.get(body as object, "response_metadata") as object, "next_cursor"),
+	);
+}
+
+function requiredHeader(
+	headers: Readonly<Record<string, string | string[] | undefined>>,
+	name: string,
+): string {
+	const value = headers[name];
+	if (typeof value !== "string") throw new TypeError(`Missing ${name} header.`);
+	return value;
+}
+
+async function instanceIdFrom(
+	runtime: Awaited<ReturnType<typeof createTestRuntime>>,
+): Promise<string> {
+	const instances = await runtime.control.listInstances();
+	if (!Array.isArray(instances) || instances.length !== 1) {
+		throw new TypeError("Expected exactly one Slack test instance.");
+	}
+	const id = Reflect.get(instances[0] as object, "id");
+	if (typeof id !== "string") throw new TypeError("Slack test instance has no ID.");
+	return id;
+}
+
+function deferred<Value>() {
+	let resolvePromise: (value: Value) => void = () => undefined;
+	const promise = new Promise<Value>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return Object.freeze({ promise, resolve: resolvePromise });
+}

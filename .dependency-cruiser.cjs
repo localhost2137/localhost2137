@@ -28,8 +28,17 @@ module.exports = {
 		{
 			name: "plugins-use-public-root-only",
 			severity: "error",
-			from: { path: "^plugins/" },
+			from: { path: "^plugins/", pathNot: "^plugins/[^/]+/test/" },
 			to: { path: "^packages/localhost2137/src/(?!index\\.ts$)" },
+		},
+		{
+			name: "plugin-tests-use-public-exports",
+			severity: "error",
+			from: { path: "^plugins/[^/]+/test/" },
+			to: {
+				path: "^packages/localhost2137/src/",
+				pathNot: "^packages/localhost2137/src/(index\\.ts|testing/index\\.ts|client/index\\.ts)$",
+			},
 		},
 		{
 			name: "plugin-testkit-does-not-import-runtime-source",

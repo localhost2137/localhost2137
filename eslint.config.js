@@ -60,6 +60,7 @@ export default defineConfig([
 	},
 	{
 		files: ["plugins/**/*.ts"],
+		ignores: ["plugins/*/test/**/*.ts"],
 		rules: {
 			"no-restricted-imports": [
 				"error",
@@ -68,6 +69,27 @@ export default defineConfig([
 						{
 							group: ["localhost2137/*", "**/packages/localhost2137/src/**"],
 							message: "Plugins may import only the public localhost2137 package root.",
+						},
+					],
+				},
+			],
+		},
+	},
+	{
+		files: ["plugins/*/test/**/*.ts"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: [
+								"localhost2137/*",
+								"!localhost2137/testing",
+								"!localhost2137/client",
+								"**/packages/localhost2137/src/**",
+							],
+							message: "Plugin tests may use only public localhost2137 package exports.",
 						},
 					],
 				},

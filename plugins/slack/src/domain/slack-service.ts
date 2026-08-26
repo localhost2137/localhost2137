@@ -107,6 +107,10 @@ export class SlackService {
 		return this.#database.channels.listPage(input);
 	}
 
+	isMember(channelId: ChannelId, userId: UserId): boolean {
+		return this.#database.channels.hasMember(channelId, userId);
+	}
+
 	listMembers(
 		channelReference: string,
 		input: Readonly<{ afterId?: string; limit: number }>,
