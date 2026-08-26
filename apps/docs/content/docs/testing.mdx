@@ -1,0 +1,119 @@
+---
+title: Integration testing
+description: Own temporary runtimes and isolated instances in-process, from a daemon, or across workers.
+---
+
+Tests own resources explicitly: one scope creates and closes the runtime, and each test or worker
+creates and destroys its instances. A failing assertion must not leak an instance, port, or temporary
+storage directory.
+
+## In-process typed tests
+
+Use `localhost2137/testing` when config and tests run in the same process. This executable pattern is
+adapted from the Stripe SDK example:
+
+```ts
+import { stripe } from "@localhost2137/stripe";
+import { defineConfig } from "localhost2137";
+import { createTestRuntime } from "localhost2137/testing";
+
+const config = defineConfig({
+  clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+  services: {
+    stripe: stripe({
+      config: {
+        secretKey: "sk_test_local",
+        webhookSecret: "whsec_local",
+        webhookUrl: null,
+      },
+    }),
+  },
+});
+
+const runtime = await createTestRuntime({
+  config,
+  port: 0,
+  storage: "temporary",
+});
+
+try {
+  const instance = await runtime.createInstance();
+  try {
+    const customer = await instance.stripe.createCustomer({ name: "Ada" });
+    // Pass instance.stripe.connection to the application under test.
+    // Exercise the application's normal SDK/HTTP path, then inspect state.
+    expect(customer.name).toBe("Ada");
+  } finally {
+    await instance.destroy();
+  }
+} finally {
+  await runtime.close();
+}
+```
+
+The runtime binds one OS-assigned loopback port and creates temporary storage. The instance handle is
+inferred from `config.services`; each service exposes typed operations and `connection`, while
+`clock`, `env`, `idle`, `seed`, `reset`, and `destroy` live at the instance root.
+
+`createInstance()` and `reset()` default to empty state. Pass `{ seed: true }` only when the scenario
+depends on configured seed data.
+
+## Test the application boundary
+
+Use operations to arrange and inspect the emulator world. Exercise the behavior under test through
+the application's normal provider-facing boundary:
+
+```text
+arrange via operation
+  -> invoke app through SDK / HTTP / callback
+  -> await tracked plugin work
+  -> observe app output or inspect via operation
+```
+
+Do not call an operation as a substitute for the SDK request you intend to verify. Do not read the
+plugin database from application tests.
+
+Call `await instance.idle()` after a plugin schedules callbacks or other tracked outbound work. An
+idle wait includes nested tasks spawned by completing tasks and surfaces failed tracked work.
+
+## One owner, multiple workers
+
+When test workers are separate processes, a global setup process owns `createTestRuntime()` and gives
+workers only the frozen `{ url, token }` connection. Workers use the intentionally untyped remote
+client:
+
+```ts
+import { randomUUID } from "node:crypto";
+import { connectRuntime } from "localhost2137/client";
+
+const client = connectRuntime({ url, token });
+const instanceId = `worker-${randomUUID()}`;
+
+await client.createInstance({
+  id: instanceId,
+  persistence: "ephemeral",
+});
+
+try {
+  await client.executeOperation(instanceId, "counter", "increment", { by: 1 });
+  await client.idle(instanceId);
+} finally {
+  await client.destroyInstance(instanceId);
+}
+```
+
+This uses the counter plugin from the repository's `examples/testing-parallel` package, which
+contains the complete Vitest owner/worker pattern. For other plugins, discover the actual inventory
+before writing worker calls.
+
+Instances isolate plugin state and storage. They do not isolate shared plugin configuration or the
+application callback URL. Before running event or webhook tests concurrently, define how one shared
+receiver associates an inbound callback with its instance, or give each worker a separately
+configured runtime.
+
+## Running against the developer daemon
+
+Use `connectRuntime({ url, token })` for scripts that intentionally target an already-running daemon.
+The URL and token come from trusted runtime discovery or explicit local configuration. Persistent
+`dev` state is convenient for exploration but a poor test fixture: automated tests should create
+their own ephemeral instances and destroy only what they own.

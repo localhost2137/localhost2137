@@ -1,0 +1,107 @@
+---
+title: Configuration
+description: Define the runtime endpoint, clock, storage, services, connections, and explicit seed behavior.
+---
+
+`localhost.config.ts` describes one reusable world template. Instances materialize that same
+template with independent plugin state. The current runtime does not deep-merge per-instance config.
+
+## Runtime fields
+
+```ts title="localhost.config.ts"
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+  host: "127.0.0.1",
+  port: 2137,
+  storage: { dir: ".localhost2137" },
+  clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+  services: {},
+});
+```
+
+- `host` accepts loopback hosts only. It defaults to `127.0.0.1`.
+- `port` defaults to `2137`; in-process tests require port `0` for an OS-assigned port.
+- `storage.dir` is resolved relative to the config file and defaults to `.localhost2137`.
+- `clock` is either `{ mode: "real" }` or a pinned clock with an RFC 3339 `startAt`.
+- `services` is a keyed map of configured plugin factories.
+
+Config discovery walks upward from the working directory. Pass `--config <path>` when discovery is
+ambiguous. Config is loaded and frozen once at daemon startup; changes require a restart.
+
+## Configure plugins under stable keys
+
+```ts
+services: {
+  primary: slack({
+    config: {
+      workspaceName: "Primary workspace",
+      botToken: "xoxb-local-primary",
+      signingSecret: "local-primary-secret",
+      eventsUrl: "http://127.0.0.1:3000/slack/events",
+    },
+    exportEnv: false,
+  }),
+}
+```
+
+The key `primary` produces a public route below `/{instance}/primary`, the CLI selector `primary`,
+the storage namespace `primary`, and `instance.primary` in typed tests. Renaming it changes identity;
+there is no independent mount-name override.
+
+`exportEnv: false` suppresses only the plugin's merged environment projection. Typed connection
+values, routes, and operations remain available. Use it when multiple mounts would export colliding
+environment names and wire each connection explicitly.
+
+## Connection values belong to the plugin
+
+A plugin returns typed `connection` values for code and an environment projection for process
+startup. The Slack plugin exposes:
+
+```ts
+instance.slack.connection.apiUrl;
+instance.slack.connection.botToken;
+instance.slack.connection.signingSecret;
+```
+
+The daemon writes the `dev` projection to `.localhost2137/.env`. `localhost env` renders any
+instance, and `localhost run -- <command>` injects only app-facing connection variables. The runtime
+control token is stored separately and is never exposed to the application.
+
+Callback URLs are plugin configuration. Instances do not rewrite them. A single Slack `eventsUrl`
+or Stripe `webhookUrl` is therefore shared by every instance created from this config.
+
+## Seed only when requested
+
+Plugins may accept declarative seed data. A top-level scenario can then compose plugin operations:
+
+```ts
+export default defineConfig({
+  services: {
+    slack: slack({
+      config: {
+        workspaceName: "Seed example",
+        botToken: "xoxb-local-seed",
+        signingSecret: "local-seed-secret",
+        eventsUrl: null,
+      },
+      seed: {
+        users: [{ id: "U_ADA", name: "Ada" }],
+        channels: [{ id: "C_GENERAL", name: "general", members: ["U_ADA"] }],
+      },
+    }),
+  },
+  async seed(world) {
+    await world.slack.sendMessage({
+      channel: "C_GENERAL",
+      from: "U_ADA",
+      text: "ready",
+    });
+  },
+});
+```
+
+Run `localhost seed`, create an instance with `--seed`, or reset with `--seed`. Plugin seeds run in
+configuration order, followed by the top-level scenario. A successful seed cannot run twice until
+reset; a failed cross-plugin seed requires reset because the runtime cannot roll back arbitrary
+plugin storage transactionally.

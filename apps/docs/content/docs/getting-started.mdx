@@ -1,0 +1,93 @@
+---
+title: Getting started
+description: Configure one emulator plugin, start the local runtime, and exercise a service world.
+---
+
+localhost2137 requires Node.js 24 or later. This repository and every documented workflow use pnpm.
+
+## Install the runtime and a plugin
+
+Add the runtime and whichever emulator plugin your application needs. Slack is used here because it
+has a small setup surface; it is one plugin, not a special runtime mode.
+
+```sh
+pnpm add -D localhost2137 @localhost2137/slack
+pnpm exec localhost init
+```
+
+`localhost init` creates `localhost.config.ts` when one does not exist and adds
+`.localhost2137/` to `.gitignore`. It does not choose or install service plugins, and it refuses to
+replace an existing config.
+
+If the project uses a TypeScript config, its package must use ESM (`"type": "module"`). A project
+that must remain CommonJS can use `localhost.config.mjs` instead.
+
+## Configure a service
+
+Configuration is ordinary TypeScript. Credentials below are deliberately local world data, not real
+secrets.
+
+```ts title="localhost.config.ts"
+import { slack } from "@localhost2137/slack";
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+  services: {
+    slack: slack({
+      config: {
+        workspaceName: "Local development",
+        botToken: "xoxb-local-development",
+        signingSecret: "local-signing-secret",
+        eventsUrl: null,
+      },
+    }),
+  },
+});
+```
+
+The key `slack` is the service identity. It appears in routes, CLI commands, storage, and typed
+instance handles.
+
+## Start an empty world
+
+```sh
+pnpm exec localhost dev
+```
+
+The daemon creates the persistent `dev` instance if needed, starts configured services, and writes
+app-facing connection variables to `.localhost2137/.env`. Fresh instances are empty except for
+plugin-required identities. Declared seed data is never applied during normal startup.
+
+In another terminal, inspect the plugin's actual control surface:
+
+```sh
+pnpm exec localhost exec slack --help
+pnpm exec localhost describe slack --json
+```
+
+Then create state through operations:
+
+```sh
+pnpm exec localhost exec slack create-user --name Ada --json
+pnpm exec localhost exec slack create-channel --name general --json
+pnpm exec localhost exec slack add-user-to-channel \
+  --channel general --user Ada --json
+```
+
+Your application should continue using its normal provider SDK or HTTP adapter. Point that boundary
+at the plugin connection values; do not replace application behavior with control operations.
+
+## Start from an executable example
+
+```sh
+pnpm exec localhost demo clone slack-ping-bot ./slack-ping-bot
+cd ./slack-ping-bot
+pnpm test
+```
+
+`localhost demo clone <name> [directory]` creates a standalone copy in a new or empty directory,
+installs it with pnpm, and refuses to overwrite existing files. `slack-ping-bot` uses the official
+Slack Bolt SDK and a signed local Events API callback.
+
+Next, read [Configuration](/configuration) for world templates or [Integration testing](/testing)
+for disposable instances.

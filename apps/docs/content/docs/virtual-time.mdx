@@ -1,0 +1,81 @@
+---
+title: Virtual time and asynchronous work
+description: Advance instance clocks deliberately and wait for plugin-owned delivery work without wall-clock sleeps.
+---
+
+Every instance owns a durable clock. Plugins read emulator time through `ctx.clock.now()`; an
+application still uses its normal time unless the application itself provides a clock seam.
+
+## Clock modes
+
+Real mode follows wall time with a persisted offset:
+
+```ts
+clock: { mode: "real" }
+```
+
+Pinned mode begins at an exact instant and moves only when explicitly advanced:
+
+```ts
+clock: {
+  mode: "pinned",
+  startAt: "2026-01-01T00:00:00.000Z",
+}
+```
+
+Use pinned time for deterministic billing, expiry, retry, and scheduling scenarios. Use real mode
+when a provider SDK validates callback timestamps against the machine clock, as Slack Bolt does by
+default.
+
+```sh
+localhost clock status --json
+localhost clock advance 30d --json
+```
+
+Durations are positive whole values followed by `ms`, `s`, `m`, `h`, `d`, or `w`. There is no month
+unit because calendar months are ambiguous. The first-party Stripe plugin defines its current
+recurring interval as exactly 30 days.
+
+## What advancement means
+
+Advancement commits an `{ advanceId, from, to }` window, then presents it to configured plugins in
+stable order. Plugins that own time-derived behavior reconcile that window idempotently and persist
+effects before acknowledging it. After interruption, unacknowledged work resumes instead of moving
+the clock again.
+
+Programmatic tests use the same path:
+
+```ts
+const before = await instance.clock.status();
+const advanced = await instance.clock.advance("30d");
+
+expect(advanced.from).toBe(before.now);
+expect(advanced.to).not.toBe(before.now);
+```
+
+Clock advancement is not a snapshot or branch. To compare two outcomes from the same baseline,
+create and seed two instances independently.
+
+## Tracked work and `idle()`
+
+Plugins send outbound requests through their runtime context and register non-fetch work with the
+task tracker. `await instance.idle()` waits until the instance remains empty of tracked tasks after a
+microtask turn. This includes tasks created by finishing tasks.
+
+Use it after an operation triggers callbacks:
+
+```ts
+await instance.slack.sendMessage({
+  channel: channel.id,
+  from: user.id,
+  text: "ping",
+});
+await instance.idle();
+
+const messages = await instance.slack.listMessages({ channel: channel.id });
+expect(messages.map(({ text }) => text)).toContain("pong");
+```
+
+`idle()` is a synchronization boundary, not a retry policy. Provider-specific retry schedules remain
+inside plugins. Some retries run only after another positive clock advance; consult the installed
+plugin's compatibility notes.

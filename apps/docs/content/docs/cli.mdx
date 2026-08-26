@@ -1,0 +1,76 @@
+---
+title: CLI workflow and reference
+description: Start the daemon, discover operations, manage worlds, inspect state, and run applications.
+---
+
+The `localhost` CLI is a renderer and authenticated control client. It does not bypass the runtime or
+contain plugin business logic. Use `pnpm exec localhost` when the package is installed locally.
+
+## Daily development loop
+
+```sh
+pnpm exec localhost dev
+pnpm exec localhost exec <service> --help
+pnpm exec localhost exec <service> <operation> --json
+pnpm exec localhost logs <service> --tail 50 --json
+```
+
+`dev` runs in the foreground and owns the project storage lock. It auto-creates an empty persistent
+`dev` instance and writes `.localhost2137/.env`. Stop it with Ctrl-C; persistent instances remain on
+disk and are reconciled on the next start.
+
+Plugin operation commands are generated from live operation metadata. Simple Zod object inputs
+become long flags. A nested or otherwise non-representable input uses `--input-json <json>`. Do not
+guess operation names or inputs: use generated help or `describe --json`.
+
+## Command inventory
+
+| Command | Effect |
+| --- | --- |
+| `localhost init` | Create a minimal config and ignore local runtime state. |
+| `localhost demo clone <name> [directory]` | Copy and install a named standalone demo without overwriting files. |
+| `localhost dev [--host host] [--port port]` | Start the loopback project runtime. |
+| `localhost describe [service] [--instance id] [--json]` | Read configured service and operation metadata. |
+| `localhost exec <service> [operation] ...` | Invoke one plugin control operation. |
+| `localhost instance create <id> [--seed]` | Create a persistent isolated world. |
+| `localhost instance list [--json]` | List worlds known to the daemon. |
+| `localhost instance reset <id> [--seed]` | Replace a world's state, empty by default. |
+| `localhost instance destroy <id>` | Destroy the named world. |
+| `localhost seed [--instance id]` | Apply configured plugin and scenario seed once. |
+| `localhost env [--instance id] --format dotenv\|json` | Render app-facing connection variables. |
+| `localhost run [--instance id] -- <command...>` | Run a child with connection variables and forwarded signals. |
+| `localhost logs [service] [--instance id] [--tail n] [--json]` | Read bounded request, operation, lifecycle, delivery, and plugin logs. |
+| `localhost clock status [--instance id] [--json]` | Read virtual clock mode and time. |
+| `localhost clock advance <duration> [--instance id] [--json]` | Move time forward and reconcile time-derived plugin work. |
+| `localhost doctor [--json]` | Inspect config, daemon discovery, and stored manifests without repairing them. |
+
+Most commands target `dev`. Set `LOCALHOST_INSTANCE` to change the process-wide default, or use
+`--instance`. `--config <path>` is accepted across commands and bypasses config discovery.
+
+## Machine behavior
+
+`--json` writes valid JSON to stdout without banners or explanatory suffixes. Diagnostics go to
+stderr. Operations return data rather than printing from plugin code. Important exit classes are:
+
+| Exit | Meaning |
+| ---: | --- |
+| `2` | CLI usage or validation error |
+| `3` | configuration, discovery, transport, or control authentication failure |
+| `4` | missing instance, service, or operation |
+| `5` | lifecycle conflict, committed mutation failure, or idle timeout |
+| `10` | unexpected plugin, runtime, or lifecycle failure |
+| `130` | interrupted |
+
+## Plain HTTP control
+
+The control API is versioned below `/_/v1` and all endpoints except health require the daemon bearer
+token. Read it explicitly only in trusted local automation:
+
+```sh
+export LOCALHOST_CONTROL_TOKEN="$(< .localhost2137/control-token)"
+curl -s http://127.0.0.1:2137/_/v1/instances \
+  -H "authorization: Bearer $LOCALHOST_CONTROL_TOKEN"
+```
+
+Never expose this token to browser code, an application process, logs, traces, or build artifacts.
+Application code needs only a plugin's public connection values.

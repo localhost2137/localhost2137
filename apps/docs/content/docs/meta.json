@@ -1,4 +1,4 @@
 {
 	"title": "localhost2137",
-	"pages": ["index"]
+	"pages": ["index", "getting-started", "configuration", "cli", "testing", "virtual-time"]
 }
