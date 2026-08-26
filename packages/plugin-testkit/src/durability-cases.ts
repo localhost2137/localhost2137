@@ -178,6 +178,7 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 			],
 			{
 				cwd: daemonCwd,
+				detached: process.platform !== "win32",
 				env: {
 					...inheritedEnvironment,
 					[contractProcessEnvironment.events]: eventsPath,
@@ -192,16 +193,15 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 		let stopPromise: Promise<number | null> | undefined;
 		const stop = (): Promise<number | null> => {
 			if (!stopPromise) {
-				if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
-				stopPromise = closed;
+				stopPromise = stopProcessTree(child, closed);
+				void stopPromise.then(
+					() => activeStops.delete(stop),
+					() => activeStops.delete(stop),
+				);
 			}
 			return stopPromise;
 		};
 		activeStops.add(stop);
-		void closed.then(
-			() => activeStops.delete(stop),
-			() => activeStops.delete(stop),
-		);
 		return Object.freeze({ closed, process: child, stop });
 	};
 	const owner: DurabilityOwner = Object.freeze({
@@ -237,8 +237,8 @@ async function withDurabilityRoot<Services extends ServiceRecord, Value>(
 	for (const result of await Promise.allSettled([...activeStops].map((stop) => stop()))) {
 		if (result.status === "rejected") cleanupFailures.push(result.reason);
 	}
-	await rm(root, { force: true, recursive: true }).catch((cause: unknown) =>
-		cleanupFailures.push(cause),
+	await rm(root, { force: true, maxRetries: 10, recursive: true, retryDelay: 50 }).catch(
+		(cause: unknown) => cleanupFailures.push(cause),
 	);
 	return finishCaptured(outcome, cleanupFailures, "Durability contract case");
 }
@@ -319,6 +319,46 @@ function processExit(process: ChildProcess): Promise<number | null> {
 		process.once("error", reject);
 		process.once("close", (code) => resolve(code));
 	});
+}
+
+async function stopProcessTree(
+	child: ChildProcess,
+	closed: Promise<number | null>,
+): Promise<number | null> {
+	const processGroup = process.platform !== "win32" && child.pid ? -child.pid : undefined;
+	if (child.exitCode === null && child.signalCode === null) {
+		if (processGroup === undefined) child.kill("SIGINT");
+		else signalProcessGroup(processGroup, "SIGINT");
+	}
+	const exitCode = await closed;
+	if (processGroup === undefined) return exitCode;
+	const deadline = Date.now() + 2_000;
+	while (processGroupExists(processGroup) && Date.now() < deadline) await tick();
+	if (processGroupExists(processGroup)) signalProcessGroup(processGroup, "SIGKILL");
+	const killDeadline = Date.now() + 2_000;
+	while (processGroupExists(processGroup) && Date.now() < killDeadline) await tick();
+	if (processGroupExists(processGroup)) {
+		throw new Error("Durability process group did not terminate before its cleanup deadline.");
+	}
+	return exitCode;
+}
+
+function processGroupExists(processGroup: number): boolean {
+	try {
+		process.kill(processGroup, 0);
+		return true;
+	} catch (cause) {
+		if (hasCode(cause, "ESRCH")) return false;
+		throw cause;
+	}
+}
+
+function signalProcessGroup(processGroup: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(processGroup, signal);
+	} catch (cause) {
+		if (!hasCode(cause, "ESRCH")) throw cause;
+	}
 }
 
 function pnpmCommand(): Readonly<{ command: string; prefix: readonly string[] }> {

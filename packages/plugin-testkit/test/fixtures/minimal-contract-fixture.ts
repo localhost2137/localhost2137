@@ -3,7 +3,7 @@ import {
 	createFixtureConfig,
 	createFixtureService,
 	createInvalidFixtureConfig,
-	fixtureConfig,
+	type fixtureConfig,
 } from "./fixture-plugin.js";
 
 type Services = typeof fixtureConfig.services;
