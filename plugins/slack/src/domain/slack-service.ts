@@ -179,6 +179,12 @@ export class SlackService {
 		return channel;
 	}
 
+	requireChannelById(id: string): SlackChannel {
+		const channel = this.#database.channels.findById(id);
+		if (!channel) throw new SlackError("channel_not_found", `Slack channel ${id} was not found.`);
+		return channel;
+	}
+
 	requireUser(reference: string): SlackUser {
 		const user = this.#database.users.find(reference);
 		if (!user) throw new SlackError("user_not_found", `Slack user ${reference} was not found.`);

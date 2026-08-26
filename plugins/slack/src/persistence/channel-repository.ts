@@ -43,8 +43,15 @@ export class ChannelRepository {
 		return row ? toChannel(row) : undefined;
 	}
 
+	findById(id: ChannelId): SlackChannel | undefined {
+		const row = this.#database
+			.prepare("SELECT id, name, is_private, created_at_ms FROM channels WHERE id = ?")
+			.get(id) as ChannelRow | undefined;
+		return row ? toChannel(row) : undefined;
+	}
+
 	getById(id: ChannelId): SlackChannel {
-		const channel = this.find(id);
+		const channel = this.findById(id);
 		if (!channel) throw new Error(`Slack channel ${id} is missing after persistence.`);
 		return channel;
 	}

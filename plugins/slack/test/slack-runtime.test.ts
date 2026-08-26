@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { defineConfig } from "localhost2137";
 import { createTestRuntime } from "localhost2137/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SlackSeed } from "../src/config.js";
 import { verifySlackRequestSignature } from "../src/events/request-signature.js";
 import { slack } from "../src/index.js";
 import { createSlackPlugin } from "../src/plugin.js";
@@ -224,6 +225,52 @@ describe("Slack runtime integration", () => {
 		}
 	});
 
+	it("requires exact stored channel IDs at every public Web API boundary", async () => {
+		const runtime = await startRuntime(slack, null, {
+			channels: [{ id: "C_GENERAL", members: ["U_ADA"], name: "general" }],
+			users: [{ admin: false, id: "U_ADA", name: "Ada" }],
+		});
+		const instance = await runtime.createInstance({ seed: true });
+		try {
+			const connection = instance.slack.connection;
+			const exactMembers = await slackGet(connection.apiUrl, "conversations.members", {
+				channel: "C_GENERAL",
+				token: connection.botToken,
+			});
+			expect(await exactMembers.json()).toMatchObject({
+				members: ["U000000", "U_ADA"],
+				ok: true,
+			});
+			const exactHistory = await slackGet(connection.apiUrl, "conversations.history", {
+				channel: "C_GENERAL",
+				token: connection.botToken,
+			});
+			expect(await exactHistory.json()).toMatchObject({ messages: [], ok: true });
+			const exactPost = await slackRequest(connection.apiUrl, "chat.postMessage", {
+				channel: "C_GENERAL",
+				text: "stored semantic IDs remain valid",
+				token: connection.botToken,
+			});
+			expect(await exactPost.json()).toMatchObject({ channel: "C_GENERAL", ok: true });
+
+			for (const method of ["conversations.members", "conversations.history"] as const) {
+				const response = await slackGet(connection.apiUrl, method, {
+					channel: "general",
+					token: connection.botToken,
+				});
+				expect(await response.json(), method).toEqual({ error: "channel_not_found", ok: false });
+			}
+			const namedPost = await slackRequest(connection.apiUrl, "chat.postMessage", {
+				channel: "general",
+				text: "must not be posted",
+				token: connection.botToken,
+			});
+			expect(await namedPost.json()).toEqual({ error: "channel_not_found", ok: false });
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("uses stable method-bound cursor pagination", async () => {
 		const runtime = await startRuntime(slack, null);
 		const instance = await runtime.createInstance();
@@ -364,7 +411,7 @@ describe("Slack runtime integration", () => {
 	});
 });
 
-async function startRuntime(plugin: typeof slack, eventsUrl: string | null) {
+async function startRuntime(plugin: typeof slack, eventsUrl: string | null, seed?: SlackSeed) {
 	const runtime = await createTestRuntime({
 		config: defineConfig({
 			clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
@@ -376,6 +423,7 @@ async function startRuntime(plugin: typeof slack, eventsUrl: string | null) {
 						signingSecret: "local-signing-secret",
 						workspaceName: "Local Test",
 					},
+					...(seed ? { seed } : {}),
 				}),
 			},
 		}),

@@ -114,7 +114,7 @@ async function conversationsMembers(context: SlackContext): Promise<Response> {
 	authenticateSlackRequest(context, request);
 	const channel = requiredString(request, "channel", "channel_not_found");
 	const runtime = context.get("lh");
-	const resolvedChannel = runtime.state.service.requireChannel(channel);
+	const resolvedChannel = runtime.state.service.requireChannelById(channel);
 	const pagination = readPagination(request, {
 		filter: resolvedChannel.id,
 		method: "conversations.members",
@@ -143,7 +143,7 @@ async function conversationsHistory(context: SlackContext): Promise<Response> {
 	const actor = authenticateSlackRequest(context, request);
 	const channel = requiredString(request, "channel", "channel_not_found");
 	const runtime = context.get("lh");
-	const resolvedChannel = runtime.state.service.requireChannel(channel);
+	const resolvedChannel = runtime.state.service.requireChannelById(channel);
 	if (!runtime.state.service.isMember(resolvedChannel.id, actor.id)) {
 		throw new SlackError("not_in_channel", "Authenticated Slack user is not in the channel.");
 	}
@@ -184,8 +184,9 @@ async function chatPostMessage(context: SlackContext): Promise<Response> {
 	const text = requiredString(request, "text", "no_text");
 	const threadTs = optionalString(request, "thread_ts");
 	const runtime = context.get("lh");
+	const resolvedChannel = runtime.state.service.requireChannelById(channel);
 	const created = runtime.state.service.postMessage({
-		channel,
+		channel: resolvedChannel.id,
 		emitEvent: runtime.config.eventsUrl !== null,
 		now: runtime.clock.now(),
 		text,
