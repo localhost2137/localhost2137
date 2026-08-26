@@ -120,20 +120,22 @@ synchronization mechanism for concurrent tests.
 [Instances and isolation](/instances#create-reset-and-destroy-mean-different-things) describes the
 full instance lifecycle and ownership rules.
 
-## Treat seed failure as a failed world
+## Recover according to the outer mutation
 
-Service seeds are not one transaction across plugins. If one plugin seed fails, an earlier plugin
-may already have changed its own storage. The top-level scenario is skipped, the seed failure is
-recorded, and the runtime refuses another seed attempt on that world.
+Service seeds are not one transaction across plugins. A later plugin seed can fail after an earlier
+one changed storage. What remains visible depends on the action that requested seed:
 
-This is deliberate: retrying from partially changed state would make the baseline depend on how far
-the previous attempt reached. Inspect the failure, correct the config or plugin, and restart the
-runtime when its loaded config or code changed. Then reset the instance. Request seed on that reset
-only after the cause is fixed.
+| Action | Result when seed fails | Recovery |
+| --- | --- | --- |
+| `localhost seed` or `instance.seed()` | The existing world remains addressable with `seed_failed` status and may contain partial changes. Another in-place seed is refused. | Inspect the failure, fix its cause, then reset the instance. Request seed on the reset only when the baseline is ready to run from empty state. |
+| Create with `--seed` or `{ seed: true }` | Creation fails and no partially seeded new instance becomes addressable. | Fix the cause, then create the instance again. There is no failed new instance to reset. |
+| Reset with `--seed` or `{ seed: true }` | The replacement fails. The runtime restores the prior world when it can instead of making the partial replacement active. | Do not assume reset succeeded. Fix the cause and retry the reset. If restoration also failed, inspect that reported failure before using the instance. |
 
-The same rule applies when the top-level scenario fails. Its operations may already have changed
-plugin storage, and localhost2137 cannot roll those changes back across services. Reset is the
-recovery boundary.
+Restart the runtime before recovery when its loaded config or plugin code changed.
+
+The top-level scenario runs inside the same create, reset, or in-place seed action as the plugin
+seeds. If it fails after changing service state, the surrounding action follows the corresponding
+row above.
 
 ## Keep setup from becoming the subject
 
