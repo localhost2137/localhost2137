@@ -2,12 +2,7 @@ import type { BasePluginContext, RunningPluginContext } from "localhost2137";
 import type { SlackConfig } from "./config.js";
 import type { SlackState } from "./state.js";
 
-type SlackLifecycleEvent =
-	| "create"
-	| "seed"
-	| "start"
-	| "stop"
-	| `update:${number}:${number}`;
+type SlackLifecycleEvent = "create" | "seed" | "start" | "stop" | `update:${number}:${number}`;
 
 export interface SlackPluginDependencies {
 	readonly beforeCreate?: (context: BasePluginContext<SlackConfig>) => void;

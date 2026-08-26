@@ -6,6 +6,9 @@ a Slack account, OAuth setup, or real credentials.
 
 ## Configure
 
+Use ESM application metadata (`"type": "module"`) when loading a TypeScript
+`localhost.config.ts`. A newly initialized CommonJS package can use `localhost.config.mjs` instead.
+
 ```ts
 import { slack } from "@localhost2137/slack";
 import { defineConfig } from "localhost2137";

@@ -189,10 +189,7 @@ export const slackContractFixture = Object.freeze({
 	}),
 }) satisfies PluginContractFixture<SlackContractServices>;
 
-function createSlackContractConfig(
-	deliveryUrl: string,
-	options?: ContractHarnessConfigOptions,
-) {
+function createSlackContractConfig(deliveryUrl: string, options?: ContractHarnessConfigOptions) {
 	let shouldFailCreate = options?.variant === "create-fails-once";
 	return defineConfig({
 		clock: { mode: "pinned", startAt: PINNED_TIME },
