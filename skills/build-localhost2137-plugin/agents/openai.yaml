@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build a localhost2137 plugin"
+  short_description: "Author and verify stateful emulator plugins"
+  default_prompt: "Use $build-localhost2137-plugin to build or extend this localhost2137 emulator plugin through the public contract."
