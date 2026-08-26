@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
 import type { PluginEnv } from "localhost2137";
 import type { SlackConfig } from "../config.js";
-import { LOCAL_BOT_ID } from "../domain/slack-service.js";
 import { SlackError } from "../domain/slack-error.js";
+import { LOCAL_BOT_ID } from "../slack-identities.js";
 import type { SlackState } from "../state.js";
 import { pageResult, readPagination } from "./pagination.js";
 import { slackChannel, slackMessage, slackUser } from "./slack-responses.js";

@@ -1,5 +1,5 @@
 import type { SlackChannel, SlackMessage, SlackUser } from "../domain/models.js";
-import { LOCAL_BOT_ID } from "../domain/slack-service.js";
+import { LOCAL_BOT_ID } from "../slack-identities.js";
 
 export function slackUser(user: SlackUser, teamId: string): Readonly<Record<string, unknown>> {
 	return {

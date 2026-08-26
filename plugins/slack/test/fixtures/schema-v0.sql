@@ -8,4 +8,4 @@ CREATE TABLE legacy_users (
 );
 
 INSERT INTO legacy_users(id, name, is_admin, created_at_ms)
-VALUES ('U000001', 'Legacy Ada', 1, 1767225600000);
+VALUES ('U000000', 'Legacy Ada', 1, 1767225600000);

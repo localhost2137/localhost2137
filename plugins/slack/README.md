@@ -61,6 +61,8 @@ Deliberate v0.1 differences:
   rich blocks/attachments, presence, search, or message editing/deletion APIs;
 - channel posting requires membership, but scope authorization is not emulated;
 - bot and user IDs, event IDs, and Slack timestamps are deterministic database sequences;
+- `U000000` is reserved for the installed bot; upgrades relocate a conflicting persisted human to
+  the next generated user ID and rewrite its references transactionally;
 - only the configured bot token is public in v0.1; local users do not receive tokens;
 - public channels are the only accepted `conversations.list` type;
 - Slack Events retries and retry headers are not emulated until durable virtual-time retries exist.
@@ -101,7 +103,7 @@ events adapter ---------------------> delivery repository
 lifecycle --------------------------> database resource owner
 ```
 
-Raw parameterized SQL and three explicit migrations own the schema. Repositories map rows to domain
+Raw parameterized SQL and four explicit migrations own the schema. Repositories map rows to domain
 records. `SlackDatabase` is the only connection resource owner, closes idempotently, enables foreign
 keys/WAL, and provides the transaction boundary for multi-row message/event creation. The plugin
 never imports runtime internals and keeps no module-global instance state.

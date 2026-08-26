@@ -1,6 +1,7 @@
 import type { SlackConfig, SlackSeed } from "../config.js";
 import type { SlackDatabase } from "../persistence/database.js";
 import type { MessagePageOptions } from "../persistence/message-repository.js";
+import { LOCAL_BOT_NAME, LOCAL_BOT_USER_ID, LOCAL_TEAM_ID } from "../slack-identities.js";
 import type {
 	ChannelId,
 	EventId,
@@ -11,11 +12,6 @@ import type {
 	UserId,
 } from "./models.js";
 import { SlackError } from "./slack-error.js";
-
-const LOCAL_TEAM_ID = "T000001";
-const LOCAL_BOT_USER_ID = "U000000";
-export const LOCAL_BOT_ID = "B000001";
-const LOCAL_BOT_NAME = "localhost2137-bot";
 
 export interface CreatedMessage {
 	readonly deliveryEventId: EventId | null;

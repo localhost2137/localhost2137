@@ -28,7 +28,7 @@ export type SlackPluginFactory = PluginFactory<
 >;
 
 export function createSlackPlugin(dependencies: SlackPluginDependencies = {}): SlackPluginFactory {
-	const stateVersion = dependencies.stateVersion ?? 3;
+	const stateVersion = dependencies.stateVersion ?? 4;
 	if (!Number.isSafeInteger(stateVersion) || stateVersion < 1) {
 		throw new TypeError("Slack plugin stateVersion must be a positive safe integer.");
 	}

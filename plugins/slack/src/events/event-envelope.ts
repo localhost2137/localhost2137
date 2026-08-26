@@ -1,5 +1,5 @@
 import type { EventId, SlackMessage, SlackUser, SlackWorkspace } from "../domain/models.js";
-import { LOCAL_BOT_ID } from "../domain/slack-service.js";
+import { LOCAL_BOT_ID } from "../slack-identities.js";
 
 export interface SlackEventEnvelope {
 	readonly api_app_id: string;

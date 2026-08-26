@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
-import { reconcileSequenceId, type SequenceKind } from "./id-sequence.js";
+import { LOCAL_BOT_NAME, LOCAL_BOT_USER_ID } from "../slack-identities.js";
+import { insertSequencedId, reconcileSequenceId, type SequenceKind } from "./id-sequence.js";
 
-export const CURRENT_DATABASE_VERSION = 3;
+export const CURRENT_DATABASE_VERSION = 4;
 
 interface Migration {
 	readonly version: number;
@@ -101,6 +102,12 @@ const migrations: readonly Migration[] = [
 			reconcileRows(database, "event", "SELECT event_id AS id FROM event_deliveries");
 		},
 	},
+	{
+		version: 4,
+		apply(database) {
+			relocateReservedBotConflict(database);
+		},
+	},
 ];
 
 export function migrateDatabase(database: Database.Database): void {
@@ -144,4 +151,54 @@ function tableExists(database: Database.Database, name: string): boolean {
 function reconcileRows(database: Database.Database, kind: SequenceKind, query: string): void {
 	const rows = database.prepare(query).all() as Array<{ id: string }>;
 	for (const row of rows) reconcileSequenceId(database, kind, row.id);
+}
+
+interface PersistedUserIdentity {
+	readonly created_at_ms: number;
+	readonly is_admin: number;
+	readonly is_bot: number;
+	readonly name: string;
+}
+
+function relocateReservedBotConflict(database: Database.Database): void {
+	const persisted = database
+		.prepare("SELECT name, is_admin, is_bot, created_at_ms FROM users WHERE id = ?")
+		.get(LOCAL_BOT_USER_ID) as PersistedUserIdentity | undefined;
+	if (!persisted || isCanonicalBot(persisted)) return;
+
+	const temporaryName = uniqueRelocationName(database);
+	database.prepare("UPDATE users SET name = ? WHERE id = ?").run(temporaryName, LOCAL_BOT_USER_ID);
+	const relocatedId = insertSequencedId(database, "user", undefined, (id) => {
+		database
+			.prepare(
+				"INSERT INTO users(id, name, is_admin, is_bot, created_at_ms) VALUES (?, ?, ?, ?, ?)",
+			)
+			.run(id, persisted.name, persisted.is_admin, persisted.is_bot, persisted.created_at_ms);
+	});
+	for (const statement of [
+		"UPDATE tokens SET user_id = ? WHERE user_id = ?",
+		"UPDATE channel_memberships SET user_id = ? WHERE user_id = ?",
+		"UPDATE messages SET user_id = ? WHERE user_id = ?",
+		"UPDATE workspace SET bot_user_id = ? WHERE bot_user_id = ?",
+	]) {
+		database.prepare(statement).run(relocatedId, LOCAL_BOT_USER_ID);
+	}
+	const removed = database.prepare("DELETE FROM users WHERE id = ?").run(LOCAL_BOT_USER_ID);
+	if (removed.changes !== 1) {
+		throw new Error("Slack reserved bot identity conflict could not be relocated.");
+	}
+}
+
+function isCanonicalBot(user: PersistedUserIdentity): boolean {
+	return user.name === LOCAL_BOT_NAME && user.is_admin === 0 && user.is_bot === 1;
+}
+
+function uniqueRelocationName(database: Database.Database): string {
+	let suffix = 0;
+	while (true) {
+		const candidate = `\u0000localhost2137:relocating:${suffix}`;
+		const existing = database.prepare("SELECT 1 FROM users WHERE name = ?").get(candidate);
+		if (existing === undefined) return candidate;
+		suffix += 1;
+	}
 }

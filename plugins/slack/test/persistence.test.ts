@@ -32,12 +32,94 @@ describe("Slack persistence", () => {
 			);
 			expect(database.users.findById("U000001")).toMatchObject({
 				admin: true,
+				bot: false,
 				id: "U000001",
 				name: "Legacy Ada",
 			});
 			const service = new SlackService(database);
 			service.initialize(config(), now);
+			expect(service.requireUser("U000000")).toMatchObject({
+				admin: false,
+				bot: true,
+				id: "U000000",
+				name: "localhost2137-bot",
+			});
+			expect(service.authenticate(config().botToken)).toMatchObject({
+				bot: true,
+				id: "U000000",
+			});
 			expect(service.createUser({ admin: false, name: "Grace", now }).id).toBe("U000002");
+		} finally {
+			database.close();
+		}
+	});
+
+	it("relocates an already-migrated human bot-ID conflict while preserving references", async () => {
+		const database = await versionTwoConflictDatabase();
+		try {
+			migrateDatabase(database.raw());
+			expect(database.users.findById("U000000")).toBeUndefined();
+			expect(database.users.findById("U000001")).toMatchObject({
+				admin: true,
+				bot: false,
+				name: "Legacy Human",
+			});
+			expect(database.raw().prepare("SELECT user_id FROM channel_memberships").get()).toEqual({
+				user_id: "U000001",
+			});
+			expect(database.raw().prepare("SELECT user_id FROM messages").get()).toEqual({
+				user_id: "U000001",
+			});
+			expect(database.raw().prepare("SELECT user_id FROM tokens").get()).toEqual({
+				user_id: "U000001",
+			});
+			expect(database.workspace.get()).toMatchObject({ botUserId: "U000001" });
+
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			expect(service.requireUser("U000000")).toMatchObject({
+				admin: false,
+				bot: true,
+				name: "localhost2137-bot",
+			});
+			expect(service.authenticate(config().botToken)).toMatchObject({
+				bot: true,
+				id: "U000000",
+			});
+			expect(() => service.authenticate("xoxb-stale-human-bot")).toThrow(/not valid/);
+			expect(service.workspace()).toMatchObject({ botUserId: "U000000" });
+			expect(service.createUser({ admin: false, name: "Next User", now }).id).toBe("U000002");
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rolls back reserved bot conflict relocation when a reference rewrite fails", async () => {
+		const database = await versionTwoConflictDatabase();
+		try {
+			database.raw().exec(`
+				CREATE TRIGGER reject_legacy_message_user_rewrite
+				BEFORE UPDATE OF user_id ON messages
+				BEGIN
+					SELECT RAISE(ABORT, 'injected user reference rewrite failure');
+				END;
+			`);
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/injected user reference rewrite failure/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(2);
+			expect(database.users.findById("U000000")).toMatchObject({
+				admin: true,
+				bot: false,
+				name: "Legacy Human",
+			});
+			expect(database.users.findById("U000001")).toBeUndefined();
+			expect(database.raw().prepare("SELECT user_id FROM messages").get()).toEqual({
+				user_id: "U000000",
+			});
+			expect(
+				database.raw().prepare("SELECT value FROM counters WHERE kind = 'user'").get(),
+			).toBeUndefined();
 		} finally {
 			database.close();
 		}
@@ -244,6 +326,29 @@ async function fixtureDatabase(): Promise<SlackDatabase> {
 async function migratedDatabase(): Promise<SlackDatabase> {
 	const database = await fixtureDatabase();
 	migrateDatabase(database.raw());
+	return database;
+}
+
+async function versionTwoConflictDatabase(): Promise<SlackDatabase> {
+	const database = await migratedDatabase();
+	database.raw().exec(`
+		INSERT INTO users(id, name, is_admin, is_bot, created_at_ms)
+		VALUES ('U000000', 'Legacy Human', 1, 0, 1767225600000);
+		INSERT INTO tokens(token, user_id, kind)
+		VALUES ('xoxb-stale-human-bot', 'U000000', 'bot');
+		INSERT INTO workspace(id, name, bot_user_id)
+		VALUES ('T000001', 'Legacy Workspace', 'U000000');
+		INSERT INTO channels(id, name, is_private, created_at_ms)
+		VALUES ('C000001', 'legacy', 0, 1767225600000);
+		INSERT INTO channel_memberships(channel_id, user_id)
+		VALUES ('C000001', 'U000000');
+		INSERT INTO messages(id, channel_id, user_id, text, ts, created_at_ms, thread_ts, deleted)
+		VALUES (
+			'M000001', 'C000001', 'U000000', 'legacy message',
+			'1767225600.000000', 1767225600000, NULL, 0
+		);
+		PRAGMA user_version = 2;
+	`);
 	return database;
 }
 
