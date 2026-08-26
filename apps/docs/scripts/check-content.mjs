@@ -101,6 +101,22 @@ assert(agents?.includes("There is no automatic skill installer"));
 const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));
 
+const diagnosing = content.get("diagnosing.mdx");
+assert(diagnosing?.includes("Correlation IDs are scoped to one boundary"));
+assert(diagnosing?.includes("`request`, `operation`, `delivery`, and `plugin` entries"));
+assert(!diagnosing?.includes("`task`, `lifecycle`"));
+const cli = content.get("cli.mdx");
+assert(cli?.includes("request, operation, delivery, and plugin logs"));
+assert(!cli?.includes("request, operation, lifecycle"));
+for (const file of ["cli.mdx", "diagnosing.mdx"]) {
+	for (const fence of content.get(file)?.matchAll(/```sh\n([\s\S]*?)```/g) ?? []) {
+		assert(
+			!/<[^>\n]+>/.test(fence[1]),
+			`${file} contains an angle-bracket shell placeholder in an sh fence.`,
+		);
+	}
+}
+
 const navigation = JSON.parse(await readFile(join(contentRoot, "meta.json"), "utf8"));
 assert.equal(navigation.pages[0], "agents", "For LLMs must remain the first sidebar page.");
 const layoutOptions = await readFile(join(docsRoot, "lib/layout.shared.tsx"), "utf8");

@@ -40,8 +40,10 @@ have recorded the diagnostic.
 Ask the running daemon what it actually exposes:
 
 ```sh
-pnpm exec localhost describe <service> --instance <id> --json
-pnpm exec localhost env --instance <id> --format json
+localhost_service_key="replace-with-configured-service-key"
+localhost_instance_id="replace-with-instance-id"
+pnpm exec localhost describe "$localhost_service_key" --instance "$localhost_instance_id" --json
+pnpm exec localhost env --instance "$localhost_instance_id" --format json
 ```
 
 The service name is the key from `services` in your config, not necessarily the plugin package name.
@@ -64,7 +66,7 @@ from the claim:
 | An operation rejects its input or fails | Operation schema or plugin control behavior | Privileged setup or inspection failed; it says nothing by itself about the provider-shaped API. |
 | The application SDK or HTTP client receives an unexpected response | Provider-shaped HTTP surface and application adapter | The normal application integration path was exercised. |
 | A callback is absent | Callback configuration, receiver, signature handling, or delivery | The outbound delivery path needs to be traced separately from the triggering request. |
-| `idle()` rejects | Tracked plugin work | At least one tracked task failed; an arbitrary delay cannot make that evidence disappear. |
+| `idle()` rejects | Idle control request and tracked plugin work | Its error distinguishes failed work, timeout, cancellation, or another control failure; an arbitrary delay is not completion evidence. |
 | `idle()` succeeds but the expected application effect is absent | Application completion | Plugin-owned work is idle, but the application may still have its own queue, transaction, or background job. |
 | Behavior changes after reset or restart | Instance lifecycle or persisted plugin state | The failure depends on world state or reconciliation rather than only the request. |
 | The local result differs from the real provider | Documented compatibility surface | The gap may be unsupported behavior; it is not automatically an emulator defect. |
@@ -73,19 +75,31 @@ This classification prevents a common false fix: arranging the desired result th
 when the scenario is supposed to prove an SDK call or callback handler. Operations remain useful for
 setup and inspection, but they cannot supply evidence for a boundary they bypass.
 
-## Follow the correlation through logs
+## Trace each boundary through logs
 
-Control errors include a correlation ID. Read the latest structured entries for the same instance
-and, when known, service:
+Correlation IDs are scoped to one boundary, not propagated through an entire scenario. A control
+request that invokes an operation shares its ID with that operation's entries. A provider-shaped
+request, each outbound delivery, each plugin log call, and a later `idle` control request have their
+own IDs.
+
+Read the latest structured entries for the same instance and, when known, service:
 
 ```sh
-pnpm exec localhost logs <service> --instance <id> --tail 50 --json
+localhost_service_key="replace-with-configured-service-key"
+localhost_instance_id="replace-with-instance-id"
+pnpm exec localhost logs "$localhost_service_key" \
+  --instance "$localhost_instance_id" --tail 50 --json
 ```
 
-Match `correlationId` first, then read `kind`, `status`, `message`, and any safe `attributes`.
-`request`, `operation`, `delivery`, `task`, `lifecycle`, and `plugin` entries distinguish work that
-may otherwise occur within the same wall-clock second. `virtualTime` shows the instance clock when it
-is relevant; `wallTime` shows when the entry was recorded.
+Use a known `correlationId` to group entries within its boundary. To move to the next boundary,
+pivot using `instanceId`, `serviceKey`, `wallTime`, `virtualTime`, and provider-shaped resource or
+event identifiers visible in the application and safe log attributes. Do not search for one
+correlation ID end to end.
+
+The runtime emits `request`, `operation`, `delivery`, and `plugin` entries. Read their `status`,
+`message`, and safe `attributes` to distinguish work that may otherwise occur within the same
+wall-clock second. `virtualTime` shows the instance clock when it is relevant; `wallTime` shows when
+the entry was recorded.
 
 Logs are a bounded diagnostic ring, not an audit trail. A non-zero `droppedEntries` means older or
 oversized entries are unavailable, so reproduce the smallest failing scenario before drawing a
@@ -96,17 +110,20 @@ necessary fields at the application boundary with its own safe instrumentation.
 ## Treat asynchronous failures as evidence
 
 Call `await instance.idle()` after the plugin schedules callbacks or other tracked work. If it
-rejects, inspect the matching task or delivery entries instead of adding a delay. If it resolves,
-only plugin-tracked work is known to be idle. Wait on the application's explicit completion boundary
-before asserting application state.
+rejects, start with that control error's code, message, and correlation ID. The runtime does not emit
+a task entry for the failure. Inspect nearby delivery and plugin evidence for the same instance,
+service, and time instead of adding a delay. If `idle()` resolves, only plugin-tracked work is known
+to be idle. Wait on the application's explicit completion boundary before asserting application
+state.
 
 Work scheduled for a later virtual time does not run merely because the current work became idle.
 Advance the clock by a positive duration when the documented behavior depends on a later retry or
 deadline, then wait for completion again. See [Virtual time and asynchronous work](/virtual-time)
 for the distinction between clock movement, reconciliation, and idle work.
 
-Some lifecycle failures require extra care. `LIFECYCLE_CONFLICT` means the requested action is not
-valid for the current instance state or generation. Inspect the instance before choosing another
+Some lifecycle failures require extra care. `LIFECYCLE_CONFLICT` is an umbrella for invalid
+transitions, lifecycle timeouts, a closing or changing runtime generation, and time-reconciliation
+conflicts. Read its message and inspect the current instance and clock state before choosing another
 action. `INSTANCE_MUTATION_COMMITTED` means the mutation took effect but finalization did not finish
 cleanly; do not blindly retry it. For a committed clock advance, the error details include the
 `from`, `to`, `advanceId`, mode, and whether reconciliation remains pending. Read the current state
@@ -136,7 +153,7 @@ A report another person can act on includes:
 - the localhost2137, plugin, SDK, and Node.js versions;
 - the resolved config path, service key, and instance ID;
 - the exact boundary exercised and the smallest reproducing command or application action;
-- the error code and correlation ID;
+- the error code and boundary-scoped correlation ID or IDs;
 - the relevant structured log entries and `droppedEntries` count;
 - `doctor` issue codes, expected behavior, and observed behavior;
 - the plugin support-matrix entry or documentation claim when provider compatibility is involved.
