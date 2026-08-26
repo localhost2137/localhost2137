@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdownRouteForPage, rewriteLLMIndexLinks } from "../lib/markdown-routes.ts";
@@ -87,13 +87,71 @@ assert(agents?.includes("skills/use-localhost2137"));
 assert(agents?.includes("skills/build-localhost2137-plugin"));
 assert(agents?.includes("There is no automatic skill installer"));
 
-const layout = await readFile(join(docsRoot, "app/(docs)/layout.tsx"), "utf8");
+const layout = await readFile(join(docsRoot, "app/routes/docs.tsx"), "utf8");
 assert(layout.includes('from "fumadocs-ui/layouts/glass"'));
+assert(layout.includes('from "fumadocs-ui/layouts/glass/page"'));
 const stylesheet = await readFile(join(docsRoot, "app/global.css"), "utf8");
 assert(stylesheet.includes('@import "fumadocs-ui/css/generated/glass.css"'));
 
-const nextConfig = await readFile(join(docsRoot, "next.config.mjs"), "utf8");
-assert(nextConfig.includes('source: "/:path*.md"'));
+const routes = await readFile(join(docsRoot, "app/routes.ts"), "utf8");
+for (const route of [
+	'route("api/search", "routes/search.ts")',
+	'route("llms.txt", "routes/llms-index.ts")',
+	'route("llms-full.txt", "routes/llms-full.ts")',
+	'route("index.md", "routes/markdown.ts"',
+	'route(":page.md", "routes/markdown.ts"',
+	'route(":section/:page.md", "routes/markdown.ts"',
+	'route("*", "routes/docs.tsx")',
+]) {
+	assert(routes.includes(route), `Missing React Router route: ${route}`);
+}
+
+const viteConfig = await readFile(join(docsRoot, "vite.config.ts"), "utf8");
+for (const plugin of ["cloudflare(", "fumadocsMdx(", "tailwindcss(", "reactRouter("]) {
+	assert(viteConfig.includes(plugin), `Vite config must include ${plugin}`);
+}
+assert(
+	viteConfig.indexOf("cloudflare(") < viteConfig.indexOf("reactRouter("),
+	"The Cloudflare plugin must run before the React Router plugin.",
+);
+
+const reactRouterConfig = await readFile(join(docsRoot, "react-router.config.ts"), "utf8");
+assert(reactRouterConfig.includes("ssr: true"), "Docs must keep server rendering enabled.");
+const worker = await readFile(join(docsRoot, "workers/app.ts"), "utf8");
+assert(worker.includes('import("virtual:react-router/server-build")'));
+assert(worker.includes("createRequestHandler"));
+
+const wrangler = JSON.parse(await readFile(join(docsRoot, "wrangler.jsonc"), "utf8"));
+assert.equal(wrangler.name, "localhost2137-docs");
+assert.equal(wrangler.main, "./workers/app.ts");
+assert.equal(wrangler.assets?.directory, "./build/client");
+assert.equal(wrangler.observability?.enabled, true);
+assert.deepEqual(wrangler.routes, [
+	{
+		pattern: "localhost2137.dev",
+		custom_domain: true,
+	},
+]);
+assert(!("account_id" in wrangler), "Wrangler config must not contain account-specific state.");
+
+const packageManifest = JSON.parse(await readFile(join(docsRoot, "package.json"), "utf8"));
+assert(!packageManifest.dependencies?.next && !packageManifest.devDependencies?.next);
+assert.equal(packageManifest.scripts.build, "react-router build");
+assert.equal(packageManifest.scripts.dev, "react-router dev");
+assert.equal(packageManifest.scripts.deploy, "pnpm build && wrangler deploy");
+
+for (const retiredPath of [
+	"next-env.d.ts",
+	"next.config.mjs",
+	"postcss.config.mjs",
+	"source.config.ts",
+	"app/(docs)/layout.tsx",
+	"app/api/search/route.ts",
+	"app/llms.txt/route.ts",
+]) {
+	await assertMissing(join(docsRoot, retiredPath));
+}
+
 const sourceIndexFixture = [...expectedPages]
 	.map(([file, pageUrl]) => `- [${file}](${pageUrl})`)
 	.join("\n");
@@ -108,12 +166,13 @@ assert.deepEqual(
 	"Every llms.txt link must target the Markdown route for one docs page.",
 );
 
-const llmsIndexRoute = await readFile(join(docsRoot, "app/llms.txt/route.ts"), "utf8");
+const llmsIndexRoute = await readFile(join(docsRoot, "app/routes/llms-index.ts"), "utf8");
 assert(llmsIndexRoute.includes("rewriteLLMIndexLinks"));
 for (const route of [
-	"app/llms.txt/route.ts",
-	"app/llms-full.txt/route.ts",
-	"app/llms.mdx/[[...slug]]/route.ts",
+	"app/routes/search.ts",
+	"app/routes/llms-index.ts",
+	"app/routes/llms-full.ts",
+	"app/routes/markdown.ts",
 ]) {
 	assert((await readFile(join(docsRoot, route), "utf8")).length > 0, `Missing ${route}.`);
 }
@@ -135,4 +194,13 @@ async function listFiles(directory) {
 
 function codeUnitOrder(left, right) {
 	return left < right ? -1 : left > right ? 1 : 0;
+}
+
+async function assertMissing(path) {
+	try {
+		await access(path);
+		assert.fail(`Retired Next.js file still exists: ${relative(docsRoot, path)}`);
+	} catch (error) {
+		if (error?.code !== "ENOENT") throw error;
+	}
 }

@@ -7,28 +7,33 @@
 		"node": ">=24"
 	},
 	"scripts": {
-		"build": "pnpm typegen && next build",
+		"build": "react-router build",
 		"check:content": "node scripts/check-content.mjs",
-		"dev": "pnpm typegen && next dev",
-		"start": "next start",
-		"typecheck": "pnpm typegen && tsc --noEmit --pretty false",
-		"typegen": "fumadocs-mdx"
+		"deploy": "pnpm build && wrangler deploy",
+		"dev": "react-router dev",
+		"preview": "pnpm build && vite preview",
+		"typecheck": "react-router typegen && tsc --noEmit --pretty false"
 	},
 	"dependencies": {
 		"fumadocs-core": "16.15.1",
 		"fumadocs-mdx": "15.3.1",
 		"fumadocs-ui": "16.15.1",
-		"next": "16.3.3",
+		"isbot": "5.2.1",
 		"react": "19.2.8",
-		"react-dom": "19.2.8"
+		"react-dom": "19.2.8",
+		"react-router": "8.3.0"
 	},
 	"devDependencies": {
-		"@tailwindcss/postcss": "4.3.3",
+		"@cloudflare/vite-plugin": "1.53.1",
+		"@react-router/dev": "8.3.0",
+		"@tailwindcss/vite": "4.3.3",
 		"@types/mdx": "2.0.14",
 		"@types/node": "24.13.3",
 		"@types/react": "19.2.18",
 		"@types/react-dom": "19.2.5",
 		"tailwindcss": "4.3.3",
-		"typescript": "6.0.3"
+		"typescript": "6.0.3",
+		"vite": "8.2.2",
+		"wrangler": "4.125.0"
 	}
 }

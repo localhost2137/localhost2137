@@ -5,5 +5,11 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
 	return {
 		...defaultMdxComponents,
 		...components,
-	};
+	} satisfies MDXComponents;
+}
+
+export const useMDXComponents = getMDXComponents;
+
+declare global {
+	type MDXProvidedComponents = ReturnType<typeof getMDXComponents>;
 }

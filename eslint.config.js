@@ -30,8 +30,9 @@ const sideEffectGlobals = [
 export default defineConfig([
 	{
 		ignores: [
-			"**/.next/**",
-			"**/.source/**",
+			"**/.react-router/**",
+			"**/.wrangler/**",
+			"**/build/**",
 			"**/dist/**",
 			"**/coverage/**",
 			"**/node_modules/**",

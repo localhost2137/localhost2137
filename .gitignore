@@ -4,7 +4,9 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .localhost2137/
-.next/
-.source/
 .pnpm-store/
+.dev.vars*
+.wrangler/
+apps/docs/.react-router/
+apps/docs/build/
 packages/localhost2137/test/.tmp/

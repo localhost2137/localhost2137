@@ -50,6 +50,28 @@ body {
 	outline-offset: 3px;
 }
 
+.lh-error {
+	display: grid;
+	min-height: 100dvh;
+	place-content: center;
+	gap: 0.75rem;
+	padding: 2rem;
+	text-align: center;
+}
+
+.lh-error h1,
+.lh-error p {
+	margin: 0;
+}
+
+.lh-error-code {
+	color: var(--lh-signal);
+	font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
+	font-size: 0.875rem;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,

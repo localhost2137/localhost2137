@@ -15,8 +15,10 @@ if (clean.status !== 0) {
 }
 
 const outputDirectories = [
+	join(repositoryRoot, "apps/docs/.react-router"),
 	join(repositoryRoot, "apps/docs/.next"),
 	join(repositoryRoot, "apps/docs/.source"),
+	join(repositoryRoot, "apps/docs/build"),
 	join(repositoryRoot, "packages/localhost2137/dist"),
 	join(repositoryRoot, "packages/plugin-testkit/dist"),
 	join(repositoryRoot, "plugins/slack/dist"),
