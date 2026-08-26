@@ -116,7 +116,8 @@ const messages = await instance.slack.listMessages({ channel: channel.id });
 expect(messages.map(({ text }) => text)).toEqual(["pong", "ping"]);
 ```
 
-The `finally` blocks destroy the instance and close the runtime even when an assertion fails.
+The test's `finally` block destroys the instance even when an assertion fails. The suite's
+`afterEach` hook then stops the bot and closes the runtime.
 
 ## Change the bot and repeat
 
