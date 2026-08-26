@@ -8,10 +8,10 @@
 		"node": ">=24"
 	},
 	"scripts": {
-		"boundaries": "depcruise packages plugins --config .dependency-cruiser.cjs",
+		"boundaries": "depcruise packages plugins examples --config .dependency-cruiser.cjs",
 		"build": "tsc -b",
 		"changeset": "changeset",
-		"check": "pnpm format:check && pnpm lint && pnpm boundaries && pnpm typecheck && pnpm test && pnpm knip && pnpm pack:check",
+		"check": "pnpm format:check && pnpm lint && pnpm boundaries && pnpm typecheck && pnpm test && pnpm test:examples && pnpm knip && pnpm pack:check",
 		"format": "biome format --write .",
 		"format:check": "biome format .",
 		"knip": "knip",
@@ -19,8 +19,9 @@
 		"pack:check": "pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
 		"package:smoke": "node scripts/package-smoke.mjs",
 		"test": "vitest run",
+		"test:examples": "pnpm --filter @localhost2137/example-testing-parallel test",
 		"test:coverage": "vitest run --coverage",
-		"typecheck": "tsc -b --pretty false && pnpm --filter localhost2137 typecheck:fixtures && pnpm --filter @localhost2137/plugin-testkit typecheck:fixtures"
+		"typecheck": "tsc -b --pretty false && pnpm --filter localhost2137 typecheck:fixtures && pnpm --filter @localhost2137/plugin-testkit typecheck:fixtures && pnpm --filter @localhost2137/example-testing-parallel typecheck"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.10",

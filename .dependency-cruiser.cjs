@@ -37,11 +37,17 @@ module.exports = {
 			from: { path: "^packages/plugin-testkit/" },
 			to: { path: "^packages/localhost2137/src/" },
 		},
+		{
+			name: "examples-use-public-exports",
+			severity: "error",
+			from: { path: "^examples/" },
+			to: { path: "^packages/(localhost2137|plugin-testkit)/src/" },
+		},
 	],
 	options: {
 		doNotFollow: { path: "node_modules" },
 		exclude: "(^|/)(dist|coverage|node_modules)/",
-		includeOnly: "^(packages|plugins)/",
+		includeOnly: "^(packages|plugins|examples)/",
 		progress: { type: "none" },
 		tsConfig: { fileName: "tsconfig.base.json" },
 	},

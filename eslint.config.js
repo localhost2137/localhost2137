@@ -32,7 +32,7 @@ export default defineConfig([
 		ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "design/**"],
 	},
 	{
-		files: ["packages/**/*.ts", "plugins/**/*.ts"],
+		files: ["packages/**/*.ts", "plugins/**/*.ts", "examples/**/*.ts"],
 		languageOptions: {
 			parser: tseslint.parser,
 		},
