@@ -416,12 +416,221 @@ describe("Slack persistence", () => {
 		}
 	});
 
+	it.each([4, 5] as const)(
+		"normalizes version-%s timestamps, thread references, ordering, and cursors across restart",
+		async (sourceVersion) => {
+			const root = await mkdtemp(join(tmpdir(), "localhost2137-slack-"));
+			roots.push(root);
+			const path = join(root, "slack.sqlite");
+			let database = new SlackDatabase(path);
+			try {
+				migrateDatabase(database.raw());
+				const service = new SlackService(database);
+				service.initialize(config(), now);
+				const channel = service.createChannel({ name: "general", now });
+				const older = service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "older",
+					user: "U000000",
+				}).message;
+				const parent = service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "parent",
+					user: "U000000",
+				}).message;
+				const reply = service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "reply",
+					threadTs: parent.ts,
+					user: "U000000",
+				}).message;
+				database.raw().prepare("UPDATE messages SET ts = ? WHERE id = ?").run("0.999999", older.id);
+				database.raw().prepare("UPDATE messages SET ts = ? WHERE id = ?").run("1.1", parent.id);
+				database
+					.raw()
+					.prepare("UPDATE messages SET ts = ?, thread_ts = ? WHERE id = ?")
+					.run("1.2", "1.1", reply.id);
+				database
+					.raw()
+					.prepare("UPDATE counters SET value = ? WHERE kind = 'message_ts'")
+					.run(1_050_000);
+				downgradeTimestampMigration(database, sourceVersion);
+				database.close();
+
+				database = new SlackDatabase(path);
+				migrateDatabase(database.raw());
+				migrateDatabase(database.raw());
+				expect(database.raw().pragma("user_version", { simple: true })).toBe(6);
+				expect(database.messages.getById(older.id).ts).toBe("0.999999");
+				expect(database.messages.getById(parent.id).ts).toBe("1.100000");
+				expect(database.messages.getById(reply.id)).toMatchObject({
+					threadTs: "1.100000",
+					ts: "1.200000",
+				});
+				expect(messageTimestampCounter(database)).toBe(1_200_000n);
+				expect(timestampOrderingIndex(database)).toEqual({ present: 1 });
+				database.close();
+
+				database = new SlackDatabase(path);
+				expect(database.messages.listPage(channel.id, { limit: 10 }).map(({ id }) => id)).toEqual([
+					reply.id,
+					parent.id,
+					older.id,
+				]);
+				expect(
+					database.messages
+						.listPage(channel.id, { inclusive: true, latest: "1.100000", limit: 10 })
+						.map(({ id }) => id),
+				).toEqual([parent.id, older.id]);
+				expect(
+					database.messages
+						.listPage(channel.id, { limit: 10, oldest: "1.100000" })
+						.map(({ id }) => id),
+				).toEqual([reply.id]);
+				expect(
+					database.messages.create({
+						channelId: channel.id,
+						now: new Date(0),
+						text: "after restart",
+						userId: "U000000",
+					}),
+				).toMatchObject({ ts: "1.200001" });
+			} finally {
+				database.close();
+			}
+		},
+	);
+
+	it("rejects timestamps that collide when canonicalized without changing a version-5 database", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			const first = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "first",
+				user: "U000000",
+			}).message;
+			const second = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "second",
+				user: "U000000",
+			}).message;
+			downgradeTimestampMigration(database, 5);
+			database.raw().prepare("UPDATE messages SET ts = ? WHERE id = ?").run("1.1", first.id);
+			database.raw().prepare("UPDATE messages SET ts = ? WHERE id = ?").run("1.100000", second.id);
+			const counter = messageTimestampCounter(database);
+
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/duplicates timestamp 1\.100000 after normalization/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(5);
+			expect(database.messages.getById(first.id).ts).toBe("1.1");
+			expect(database.messages.getById(second.id).ts).toBe("1.100000");
+			expect(messageTimestampCounter(database)).toBe(counter);
+			expect(timestampOrderingIndex(database)).toEqual({ present: 1 });
+		} finally {
+			database.close();
+		}
+	});
+
+	it.each([
+		{ field: "message", value: "not-a-timestamp" },
+		{ field: "message", value: "9223372036854.775808" },
+		{ field: "thread", value: "not-a-timestamp" },
+		{ field: "thread", value: "9223372036854.775808" },
+	] as const)(
+		"rejects a corrupt $field timestamp $value without changing a version-5 database",
+		async ({ field, value }) => {
+			const database = await migratedDatabase();
+			try {
+				const service = new SlackService(database);
+				service.initialize(config(), now);
+				const channel = service.createChannel({ name: "general", now });
+				const message = service.postMessage({
+					channel: channel.id,
+					emitEvent: false,
+					now,
+					text: "persisted",
+					user: "U000000",
+				}).message;
+				downgradeTimestampMigration(database, 5);
+				const column = field === "message" ? "ts" : "thread_ts";
+				database
+					.raw()
+					.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`)
+					.run(value, message.id);
+				const counter = messageTimestampCounter(database);
+
+				expect(() => migrateDatabase(database.raw())).toThrow(/invalid (thread )?timestamp/);
+				expect(database.raw().pragma("user_version", { simple: true })).toBe(5);
+				expect(
+					database
+						.raw()
+						.prepare(`SELECT ${column} AS value FROM messages WHERE id = ?`)
+						.get(message.id),
+				).toEqual({ value });
+				expect(messageTimestampCounter(database)).toBe(counter);
+				expect(timestampOrderingIndex(database)).toEqual({ present: 1 });
+			} finally {
+				database.close();
+			}
+		},
+	);
+
+	it("rolls back version 5 and 6 together when timestamp normalization fails", async () => {
+		const database = await migratedDatabase();
+		try {
+			const service = new SlackService(database);
+			service.initialize(config(), now);
+			const channel = service.createChannel({ name: "general", now });
+			const message = service.postMessage({
+				channel: channel.id,
+				emitEvent: false,
+				now,
+				text: "persisted",
+				user: "U000000",
+			}).message;
+			downgradeTimestampMigration(database, 4);
+			database.raw().prepare("UPDATE messages SET ts = ? WHERE id = ?").run("1.1", message.id);
+			database.raw().prepare("DELETE FROM counters WHERE kind = 'message_ts'").run();
+			database.raw().exec(`
+				CREATE TRIGGER reject_timestamp_normalization
+				BEFORE UPDATE OF ts ON messages
+				BEGIN
+					SELECT RAISE(ABORT, 'injected timestamp normalization failure');
+				END;
+			`);
+
+			expect(() => migrateDatabase(database.raw())).toThrow(
+				/injected timestamp normalization failure/,
+			);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(4);
+			expect(database.messages.getById(message.id).ts).toBe("1.1");
+			expect(messageTimestampCounter(database)).toBeUndefined();
+			expect(timestampOrderingIndex(database)).toBeUndefined();
+		} finally {
+			database.close();
+		}
+	});
+
 	it("rejects a future database without applying timestamp migration work", async () => {
 		const database = await migratedDatabase();
 		try {
 			database.raw().pragma(`user_version = ${CURRENT_DATABASE_VERSION + 1}`);
-			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 5/);
-			expect(database.raw().pragma("user_version", { simple: true })).toBe(6);
+			expect(() => migrateDatabase(database.raw())).toThrow(/newer than supported schema 6/);
+			expect(database.raw().pragma("user_version", { simple: true })).toBe(7);
 		} finally {
 			database.close();
 		}
@@ -897,8 +1106,8 @@ function messageTimestampCounter(database: SlackDatabase): bigint | undefined {
 	return row?.value;
 }
 
-function downgradeTimestampMigration(database: SlackDatabase, version: 2 | 3 | 4): void {
-	database.raw().exec("DROP INDEX IF EXISTS messages_channel_ts_microseconds");
+function downgradeTimestampMigration(database: SlackDatabase, version: 2 | 3 | 4 | 5): void {
+	if (version < 5) database.raw().exec("DROP INDEX IF EXISTS messages_channel_ts_microseconds");
 	database.raw().pragma(`user_version = ${version}`);
 }
 

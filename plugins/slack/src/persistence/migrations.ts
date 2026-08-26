@@ -1,12 +1,13 @@
 import type Database from "better-sqlite3";
 import {
+	formatSlackTimestamp,
 	MAX_SLACK_TIMESTAMP_MICROSECONDS,
 	parseSlackTimestamp,
 } from "../domain/slack-timestamp.js";
 import { LOCAL_BOT_NAME, LOCAL_BOT_USER_ID } from "../slack-identities.js";
 import { insertSequencedId, reconcileSequenceId, type SequenceKind } from "./id-sequence.js";
 
-export const CURRENT_DATABASE_VERSION = 5;
+export const CURRENT_DATABASE_VERSION = 6;
 
 interface Migration {
 	readonly version: number;
@@ -123,6 +124,12 @@ const migrations: readonly Migration[] = [
 			`);
 		},
 	},
+	{
+		version: 6,
+		apply(database) {
+			normalizeMessageTimestamps(database);
+		},
+	},
 ];
 
 export function migrateDatabase(database: Database.Database): void {
@@ -219,6 +226,66 @@ function readMessageTimestampCounter(database: Database.Database): bigint | unde
 		);
 	}
 	return row.value;
+}
+
+function normalizeMessageTimestamps(database: Database.Database): void {
+	const rows = database.prepare("SELECT id, ts, thread_ts FROM messages").all() as Array<{
+		id: unknown;
+		thread_ts: unknown;
+		ts: unknown;
+	}>;
+	const normalized: Array<Readonly<{ id: string; threadTs: string | null; ts: string }>> = [];
+	const timestamps = new Set<bigint>();
+	let maximum = 0n;
+
+	for (const row of rows) {
+		if (typeof row.id !== "string" || typeof row.ts !== "string") {
+			throw new Error("Slack persisted message timestamps must be stored as TEXT values.");
+		}
+		const timestamp = parseSlackTimestamp(row.ts);
+		if (timestamp === undefined) {
+			throw new Error(`Slack persisted message ${row.id} has invalid timestamp ${row.ts}.`);
+		}
+		const canonicalTimestamp = formatSlackTimestamp(timestamp);
+		if (timestamps.has(timestamp)) {
+			throw new Error(
+				`Slack persisted message ${row.id} duplicates timestamp ${canonicalTimestamp} after normalization.`,
+			);
+		}
+		timestamps.add(timestamp);
+		if (timestamp > maximum) maximum = timestamp;
+
+		let threadTs: string | null = null;
+		if (row.thread_ts !== null) {
+			if (typeof row.thread_ts !== "string") {
+				throw new Error(`Slack persisted message ${row.id} thread timestamp must be TEXT or NULL.`);
+			}
+			const threadTimestamp = parseSlackTimestamp(row.thread_ts);
+			if (threadTimestamp === undefined) {
+				throw new Error(
+					`Slack persisted message ${row.id} has invalid thread timestamp ${row.thread_ts}.`,
+				);
+			}
+			threadTs = formatSlackTimestamp(threadTimestamp);
+		}
+		normalized.push({ id: row.id, threadTs, ts: canonicalTimestamp });
+	}
+
+	const counter = readMessageTimestampCounter(database);
+	const reconciled = counter !== undefined && counter > maximum ? counter : maximum;
+	database.exec("DROP INDEX messages_channel_ts_microseconds");
+	const update = database.prepare("UPDATE messages SET ts = ?, thread_ts = ? WHERE id = ?");
+	for (const row of normalized) update.run(row.ts, row.threadTs, row.id);
+	database
+		.prepare(
+			`INSERT INTO counters(kind, value) VALUES ('message_ts', ?)
+			 ON CONFLICT(kind) DO UPDATE SET value = excluded.value`,
+		)
+		.run(reconciled);
+	database.exec(`
+		CREATE INDEX messages_channel_ts_microseconds
+			ON messages(channel_id, CAST(REPLACE(ts, '.', '') AS INTEGER) DESC);
+	`);
 }
 
 interface PersistedUserIdentity {
