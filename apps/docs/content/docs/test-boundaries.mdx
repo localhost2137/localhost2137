@@ -1,6 +1,6 @@
 ---
 title: Choose the right test boundary
-description: Decide when a function mock, HTTP stub, local emulator, real service, or provider sandbox gives the evidence a test needs.
+description: Decide when a mock, fake, HTTP stub, local emulator, real service, or provider sandbox gives the evidence a test needs.
 ---
 
 localhost2137 is not the right default for every test. The useful question is not “How realistic can
@@ -8,8 +8,8 @@ this test be?” but “What is the smallest boundary that could expose the defe
 about?”
 
 A pure calculation usually needs no service process. A provider integration may need to prove SDK
-serialization, state transitions, callbacks, or time-derived work. Those claims require a boundary
-that simpler doubles intentionally leave out.
+serialization, state transitions, callbacks, or time-derived work. A focused double can model some
+of those claims; others require the protocol or service boundary the double leaves out.
 
 ## An evidence ladder, not a quality ladder
 
@@ -17,26 +17,31 @@ Each approach is strong at a different claim:
 
 | Boundary | Useful evidence | What it does not establish |
 | --- | --- | --- |
-| Function mock or fake | Your code chooses the expected branch and calls a dependency with expected values. | SDK encoding, HTTP behavior, provider state, or callbacks. |
+| Interaction mock | Your code chooses the expected branch and calls a dependency with expected values. | Behavior behind the call, coherent provider state, or transport behavior. |
+| In-process fake | Your code works against simplified behavior, including coherent state and transitions when the fake models them. | Provider SDK serialization, HTTP or callback transport, or behavior the fake omits. |
 | HTTP stub or recorded response | The application sends a particular request and handles a known response. | Coherent state across calls or provider-initiated work unless every transition is scripted. |
 | localhost2137 plugin | The application speaks a documented provider-shaped API against a local world with isolated plugin state. | Provider behavior outside the plugin's explicit compatibility surface or real production infrastructure. |
 | Real service in a local container | The application interoperates with that runnable service build. | Hosted-only provider behavior, managed configuration, or features absent from the selected build. |
-| Provider sandbox or test mode | The application reaches provider-owned behavior and account configuration. | Offline determinism, cheap isolation, arbitrary state control, or exact production equivalence. |
+| Provider sandbox or test mode | The application reaches provider-owned behavior and account configuration. | Offline determinism or exact production equivalence. Isolation, cost, and privileged state controls vary by provider. |
 
 The rows are not successive levels of engineering maturity. Replacing every unit mock with a local
 service makes a suite slower and harder to understand without improving a pure logic claim. Replacing
-every provider check with a function mock makes the suite fast while leaving the real integration
+every provider check with an interaction mock makes the suite fast while leaving the real integration
 boundary untested.
 
 ## Where a stateful emulator earns its cost
 
-A localhost2137 test is usually warranted when at least one of these is part of the claim:
+A localhost2137 test becomes a candidate only when a smaller boundary cannot expose the relevant
+failure. Signals include:
 
-- the application must use a provider SDK or HTTP contract correctly;
-- the result depends on state created by earlier requests;
+- the relevant SDK or HTTP mistake depends on coherent state created by earlier requests;
 - a local actor or clock change should cause an event, callback, or webhook;
 - the test needs to arrange or inspect state that a production API should not expose;
 - several tests need independent service worlds without separate provider accounts.
+
+These are signals, not checkboxes. An in-process fake can model coherent state, and an HTTP stub can
+inspect a request. If either can falsify the claim without bypassing the behavior under test, prefer
+that smaller boundary.
 
 The installed plugin must still implement the behavior. A stateful runtime cannot turn a missing
 endpoint, event type, retry rule, or SDK encoding into a valid compatibility claim. Inspect the
@@ -77,22 +82,23 @@ sandbox.
 
 ## Layer boundaries around the defect
 
-A balanced suite often uses all three of these scopes:
+Depending on its risks, a suite may combine these scopes:
 
 1. Function-level tests cover business rules and edge cases without a service runtime.
-2. Focused localhost2137 tests cover the provider protocol, state transitions, callbacks, and
+2. Focused localhost2137 tests can cover the provider protocol, state transitions, callbacks, and
    controllable time that the installed plugin actually supports.
 3. A smaller provider-facing suite checks external credentials, account configuration, and a few
    critical compatibility paths.
 
-Keep an individual behavior at the lowest layer that can falsify it. Duplicate a scenario at another
-layer only when the second boundary answers a different question.
+Not every integration needs all three. Keep an individual behavior at the lowest layer that can
+falsify it. Duplicate a scenario at another layer only when the second boundary answers a different
+question.
 
 For example, a unit test can prove which invoice state should suspend an account. A local emulator
-test can prove that the application reads a provider-shaped invoice and applies that rule after a
-renewal. A provider sandbox check can prove that the deployed credentials and webhook configuration
-receive the external event. These are related tests, not three increasingly impressive versions of
-the same test.
+test can prove that the application reads a provider-shaped invoice through its SDK and applies that
+rule after a renewal callback. A provider sandbox check can prove that the deployed credentials and
+webhook configuration receive the external event. These are related tests, not three increasingly
+impressive versions of the same test.
 
 ## When to stop before adding localhost2137
 
