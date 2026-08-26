@@ -326,30 +326,37 @@ async function stopProcessTree(
 	closed: Promise<number | null>,
 ): Promise<number | null> {
 	const processGroup = process.platform !== "win32" && child.pid ? -child.pid : undefined;
-	if (child.exitCode === null && child.signalCode === null) {
-		if (processGroup === undefined) child.kill("SIGINT");
-		else signalProcessGroup(processGroup, "SIGINT");
+	if (processGroup !== undefined) signalProcessGroup(processGroup, "SIGINT");
+	else if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
+	try {
+		const exitCode = await withinCleanupDeadline(closed);
+		await tick();
+		await tick();
+		return exitCode;
+	} catch (cause) {
+		if (!(cause instanceof ProcessCleanupTimeoutError)) throw cause;
+		if (processGroup !== undefined) signalProcessGroup(processGroup, "SIGKILL");
+		else if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		return withinCleanupDeadline(closed);
 	}
-	const exitCode = await closed;
-	if (processGroup === undefined) return exitCode;
-	const deadline = Date.now() + 2_000;
-	while (processGroupExists(processGroup) && Date.now() < deadline) await tick();
-	if (processGroupExists(processGroup)) signalProcessGroup(processGroup, "SIGKILL");
-	const killDeadline = Date.now() + 2_000;
-	while (processGroupExists(processGroup) && Date.now() < killDeadline) await tick();
-	if (processGroupExists(processGroup)) {
-		throw new Error("Durability process group did not terminate before its cleanup deadline.");
-	}
-	return exitCode;
 }
 
-function processGroupExists(processGroup: number): boolean {
+class ProcessCleanupTimeoutError extends Error {
+	constructor() {
+		super("Durability process exceeded its cleanup deadline.");
+		this.name = "ProcessCleanupTimeoutError";
+	}
+}
+
+async function withinCleanupDeadline<Value>(promise: Promise<Value>): Promise<Value> {
+	let timeout: NodeJS.Timeout | undefined;
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timeout = setTimeout(() => reject(new ProcessCleanupTimeoutError()), 2_000);
+	});
 	try {
-		process.kill(processGroup, 0);
-		return true;
-	} catch (cause) {
-		if (hasCode(cause, "ESRCH")) return false;
-		throw cause;
+		return await Promise.race([promise, deadline]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
 	}
 }
 
