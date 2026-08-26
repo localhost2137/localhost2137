@@ -3,6 +3,7 @@
 	"pages": [
 		"agents",
 		"index",
+		"operations-and-apis",
 		"getting-started",
 		"configuration",
 		"cli",

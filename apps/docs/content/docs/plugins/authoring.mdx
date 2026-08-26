@@ -24,6 +24,9 @@ owns response mapping, state, identities, transactions, migrations, events, and 
 runtime owns mounting, instance storage locations, lifecycle timing, operation adapters, tracked
 transport, virtual-time delivery, and control authentication.
 
+[Operations and emulated APIs](/operations-and-apis) explains why these adapters remain separate
+even though they act on one service world.
+
 When importing `localhost2137`, plugins use only its public package root. A missing public capability
 is a contract question, not a reason to reach into runtime source internals.
 

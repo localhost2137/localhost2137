@@ -88,8 +88,9 @@ depends on configured seed data.
 
 ## Test the application boundary
 
-Use operations to arrange and inspect the emulator world. Exercise the behavior under test through
-the application's normal provider-facing boundary:
+Operations can arrange, trigger, and inspect the emulator world. When a test claims to verify the
+application's provider integration, exercise that part through the application's normal SDK, HTTP
+client, or callback handler:
 
 ```text
 arrange via operation
@@ -98,8 +99,9 @@ arrange via operation
   -> observe app output or inspect via operation
 ```
 
-Do not call an operation as a substitute for the SDK request you intend to verify. Do not read the
-plugin database from application tests.
+The claim determines which boundary supplies evidence. [Operations and emulated APIs](/operations-and-apis)
+shows why a trigger or observation operation can be valid without substituting for the application
+interaction under test. Do not read the plugin database from application tests.
 
 Call `await instance.idle()` after a plugin schedules callbacks or other tracked outbound work. An
 idle wait includes nested tasks spawned by completing tasks and surfaces failed tracked work.

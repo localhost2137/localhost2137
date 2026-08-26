@@ -10,6 +10,7 @@ const repositoryRoot = resolve(docsRoot, "../..");
 
 const expectedPages = new Map([
 	["index.mdx", "/"],
+	["operations-and-apis.mdx", "/operations-and-apis"],
 	["getting-started.mdx", "/getting-started"],
 	["configuration.mdx", "/configuration"],
 	["cli.mdx", "/cli"],

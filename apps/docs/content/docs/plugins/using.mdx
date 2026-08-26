@@ -34,16 +34,10 @@ Pass `instance.<service>.connection` into the application's existing provider ad
 official SDK when the plugin documents compatibility with it. A plugin-supplied adapter is
 appropriate only when the SDK hardcodes behavior that prevents a path-scoped local endpoint.
 
-Operations are privileged arrangement and inspection tools. They should not enter production
-application code and should not replace the provider-facing API call under test.
-
-```text
-application code -> provider SDK -> plugin HTTP API
-test setup       -> operation     -> same plugin domain state
-```
-
-This distinction makes the test meaningful: setup may create a customer through an operation while
-the application creates a subscription through the normal Stripe SDK.
+Operations are privileged controls for local worlds, not production application dependencies. They
+may arrange, trigger, or inspect a scenario, but should not replace the provider-facing interaction
+that the test claims to verify. [Operations and emulated APIs](/operations-and-apis) explains the
+boundary with Slack and Stripe examples.
 
 ## Mounting and environment values
 
