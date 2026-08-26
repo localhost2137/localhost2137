@@ -130,6 +130,100 @@ describe("Slack runtime integration", () => {
 		}
 	});
 
+	it("accepts form-token authentication and rejects malformed request transports", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const apiUrl = instance.slack.connection.apiUrl;
+			const formAuthenticated = await fetch(`${apiUrl}auth.test`, {
+				body: new URLSearchParams({ token: instance.slack.connection.botToken }),
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				method: "POST",
+			});
+			expect(await formAuthenticated.json()).toMatchObject({ ok: true, user_id: "U000000" });
+
+			const malformedRequests: readonly Readonly<{
+				error: string;
+				init?: RequestInit;
+				path: string;
+			}>[] = [
+				{ error: "not_authed", path: "auth.test" },
+				{
+					error: "invalid_auth",
+					init: { headers: { authorization: "Basic credentials" } },
+					path: "auth.test",
+				},
+				{
+					error: "invalid_arguments",
+					init: {
+						body: "ignored",
+						headers: { "content-type": "text/plain" },
+						method: "POST",
+					},
+					path: "auth.test",
+				},
+				{
+					error: "invalid_arguments",
+					init: {
+						body: "{",
+						headers: { "content-type": "application/json" },
+						method: "POST",
+					},
+					path: "auth.test",
+				},
+				{
+					error: "invalid_arguments",
+					init: {
+						body: "[]",
+						headers: { "content-type": "application/json" },
+						method: "POST",
+					},
+					path: "auth.test",
+				},
+				{
+					error: "invalid_arguments",
+					init: {
+						body: JSON.stringify({ exclude_archived: [] }),
+						headers: {
+							authorization: `Bearer ${instance.slack.connection.botToken}`,
+							"content-type": "application/json",
+						},
+						method: "POST",
+					},
+					path: "conversations.list",
+				},
+				{
+					error: "invalid_arguments",
+					init: {
+						headers: { authorization: `Bearer ${instance.slack.connection.botToken}` },
+					},
+					path: "users.list?limit=1&limit=2",
+				},
+				{
+					error: "invalid_types",
+					init: {
+						headers: { authorization: `Bearer ${instance.slack.connection.botToken}` },
+					},
+					path: "conversations.list?types=private_channel",
+				},
+				{
+					error: "invalid_arguments",
+					init: {
+						headers: { authorization: `Bearer ${instance.slack.connection.botToken}` },
+					},
+					path: "conversations.list?exclude_archived=sometimes",
+				},
+			];
+			for (const request of malformedRequests) {
+				const response = await fetch(`${apiUrl}${request.path}`, request.init);
+				expect(response.status, request.path).toBe(200);
+				expect(await response.json(), request.path).toEqual({ error: request.error, ok: false });
+			}
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("uses stable method-bound cursor pagination", async () => {
 		const runtime = await startRuntime(slack, null);
 		const instance = await runtime.createInstance();
@@ -157,6 +251,49 @@ describe("Slack runtime integration", () => {
 				token: instance.slack.connection.botToken,
 			});
 			expect(await wrongMethod.json()).toEqual({ error: "invalid_cursor", ok: false });
+		} finally {
+			await instance.destroy();
+		}
+	});
+
+	it("maps Slack world invariant failures to stable control errors", async () => {
+		const runtime = await startRuntime(slack, null);
+		const instance = await runtime.createInstance();
+		try {
+			const ada = await instance.slack.createUser({ name: "Ada" });
+			const channel = await instance.slack.createChannel({ name: "general" });
+			await expect(instance.slack.createUser({ name: "Ada" })).rejects.toMatchObject({
+				code: "SLACK_NAME_TAKEN",
+				status: 409,
+			});
+			await expect(instance.slack.createChannel({ name: "GENERAL" })).rejects.toMatchObject({
+				code: "SLACK_NAME_TAKEN",
+				status: 409,
+			});
+			await expect(
+				instance.slack.addUserToChannel({ channel: channel.id, user: "missing" }),
+			).rejects.toMatchObject({ code: "SLACK_USER_NOT_FOUND", status: 404 });
+			await expect(
+				instance.slack.addUserToChannel({ channel: "missing", user: ada.id }),
+			).rejects.toMatchObject({ code: "SLACK_CHANNEL_NOT_FOUND", status: 404 });
+			await expect(
+				instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "ping" }),
+			).rejects.toMatchObject({ code: "SLACK_NOT_IN_CHANNEL", status: 409 });
+			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
+			await expect(
+				instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "   " }),
+			).rejects.toMatchObject({ code: "SLACK_INVALID_ARGUMENTS", status: 400 });
+			await expect(
+				instance.slack.sendMessage({
+					channel: channel.id,
+					from: ada.id,
+					text: "reply",
+					threadTs: "1.000001",
+				}),
+			).rejects.toMatchObject({ code: "SLACK_INVALID_ARGUMENTS", status: 400 });
+			await expect(instance.slack.createChannel({ name: "invalid channel" })).rejects.toMatchObject(
+				{ code: "SLACK_INVALID_ARGUMENTS", status: 400 },
+			);
 		} finally {
 			await instance.destroy();
 		}
