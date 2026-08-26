@@ -1,7 +1,7 @@
 export type CustomerId = string;
 export type EventId = string;
 export type InvoiceId = string;
-export type PriceId = string;
+type PriceId = string;
 export type ProductId = string;
 export type SubscriptionId = string;
 

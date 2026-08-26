@@ -49,7 +49,7 @@ export function insertStripeId(
 	})();
 }
 
-export function reconcileStripeId(
+function reconcileStripeId(
 	database: Database.Database,
 	kind: StripeSequenceKind,
 	id: string,
