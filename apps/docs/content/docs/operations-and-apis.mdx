@@ -12,10 +12,12 @@ Neither interface is more real than the other. They have different jobs. A usefu
 between them according to the claim it needs to prove.
 
 ```text
-application ── SDK / HTTP / callback ──> emulated API
-                                                │
-test or agent ── operation / CLI / control HTTP ─┘
-                         one service world
+                                                              ┌───────────────────┐
+application ── SDK / HTTP ───────────────────────────────────> │ emulated API      │
+application <── callbacks / webhooks ───────────────────────── │ plugin behavior   │
+test or agent ── operation / CLI / control HTTP ─────────────> │ operations        │
+                                                              └───────────────────┘
+                                                                one service world
 ```
 
 ## Start with the claim
