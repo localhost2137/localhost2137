@@ -18,7 +18,7 @@
 			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
 		"plugins/*": {
-			"project": ["src/**/*.ts"]
+			"project": ["src/**/*.ts", "test/**/*.ts"]
 		}
 	}
 }

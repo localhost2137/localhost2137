@@ -17,7 +17,8 @@
 	],
 	"scripts": {
 		"build": "tsc -b",
-		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+		"typecheck:test": "tsc -p tsconfig.test.json --pretty false"
 	},
 	"dependencies": {
 		"better-sqlite3": "^13.0.3",

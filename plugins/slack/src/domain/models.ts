@@ -35,7 +35,7 @@ export interface SlackMessage {
 	readonly userId: UserId;
 }
 
-export type DeliveryStatus = "failed" | "pending" | "succeeded";
+type DeliveryStatus = "failed" | "pending" | "succeeded";
 
 export interface EventDelivery {
 	readonly completedAt: Date | null;

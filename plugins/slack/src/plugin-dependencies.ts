@@ -2,7 +2,7 @@ import type { BasePluginContext, RunningPluginContext } from "localhost2137";
 import type { SlackConfig } from "./config.js";
 import type { SlackState } from "./state.js";
 
-export type SlackLifecycleEvent =
+type SlackLifecycleEvent =
 	| "create"
 	| "seed"
 	| "start"

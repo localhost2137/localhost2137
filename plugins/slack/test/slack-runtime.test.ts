@@ -158,7 +158,7 @@ describe("Slack runtime integration", () => {
 			await instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "ping" });
 			await expect(instance.idle()).rejects.toThrow(/tracked task|failed/i);
 			const logs = await runtime.control.logs(await instanceIdFrom(runtime), {
-				serviceKey: "slack",
+				service: "slack",
 			});
 			expect(JSON.stringify(logs)).toContain(status === undefined ? "failed" : "503");
 		} finally {
