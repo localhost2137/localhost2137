@@ -22,7 +22,7 @@ import {
 } from "./instance-storage.js";
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { MutationScope } from "./mutation-scope.js";
-import { type TaskScheduler, TrackedTaskFailuresError } from "./task-tracker.js";
+import type { TaskScheduler } from "./task-tracker.js";
 
 const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
 const MAX_ROLLBACK_GRACE_MS = 5_000;
@@ -346,7 +346,7 @@ export class DurableInstanceMutations {
 			return summary;
 		} catch (cause) {
 			const cleanupFailures = active
-				? retirementFailures(await this.#retire(active, scope, cause), true)
+				? [...(await this.#retire(active, scope, cause)).blockingFailures]
 				: [];
 			let hasActiveStorage = false;
 			try {
@@ -377,7 +377,7 @@ export class DurableInstanceMutations {
 		options: AdmittedMutationOptions,
 	): Promise<unknown[]> {
 		const failures = replacement
-			? retirementFailures(await this.#retire(replacement, scope, "reset rolled back"), true)
+			? [...(await this.#retire(replacement, scope, "reset rolled back")).blockingFailures]
 			: [];
 		if (staged) {
 			await this.#storage
@@ -539,16 +539,4 @@ function isCommittedWrite(
 	operation: "commit_transition" | "write_instance",
 ): cause is StorageWriteCommittedError {
 	return cause instanceof StorageWriteCommittedError && cause.operation === operation;
-}
-
-function retirementFailures(
-	report: ActiveInstanceRetirementReport,
-	includeTaskFailures: boolean,
-): unknown[] {
-	return [
-		...report.blockingFailures,
-		...(includeTaskFailures && report.taskFailures.length > 0
-			? [new TrackedTaskFailuresError(report.taskFailures)]
-			: []),
-	];
 }

@@ -29,11 +29,7 @@ import {
 	StructuredLogRing,
 	type StructuredLogSnapshot,
 } from "./structured-log.js";
-import {
-	InstanceTaskTracker,
-	type TaskScheduler,
-	TrackedTaskFailuresError,
-} from "./task-tracker.js";
+import { InstanceTaskTracker, type TaskScheduler } from "./task-tracker.js";
 import { TrackedPluginFetch } from "./tracked-plugin-fetch.js";
 
 export interface ActiveInstance {
@@ -160,9 +156,6 @@ export class ActiveInstanceFactory {
 			});
 			const report = await retirement.settled;
 			cleanupFailures.push(...report.blockingFailures);
-			if (report.taskFailures.length > 0) {
-				cleanupFailures.push(new TrackedTaskFailuresError(report.taskFailures));
-			}
 			if (cleanupFailures.length > 0) {
 				throw new AggregateError(
 					[cause, ...cleanupFailures],

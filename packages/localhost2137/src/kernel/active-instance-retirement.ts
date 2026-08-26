@@ -9,7 +9,11 @@ import {
 export interface ActiveInstanceRetirementReport {
 	/** Failures that mean lifecycle or resource ownership could not be completed cleanly. */
 	readonly blockingFailures: readonly unknown[];
-	/** Background task failures observed while the generation was drained. */
+	/**
+	 * Workload outcomes observed while draining. These remain visible to explicit
+	 * idle boundaries and workload logs, but must not be reclassified as cleanup
+	 * failures after lifecycle and resource ownership completed successfully.
+	 */
 	readonly taskFailures: readonly TaskFailure[];
 }
 

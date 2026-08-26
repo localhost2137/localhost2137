@@ -394,6 +394,17 @@ describe("InstanceManager with durable Node storage", () => {
 		await fixture.manager.stopAll({ timeoutMs: 1_000 });
 	});
 
+	it("does not report successful runtime cleanup as failed because tracked work failed", async () => {
+		const fixture = await managerFixture(instanceTemplate());
+		await fixture.manager.create({ id: "dev", persistence: "persistent", seed: false });
+		const context = fixture.manager.service("dev", "fixture").runningContext();
+		await context.tasks
+			.track("failed delivery", Promise.reject(new Error("delivery failed")))
+			.catch(() => undefined);
+
+		await expect(fixture.manager.stopAll({ timeoutMs: 1_000 })).resolves.toBeUndefined();
+	});
+
 	it("keeps storage open while cooperative work persists after destroy cancellation", async () => {
 		const time = new ManualTime();
 		const fixture = await managerFixture(instanceTemplate(), undefined, {

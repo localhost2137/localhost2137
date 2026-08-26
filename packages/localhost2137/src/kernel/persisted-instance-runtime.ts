@@ -11,7 +11,7 @@ import { type InstanceStoragePort, StorageWriteCommittedError } from "./instance
 import type { InstanceTrashCleanup } from "./instance-trash-cleanup.js";
 import { MutationScope, MutationTimeoutError } from "./mutation-scope.js";
 import { RuntimeAdmission, type RuntimeAdmissionLease } from "./runtime-admission.js";
-import { type TaskScheduler, TrackedTaskFailuresError } from "./task-tracker.js";
+import type { TaskScheduler } from "./task-tracker.js";
 
 const STARTUP_TIMEOUT_MS = 30_000;
 
@@ -260,9 +260,6 @@ function collectRetirementFailures(
 	failures: unknown[],
 ): void {
 	failures.push(...report.blockingFailures);
-	if (report.taskFailures.length > 0) {
-		failures.push(new TrackedTaskFailuresError(report.taskFailures));
-	}
 }
 
 interface RuntimeCloseTimeoutSnapshot {
