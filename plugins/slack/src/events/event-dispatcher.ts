@@ -88,6 +88,16 @@ export class SlackEventDispatcher {
 			// stays successful after the durable outcome is recorded.
 			return;
 		}
+		try {
+			await response.body?.cancel("Slack Events callback response is not consumed.");
+		} catch (cause) {
+			this.#database.deliveries.completeFailure(input.eventId, {
+				error: "response_body_error",
+				now: context.clock.now(),
+				statusCode: response.status,
+			});
+			throw new Error("Slack event callback response body could not be discarded.", { cause });
+		}
 		if (!response.ok) {
 			this.#database.deliveries.completeFailure(input.eventId, {
 				error: "non_success_status",
