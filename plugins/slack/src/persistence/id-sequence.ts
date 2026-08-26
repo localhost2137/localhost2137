@@ -1,13 +1,13 @@
 import type Database from "better-sqlite3";
 
-const sequencePrefixes = Object.freeze({
+export type SequenceKind = "channel" | "event" | "message" | "user";
+
+const sequencePrefixes: Readonly<Record<SequenceKind, string>> = Object.freeze({
 	channel: "C",
 	event: "Ev",
 	message: "M",
 	user: "U",
 });
-
-export type SequenceKind = keyof typeof sequencePrefixes;
 
 /**
  * Allocates or reconciles an ID and inserts its row as one SQLite transaction.
