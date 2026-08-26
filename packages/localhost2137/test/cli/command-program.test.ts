@@ -20,8 +20,8 @@ describe("CLI command program", () => {
 		]) {
 			const fixture = cliFixture();
 			const exitCode = await runCliCommand({
-				actions: fixture.actions,
 				arguments: arguments_,
+				createActions: () => fixture.actions,
 				defaultInstance: "dev",
 				io: fixture.io,
 			});
@@ -46,8 +46,8 @@ describe("CLI command program", () => {
 		for (const arguments_ of commands) {
 			expect(
 				await runCliCommand({
-					actions: fixture.actions,
 					arguments: arguments_,
+					createActions: () => fixture.actions,
 					defaultInstance: "dev",
 					io: fixture.io,
 				}),
@@ -55,7 +55,6 @@ describe("CLI command program", () => {
 		}
 
 		expect(fixture.actions.dev).toHaveBeenCalledWith({
-			configPath: "other.ts",
 			host: "::1",
 			port: 2138,
 		});
@@ -76,7 +75,6 @@ describe("CLI command program", () => {
 		fixture.actions.run.mockResolvedValue(17);
 
 		const exitCode = await runCliCommand({
-			actions: fixture.actions,
 			arguments: [
 				"run",
 				"--instance",
@@ -85,7 +83,11 @@ describe("CLI command program", () => {
 				"node",
 				"-e",
 				'console.log("$HOME && literal")',
+				"--config",
+				"child-config.ts",
+				"--config=child-equal.ts",
 			],
+			createActions: () => fixture.actions,
 			defaultInstance: "dev",
 			io: fixture.io,
 		});
@@ -95,8 +97,49 @@ describe("CLI command program", () => {
 			"node",
 			"-e",
 			'console.log("$HOME && literal")',
+			"--config",
+			"child-config.ts",
+			"--config=child-equal.ts",
 		]);
 		expect(fixture.stdout).toBe("");
+	});
+
+	it("binds stripped global config state before dispatching dev", async () => {
+		const fixture = cliFixture();
+		const createActions = vi.fn(() => fixture.actions);
+
+		const exitCode = await runCliCommand({
+			arguments: ["dev", "--port", "2138", "--config=custom.localhost.ts"],
+			createActions,
+			defaultInstance: "dev",
+			io: fixture.io,
+		});
+
+		expect(exitCode).toBe(0);
+		expect(createActions).toHaveBeenCalledWith({ configPath: "custom.localhost.ts" });
+		expect(fixture.actions.dev).toHaveBeenCalledWith({ port: 2138 });
+	});
+
+	it("shows the global config locator in root and subcommand help", async () => {
+		for (const arguments_ of [
+			["--help"],
+			["doctor", "--help"],
+			["instance", "list", "--help"],
+			["exec", "--help"],
+			["exec", "fixture", "--help"],
+			["exec", "fixture", "inspect", "--help"],
+		]) {
+			const fixture = cliFixture();
+			const exitCode = await runCliCommand({
+				arguments: arguments_,
+				createActions: () => fixture.actions,
+				defaultInstance: "dev",
+				io: fixture.io,
+			});
+
+			expect(exitCode, arguments_.join(" ")).toBe(0);
+			expect(fixture.stdout, arguments_.join(" ")).toContain("--config <path>");
+		}
 	});
 
 	it("maps stable runtime error classes without contaminating stdout", async () => {
@@ -144,8 +187,8 @@ describe("CLI command program", () => {
 			const fixture = cliFixture();
 			fixture.actions.listInstances.mockRejectedValue(failure);
 			const exitCode = await runCliCommand({
-				actions: fixture.actions,
 				arguments: ["instance", "list", "--json"],
+				createActions: () => fixture.actions,
 				defaultInstance: "dev",
 				io: fixture.io,
 			});
@@ -159,8 +202,8 @@ describe("CLI command program", () => {
 	it("returns not-found only for an unknown operation on a described service", async () => {
 		const missing = cliFixture();
 		const missingExit = await runCliCommand({
-			actions: missing.actions,
 			arguments: ["exec", "fixture", "missing-operation"],
+			createActions: () => missing.actions,
 			defaultInstance: "dev",
 			io: missing.io,
 		});
@@ -172,14 +215,29 @@ describe("CLI command program", () => {
 
 		const malformed = cliFixture();
 		const malformedExit = await runCliCommand({
-			actions: malformed.actions,
 			arguments: ["exec", "fixture", "inspect", "--unknown-flag"],
+			createActions: () => malformed.actions,
 			defaultInstance: "dev",
 			io: malformed.io,
 		});
 
 		expect(malformedExit).toBe(2);
 		expect(malformed.actions.execute).not.toHaveBeenCalled();
+	});
+
+	it("does not preselect an exec instance from text after the option delimiter", async () => {
+		const fixture = cliFixture();
+
+		const exitCode = await runCliCommand({
+			arguments: ["exec", "fixture", "inspect", "--", "--instance", "nope"],
+			createActions: () => fixture.actions,
+			defaultInstance: "dev",
+			io: fixture.io,
+		});
+
+		expect(exitCode).toBe(2);
+		expect(fixture.actions.describeService).toHaveBeenCalledWith("dev", "fixture");
+		expect(fixture.actions.execute).not.toHaveBeenCalled();
 	});
 
 	it("keeps destructive targets explicit and excludes deferred commands", async () => {
@@ -191,8 +249,8 @@ describe("CLI command program", () => {
 		]) {
 			const fixture = cliFixture();
 			const exitCode = await runCliCommand({
-				actions: fixture.actions,
 				arguments: arguments_,
+				createActions: () => fixture.actions,
 				defaultInstance: "dev",
 				io: fixture.io,
 			});
@@ -208,16 +266,16 @@ describe("CLI command program", () => {
 
 		expect(
 			await runCliCommand({
-				actions: first.actions,
 				arguments: ["logs", "--tail", "7"],
+				createActions: () => first.actions,
 				defaultInstance: "first",
 				io: first.io,
 			}),
 		).toBe(0);
 		expect(
 			await runCliCommand({
-				actions: second.actions,
 				arguments: ["logs"],
+				createActions: () => second.actions,
 				defaultInstance: "second",
 				io: second.io,
 			}),

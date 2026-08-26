@@ -1,8 +1,9 @@
 import { access, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConfig } from "../../src/config/config-resolution.js";
+import { RuntimeDiscoveryError } from "../../src/node/active-runtime-discovery.js";
 import {
 	ActiveRuntimeFileStore,
 	createRuntimeDescriptor,
@@ -35,6 +36,25 @@ describe("runtime doctor", () => {
 		await expect(access(join(project, ".localhost2137"))).rejects.toMatchObject({
 			code: "ENOENT",
 		});
+	});
+
+	it("passes an explicit config locator through its read-only inspection", async () => {
+		const project = await temporaryProject();
+		const configPath = join(project, "custom.localhost.ts");
+		const config = resolveConfig({ services: {}, storage: { dir: ".state" } }, configPath);
+		const loadConfig = vi.fn(async () => config);
+
+		await inspectProjectRuntime(
+			{ configPath, cwd: project },
+			{
+				discoverRuntime: async () => {
+					throw new RuntimeDiscoveryError("RUNTIME_NOT_FOUND", "No runtime descriptor.");
+				},
+				loadConfig,
+			},
+		);
+
+		expect(loadConfig).toHaveBeenCalledWith({ cwd: project, explicitPath: configPath });
 	});
 
 	it("surfaces orphaned and incompatible service manifests without exposing stored data", async () => {

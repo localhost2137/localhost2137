@@ -15,6 +15,7 @@ export interface DevCommandDependencies {
 }
 
 export interface RunDevCommandInput {
+	readonly configPath?: string;
 	readonly cwd: string;
 	readonly io: CliIo;
 	readonly options: CliDevOptions;
@@ -59,6 +60,7 @@ export async function runDevCommand(
 	let daemon: DevDaemon | undefined;
 	try {
 		daemon = await (dependencies.startDaemon ?? startDevDaemon)({
+			...(input.configPath === undefined ? {} : { configPath: input.configPath }),
 			cwd: input.cwd,
 			...input.options,
 		});

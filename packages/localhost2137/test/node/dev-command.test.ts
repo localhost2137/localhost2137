@@ -14,15 +14,22 @@ describe("foreground dev command", () => {
 		const close = vi.fn(async () => undefined);
 		const daemon = daemonFixture(fatal.promise, close);
 		const writeError = vi.fn();
+		const startDaemon = vi.fn(async () => daemon);
 		const running = runDevCommand(
 			{
+				configPath: "/outside/custom.localhost.ts",
 				cwd: "/project",
 				io: { writeError, writeOutput: vi.fn() },
 				options: { port: 21_337 },
 			},
-			{ signals, startDaemon: vi.fn(async () => daemon) },
+			{ signals, startDaemon },
 		);
 		await vi.waitFor(() => expect(writeError).toHaveBeenCalledOnce());
+		expect(startDaemon).toHaveBeenCalledWith({
+			configPath: "/outside/custom.localhost.ts",
+			cwd: "/project",
+			port: 21_337,
+		});
 
 		signals.emit("SIGINT");
 		await expect(running).rejects.toMatchObject<Partial<SignalInterruption>>({

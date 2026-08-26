@@ -1,7 +1,6 @@
 import type { CliServiceDescription } from "./service-description.js";
 
 export interface CliDevOptions {
-	readonly configPath?: string;
 	readonly host?: "127.0.0.1" | "::1" | "localhost";
 	readonly port?: number;
 }

@@ -21,6 +21,7 @@ import { createDevProjectRuntime } from "./dev-runtime-dependencies.js";
 import { inspectProjectRuntime } from "./runtime-doctor.js";
 
 export interface NodeCliActionsInput {
+	readonly configPath?: string;
 	readonly cwd: string;
 	readonly fetch?: typeof globalThis.fetch;
 	readonly inheritedEnv: Readonly<Record<string, string | undefined>>;
@@ -47,7 +48,8 @@ export function createNodeCliActions(
 	dependencies: NodeCliActionDependencies = {},
 ): CliActions {
 	const fetchImplementation = input.fetch ?? globalThis.fetch;
-	const session = () => loadRuntimeSession(input.cwd, fetchImplementation, dependencies);
+	const session = () =>
+		loadRuntimeSession(input.cwd, input.configPath, fetchImplementation, dependencies);
 	const forTarget = async <Value>(
 		instanceId: string,
 		action: (runtime: RuntimeSession) => Promise<Value>,
@@ -84,6 +86,7 @@ export function createNodeCliActions(
 		dev: (options) => runDev(input, options, fetchImplementation, dependencies),
 		doctor: () =>
 			(dependencies.inspectRuntime ?? inspectProjectRuntime)({
+				...(input.configPath === undefined ? {} : { configPath: input.configPath }),
 				cwd: input.cwd,
 				...(input.fetch ? { fetch: input.fetch } : {}),
 			}),
@@ -133,10 +136,14 @@ function describeForCli(value: ControlJsonValue): unknown {
 
 async function loadRuntimeSession(
 	cwd: string,
+	configPath: string | undefined,
 	fetch: typeof globalThis.fetch,
 	dependencies: NodeCliActionDependencies,
 ): Promise<RuntimeSession> {
-	const config = await (dependencies.loadConfig ?? loadResolvedConfig)({ cwd });
+	const config = await (dependencies.loadConfig ?? loadResolvedConfig)({
+		cwd,
+		...(configPath === undefined ? {} : { explicitPath: configPath }),
+	});
 	let active: Awaited<ReturnType<typeof discoverActiveRuntime>>;
 	try {
 		active = await (dependencies.discoverRuntime ?? discoverActiveRuntime)(config.storage.dir, {
@@ -200,7 +207,12 @@ async function runDev(
 	dependencies: NodeCliActionDependencies,
 ): Promise<void> {
 	await (dependencies.runDev ?? runDevCommand)(
-		{ cwd: input.cwd, io: input.io, options },
+		{
+			...(input.configPath === undefined ? {} : { configPath: input.configPath }),
+			cwd: input.cwd,
+			io: input.io,
+			options,
+		},
 		{
 			startDaemon: (daemonOptions) =>
 				startDevDaemon(daemonOptions, {

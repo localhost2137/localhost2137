@@ -12,15 +12,15 @@ const io = Object.freeze({
 });
 const configuredInstance = process.env.LOCALHOST_INSTANCE?.trim();
 const defaultInstance = configuredInstance ? configuredInstance : "dev";
-const actions = createNodeCliActions({
-	cwd: process.cwd(),
-	inheritedEnv: process.env,
-	io,
-});
-
 process.exitCode = await runCliCommand({
-	actions,
 	arguments: process.argv.slice(2),
+	createActions: (bootstrap) =>
+		createNodeCliActions({
+			cwd: process.cwd(),
+			inheritedEnv: process.env,
+			io,
+			...(bootstrap.configPath === undefined ? {} : { configPath: bootstrap.configPath }),
+		}),
 	defaultInstance,
 	io,
 });

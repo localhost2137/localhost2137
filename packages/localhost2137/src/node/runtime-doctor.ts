@@ -8,6 +8,7 @@ import { NodeManifestStore } from "./manifest-store.js";
 import { storagePaths } from "./storage-paths.js";
 
 export interface RuntimeDoctorOptions {
+	readonly configPath?: string;
 	readonly cwd: string;
 	readonly fetch?: typeof globalThis.fetch;
 }
@@ -63,6 +64,7 @@ export async function inspectProjectRuntime(
 	const issues: RuntimeDoctorIssue[] = [];
 	const config = await readConfig(
 		options.cwd,
+		options.configPath,
 		dependencies.loadConfig ?? loadResolvedConfig,
 		issues,
 	);
@@ -99,11 +101,17 @@ export async function inspectProjectRuntime(
 
 async function readConfig(
 	cwd: string,
+	configPath: string | undefined,
 	load: typeof loadResolvedConfig,
 	issues: RuntimeDoctorIssue[],
 ): Promise<Readonly<{ errorCode?: string; value?: ResolvedConfig }>> {
 	try {
-		return Object.freeze({ value: await load({ cwd }) });
+		return Object.freeze({
+			value: await load({
+				cwd,
+				...(configPath === undefined ? {} : { explicitPath: configPath }),
+			}),
+		});
 	} catch (cause) {
 		const errorCode = cause instanceof ConfigError ? cause.code : "CONFIG_READ_FAILED";
 		issues.push(

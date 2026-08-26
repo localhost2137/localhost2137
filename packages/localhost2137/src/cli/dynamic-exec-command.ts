@@ -3,7 +3,13 @@ import type { CliOption, OperationMetadata } from "../config/schema-metadata.js"
 import { toCliName } from "../config/schema-metadata.js";
 import type { CliServiceDescription } from "./service-description.js";
 
-const RESERVED_OPERATION_FLAGS = new Set(["--help", "--input-json", "--instance", "--json"]);
+const RESERVED_OPERATION_FLAGS = new Set([
+	"--config",
+	"--help",
+	"--input-json",
+	"--instance",
+	"--json",
+]);
 
 export interface DynamicExecIo {
 	writeError(value: string): void;
@@ -40,10 +46,14 @@ export async function parseDynamicExecCommand(
 	})
 		.name(`localhost exec ${service.name}`)
 		.description(service.description)
+		.option("--config <path>", "explicit localhost config path")
 		.showHelpAfterError();
 
 	for (const [operationKey, metadata] of Object.entries(service.operationMetadata)) {
-		const operation = program.command(toCliName(operationKey)).description(metadata.description);
+		const operation = program
+			.command(toCliName(operationKey))
+			.description(metadata.description)
+			.option("--config <path>", "explicit localhost config path");
 		operation.option("--instance <id>", "target instance", input.defaultInstance);
 		operation.option("--json", "print only valid JSON");
 		const compiled = addInputOptions(operation, metadata);

@@ -1,20 +1,41 @@
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
+import { parseCliBootstrapArguments } from "./bootstrap-arguments.js";
 import type { CliActions, CliIo } from "./cli-actions.js";
 import { CliUsageError, classifyCliFailure } from "./cli-errors.js";
 import { parseDynamicExecCommand } from "./dynamic-exec-command.js";
 
 export interface RunCliInput {
-	readonly actions: CliActions;
 	readonly arguments: readonly string[];
+	readonly createActions: (bootstrap: CliActionBootstrap) => CliActions;
 	readonly defaultInstance: string;
 	readonly io: CliIo;
+}
+
+export interface CliActionBootstrap {
+	readonly configPath?: string;
+}
+
+interface DispatchCliInput extends Omit<RunCliInput, "createActions"> {
+	readonly actions: CliActions;
 }
 
 /** Parses one invocation with fresh Commander state and returns, but never exits, the process. */
 export async function runCliCommand(input: RunCliInput): Promise<number> {
 	try {
-		if (input.arguments[0] === "exec") return await runExec(input);
-		return await runStatic(input);
+		const bootstrap = parseCliBootstrapArguments(input.arguments);
+		const actions = input.createActions(
+			Object.freeze({
+				...(bootstrap.configPath === undefined ? {} : { configPath: bootstrap.configPath }),
+			}),
+		);
+		const dispatchInput: DispatchCliInput = {
+			actions,
+			arguments: bootstrap.arguments,
+			defaultInstance: input.defaultInstance,
+			io: input.io,
+		};
+		if (dispatchInput.arguments[0] === "exec") return await runExec(dispatchInput);
+		return await runStatic(dispatchInput);
 	} catch (cause) {
 		if (cause instanceof CommanderError) return cause.exitCode === 0 ? 0 : 2;
 		const failure = classifyCliFailure(cause);
@@ -23,11 +44,11 @@ export async function runCliCommand(input: RunCliInput): Promise<number> {
 	}
 }
 
-async function runExec(input: RunCliInput): Promise<number> {
+async function runExec(input: DispatchCliInput): Promise<number> {
 	const serviceKey = input.arguments[1];
 	if (serviceKey === undefined || serviceKey === "--help" || serviceKey === "-h") {
 		input.io.writeOutput(
-			"Usage: localhost exec <service> [operation] [options]\n\nDiscover service operations with: localhost exec <service> --help\n",
+			"Usage: localhost exec <service> [operation] [options]\n\nGlobal options:\n  --config <path>  explicit localhost config path\n\nDiscover service operations with: localhost exec <service> --help\n",
 		);
 		return serviceKey === undefined ? 2 : 0;
 	}
@@ -45,33 +66,29 @@ async function runExec(input: RunCliInput): Promise<number> {
 	return 0;
 }
 
-async function runStatic(input: RunCliInput): Promise<number> {
+async function runStatic(input: DispatchCliInput): Promise<number> {
 	let commandExitCode = 0;
-	const program = baseCommand(input.io)
+	const program = addBootstrapHelp(baseCommand(input.io))
 		.name("localhost")
 		.description("Local runtime for stateful external-service emulators")
 		.enablePositionalOptions()
 		.showHelpAfterError()
 		.action(() => program.outputHelp());
 
-	program
-		.command("dev")
+	addBootstrapHelp(program.command("dev"))
 		.description("start the project runtime")
-		.option("--config <path>", "explicit localhost config path")
 		.addOption(
 			new Option("--host <host>", "loopback host").choices(["127.0.0.1", "localhost", "::1"]),
 		)
 		.option("--port <port>", "loopback port", parsePort)
-		.action(async (options: Readonly<{ config?: string; host?: CliDevHost; port?: number }>) => {
+		.action(async (options: Readonly<{ host?: CliDevHost; port?: number }>) => {
 			await input.actions.dev({
-				...(options.config === undefined ? {} : { configPath: options.config }),
 				...(options.host === undefined ? {} : { host: options.host }),
 				...(options.port === undefined ? {} : { port: options.port }),
 			});
 		});
 
-	program
-		.command("describe")
+	addBootstrapHelp(program.command("describe"))
 		.description("describe configured services and operations")
 		.argument("[service]")
 		.option("--instance <id>", "target instance", input.defaultInstance)
@@ -84,39 +101,36 @@ async function runStatic(input: RunCliInput): Promise<number> {
 			);
 		});
 
-	const instance = program.command("instance").description("manage isolated worlds");
-	instance
-		.command("create")
+	const instance = addBootstrapHelp(program.command("instance")).description(
+		"manage isolated worlds",
+	);
+	addBootstrapHelp(instance.command("create"))
 		.argument("<id>")
 		.option("--seed", "seed after creation")
 		.action(async (id: string, options: Readonly<{ seed?: boolean }>) => {
 			await input.actions.createInstance(id, options.seed === true);
 			input.io.writeOutput(`created ${id}${options.seed ? " (seeded)" : ""}\n`);
 		});
-	instance
-		.command("list")
+	addBootstrapHelp(instance.command("list"))
 		.option("--json", "print only valid JSON")
 		.action(async (options: Readonly<{ json?: boolean }>) => {
 			writeData(input.io, await input.actions.listInstances(), options.json === true);
 		});
-	instance
-		.command("reset")
+	addBootstrapHelp(instance.command("reset"))
 		.argument("<id>")
 		.option("--seed", "seed after reset")
 		.action(async (id: string, options: Readonly<{ seed?: boolean }>) => {
 			await input.actions.resetInstance(id, options.seed === true);
 			input.io.writeOutput(`reset ${id}${options.seed ? " (seeded)" : ""}\n`);
 		});
-	instance
-		.command("destroy")
+	addBootstrapHelp(instance.command("destroy"))
 		.argument("<id>")
 		.action(async (id: string) => {
 			await input.actions.destroyInstance(id);
 			input.io.writeOutput(`destroyed ${id}\n`);
 		});
 
-	program
-		.command("seed")
+	addBootstrapHelp(program.command("seed"))
 		.description("apply configured plugin and scenario seed data")
 		.option("--instance <id>", "target instance", input.defaultInstance)
 		.action(async (options: Readonly<{ instance: string }>) => {
@@ -124,8 +138,7 @@ async function runStatic(input: RunCliInput): Promise<number> {
 			input.io.writeOutput(`seeded ${options.instance}\n`);
 		});
 
-	program
-		.command("env")
+	addBootstrapHelp(program.command("env"))
 		.description("render app-facing connection environment")
 		.option("--instance <id>", "target instance", input.defaultInstance)
 		.addOption(
@@ -137,8 +150,7 @@ async function runStatic(input: RunCliInput): Promise<number> {
 			input.io.writeOutput(await input.actions.environment(options.instance, options.format));
 		});
 
-	program
-		.command("run")
+	addBootstrapHelp(program.command("run"))
 		.description("run a command with app-facing connection environment")
 		.option("--instance <id>", "target instance", input.defaultInstance)
 		.argument("<command...>")
@@ -148,8 +160,7 @@ async function runStatic(input: RunCliInput): Promise<number> {
 			commandExitCode = await input.actions.run(options.instance, Object.freeze([...command]));
 		});
 
-	program
-		.command("logs")
+	addBootstrapHelp(program.command("logs"))
 		.description("inspect bounded runtime logs")
 		.argument("[service]")
 		.option("--instance <id>", "target instance", input.defaultInstance)
@@ -169,10 +180,8 @@ async function runStatic(input: RunCliInput): Promise<number> {
 			},
 		);
 
-	program
-		.command("clock")
-		.description("inspect instance time")
-		.command("status")
+	const clock = addBootstrapHelp(program.command("clock")).description("inspect instance time");
+	addBootstrapHelp(clock.command("status"))
 		.option("--instance <id>", "target instance", input.defaultInstance)
 		.option("--json", "print only valid JSON")
 		.action(async (options: InstanceJsonOptions) => {
@@ -180,8 +189,7 @@ async function runStatic(input: RunCliInput): Promise<number> {
 			writeData(input.io, data, options.json === true);
 		});
 
-	program
-		.command("doctor")
+	addBootstrapHelp(program.command("doctor"))
 		.description("diagnose project runtime discovery and storage")
 		.option("--json", "print only valid JSON")
 		.action(async (options: Readonly<{ json?: boolean }>) => {
@@ -203,6 +211,10 @@ function baseCommand(io: CliIo): Command {
 	});
 }
 
+function addBootstrapHelp(command: Command): Command {
+	return command.option("--config <path>", "explicit localhost config path");
+}
+
 function writeData(io: CliIo, data: unknown, json: boolean): void {
 	if (json) {
 		io.writeOutput(`${JSON.stringify(data)}\n`);
@@ -220,6 +232,7 @@ function instanceFromArguments(arguments_: readonly string[], fallback: string):
 	let found = false;
 	for (let index = 0; index < arguments_.length; index += 1) {
 		const argument = arguments_[index];
+		if (argument === "--") break;
 		if (argument === "--instance") {
 			if (found) throw new CliUsageError("--instance may be specified only once.");
 			const value = arguments_[index + 1];

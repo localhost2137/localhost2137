@@ -141,6 +141,41 @@ describe("Node CLI runtime actions", () => {
 		).rejects.toThrow("data property");
 		expect(fixture.client.executeOperation).not.toHaveBeenCalled();
 	});
+
+	it("binds one explicit config locator into sessions, dev, and doctor", async () => {
+		const fixture = actionFixture();
+		const configPath = "/outside/custom.localhost.ts";
+		const inspectRuntime = vi.fn(async () => ({ status: "ok" as const }));
+		const runDev = vi.fn(async () => undefined);
+		const actions = createNodeCliActions(
+			{ ...fixture.input, configPath },
+			{
+				discoverRuntime: fixture.discoverRuntime,
+				inspectRuntime,
+				loadConfig: fixture.loadConfig,
+				runDev,
+			},
+		);
+
+		await actions.listInstances();
+		await actions.dev({ port: 2_138 });
+		await actions.doctor();
+
+		expect(fixture.loadConfig).toHaveBeenCalledWith({
+			cwd: "/project",
+			explicitPath: configPath,
+		});
+		expect(runDev).toHaveBeenCalledWith(
+			{
+				configPath,
+				cwd: "/project",
+				io: fixture.input.io,
+				options: { port: 2_138 },
+			},
+			expect.objectContaining({ startDaemon: expect.any(Function) }),
+		);
+		expect(inspectRuntime).toHaveBeenCalledWith({ configPath, cwd: "/project" });
+	});
 });
 
 function actionFixture() {

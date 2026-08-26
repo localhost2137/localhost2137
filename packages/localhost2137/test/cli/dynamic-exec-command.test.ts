@@ -83,6 +83,7 @@ describe("dynamic exec command", () => {
 		for (const [name, schema] of [
 			["nested", z.object({ nested: z.object({ value: z.string() }) })],
 			["reserved", z.object({ instance: z.string() })],
+			["config", z.object({ config: z.string() })],
 		] as const) {
 			const service = serviceDescription({ [name]: operationMetadata(schema) });
 			const missing = io();
@@ -96,7 +97,7 @@ describe("dynamic exec command", () => {
 				[
 					name,
 					"--input-json",
-					JSON.stringify(name === "nested" ? { nested: { value: "ok" } } : { instance: "input" }),
+					JSON.stringify(name === "nested" ? { nested: { value: "ok" } } : { [name]: "input" }),
 				],
 				{ defaultInstance: "dev", io: supplied },
 			);
@@ -104,7 +105,7 @@ describe("dynamic exec command", () => {
 			expect(missingResult.exitCode).toBe(2);
 			expect(missing.error).toContain("requires --input-json");
 			expect(suppliedResult.invocation?.input).toEqual(
-				name === "nested" ? { nested: { value: "ok" } } : { instance: "input" },
+				name === "nested" ? { nested: { value: "ok" } } : { [name]: "input" },
 			);
 		}
 	});
