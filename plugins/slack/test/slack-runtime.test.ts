@@ -589,6 +589,45 @@ describe("Slack runtime integration", () => {
 			await instance.destroy();
 		}
 	});
+
+	it.each(["destroy", "reset", "runtime close"] as const)(
+		"settles an in-flight Events delivery before immediate $action teardown",
+		async (action) => {
+			const received = deferred<void>();
+			const receiver = await startReceiver(async (_request, _response) => {
+				received.resolve(undefined);
+				await new Promise<void>(() => undefined);
+			});
+			const runtime = await startRuntime(
+				createSlackPlugin({ deliveryTimeoutMs: 30 }),
+				receiver.url,
+			);
+			const instance = await runtime.createInstance();
+			const instanceId = await instanceIdFrom(runtime);
+			const channel = await instance.slack.createChannel({ name: "general" });
+			await instance.slack.sendMessage({
+				channel: channel.id,
+				from: "U000000",
+				text: "in flight",
+			});
+			await received.promise;
+
+			if (action === "destroy") {
+				await expect(instance.destroy()).resolves.toBeUndefined();
+				expect(await runtime.control.listInstances()).toEqual([]);
+				return;
+			}
+			if (action === "reset") {
+				await expect(instance.reset()).resolves.toBeUndefined();
+				expect(await runtime.control.getInstance(instanceId)).toMatchObject({ status: "running" });
+				const replacementChannel = await instance.slack.createChannel({ name: "general" });
+				expect(await instance.slack.listMessages({ channel: replacementChannel.id })).toEqual([]);
+				return;
+			}
+
+			await expect(runtime.close()).resolves.toBeUndefined();
+		},
+	);
 });
 
 async function startRuntime(plugin: typeof slack, eventsUrl: string | null, seed?: SlackSeed) {

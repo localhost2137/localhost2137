@@ -99,6 +99,46 @@ describe("Slack event response ownership", () => {
 		},
 	);
 
+	it("uses the configured attempt timeout when response cancellation never settles", async () => {
+		const fixture = await deliveryFixture({ timeoutMs: 20 });
+		try {
+			const response = new Response(
+				new ReadableStream<Uint8Array>({
+					cancel: () => new Promise<void>(() => undefined),
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("partial response"));
+					},
+				}),
+				{ status: 200 },
+			);
+			const tracked = trackedTasks();
+			const logs = capturedLogs();
+			const startedAt = Date.now();
+			fixture.dispatcher.schedule(
+				{
+					clock: { now: () => now },
+					fetch: async () => response,
+					log: logs.logger,
+					signal: new AbortController().signal,
+					tasks: tracked.tasks,
+				},
+				fixture.event,
+			);
+
+			await expect(tracked.only()).rejects.toThrow(/timed out while discarding/);
+
+			expect(Date.now() - startedAt).toBeLessThan(1_000);
+			expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+				error: "timeout",
+				status: "failed",
+				statusCode: 200,
+			});
+			expect(logs.entries).toHaveLength(1);
+		} finally {
+			fixture.database.close();
+		}
+	});
+
 	it("records response-body cancellation failure instead of reporting callback success", async () => {
 		const fixture = await deliveryFixture();
 		try {
@@ -147,6 +187,82 @@ describe("Slack event response ownership", () => {
 			fixture.database.close();
 		}
 	});
+
+	it.each([
+		{
+			error: "timeout",
+			message: /timed out while discarding/,
+			name: "attempt deadline",
+		},
+		{
+			error: "transport_error",
+			message: /was interrupted while discarding/,
+			name: "runtime cancellation",
+		},
+	] as const)(
+		"bounds response-body cancellation with the $name",
+		async ({ error, message, name }) => {
+			const timeout = new AbortController();
+			const runtime = new AbortController();
+			const fixture = await deliveryFixture({ timeoutSignal: () => timeout.signal });
+			try {
+				const cancellationStarted = deferred();
+				const lateCancellation = rejectableDeferred();
+				const response = new Response(
+					new ReadableStream<Uint8Array>({
+						async cancel() {
+							cancellationStarted.resolve();
+							await lateCancellation.promise;
+						},
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode("partial response"));
+						},
+					}),
+					{ status: 200 },
+				);
+				const tracked = trackedTasks();
+				const logs = capturedLogs();
+				fixture.dispatcher.schedule(
+					{
+						clock: { now: () => now },
+						fetch: async () => response,
+						log: logs.logger,
+						signal: runtime.signal,
+						tasks: tracked.tasks,
+					},
+					fixture.event,
+				);
+
+				await cancellationStarted.promise;
+				(name === "attempt deadline" ? timeout : runtime).abort(new Error(name));
+
+				await expect(tracked.only()).rejects.toThrow(message);
+				expect(fixture.database.deliveries.get(fixture.event.eventId)).toMatchObject({
+					error,
+					status: "failed",
+					statusCode: 200,
+				});
+				expect(logs.entries).toEqual([
+					{
+						attributes: {
+							error,
+							eventId: fixture.event.eventId,
+							outcome: "failed",
+							statusCode: 200,
+						},
+						message: "Slack event delivery completed.",
+					},
+				]);
+
+				// The attempt no longer owns this late rejection, but the disposal
+				// promise still does; it must not become an unhandled rejection.
+				lateCancellation.reject(new Error("late cancellation failure"));
+				await Promise.resolve();
+			} finally {
+				fixture.database.close();
+			}
+		},
+	);
 
 	it.each([
 		{ error: "transport_error", timeoutAborted: false },
@@ -296,6 +412,17 @@ function deferred(): Readonly<{ promise: Promise<void>; resolve(): void }> {
 		promise,
 		resolve: resolvePromise,
 	});
+}
+
+function rejectableDeferred(): Readonly<{
+	promise: Promise<void>;
+	reject(cause: unknown): void;
+}> {
+	let rejectPromise!: (cause: unknown) => void;
+	const promise = new Promise<void>((_resolve, reject) => {
+		rejectPromise = reject;
+	});
+	return Object.freeze({ promise, reject: rejectPromise });
 }
 
 const config: SlackConfig = Object.freeze({

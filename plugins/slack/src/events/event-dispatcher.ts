@@ -64,6 +64,7 @@ export class SlackEventDispatcher {
 		);
 		const timestamp = String(Math.floor(startedAt.getTime() / 1_000));
 		const timeout = this.#timeoutSignal(this.#timeoutMs);
+		const attemptSignal = AbortSignal.any([context.signal, timeout]);
 		let response: Response;
 		try {
 			response = await context.fetch(url, {
@@ -78,45 +79,33 @@ export class SlackEventDispatcher {
 					}),
 				},
 				method: "POST",
-				signal: AbortSignal.any([context.signal, timeout]),
+				signal: attemptSignal,
 			});
 		} catch {
-			const error = timeout.aborted ? "timeout" : "transport_error";
-			this.#database.deliveries.completeFailure(input.eventId, {
-				error,
-				now: context.clock.now(),
-			});
-			logDeliveryOutcome(context.log, { error, eventId: input.eventId, outcome: "failed" });
+			const error = attemptTimedOut(attemptSignal, timeout) ? "timeout" : "transport_error";
+			this.#completeFailure(context, input.eventId, { error });
 			// ctx.fetch owns transport failure reporting. The outer tracked task
 			// stays successful after the durable outcome is recorded.
 			return;
 		}
 		try {
-			await response.body?.cancel("Slack Events callback response is not consumed.");
+			await discardResponseBody(response.body, attemptSignal);
 		} catch (cause) {
-			this.#database.deliveries.completeFailure(input.eventId, {
-				error: "response_body_error",
-				now: context.clock.now(),
+			const interrupted = cause instanceof DeliveryAttemptInterruptedError;
+			const error = interrupted
+				? attemptTimedOut(attemptSignal, timeout)
+					? "timeout"
+					: "transport_error"
+				: "response_body_error";
+			this.#completeFailure(context, input.eventId, {
+				error,
 				statusCode: response.status,
 			});
-			logDeliveryOutcome(context.log, {
-				error: "response_body_error",
-				eventId: input.eventId,
-				outcome: "failed",
-				statusCode: response.status,
-			});
-			throw new Error("Slack event callback response body could not be discarded.", { cause });
+			throw new Error(responseDisposalFailureMessage(error), { cause });
 		}
 		if (!response.ok) {
-			this.#database.deliveries.completeFailure(input.eventId, {
+			this.#completeFailure(context, input.eventId, {
 				error: "non_success_status",
-				now: context.clock.now(),
-				statusCode: response.status,
-			});
-			logDeliveryOutcome(context.log, {
-				error: "non_success_status",
-				eventId: input.eventId,
-				outcome: "failed",
 				statusCode: response.status,
 			});
 			throw new Error(`Slack event delivery returned HTTP ${response.status}.`);
@@ -131,6 +120,85 @@ export class SlackEventDispatcher {
 			statusCode: response.status,
 		});
 	}
+
+	#completeFailure(
+		context: EventRuntimeContext,
+		eventId: EventId,
+		input: Readonly<{
+			error: "non_success_status" | "response_body_error" | "timeout" | "transport_error";
+			statusCode?: number;
+		}>,
+	): void {
+		this.#database.deliveries.completeFailure(eventId, {
+			error: input.error,
+			now: context.clock.now(),
+			...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
+		});
+		logDeliveryOutcome(context.log, {
+			error: input.error,
+			eventId,
+			outcome: "failed",
+			...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
+		});
+	}
+}
+
+async function discardResponseBody(
+	body: ReadableStream<Uint8Array> | null,
+	signal: AbortSignal,
+): Promise<void> {
+	if (!body) {
+		throwIfDeliveryInterrupted(signal);
+		return;
+	}
+	const disposal = Promise.resolve().then(() =>
+		body.cancel("Slack Events callback response is not consumed."),
+	);
+	// The delivery deadline owns only the wait. A pathological cancellation may
+	// settle later, and its rejection must remain handled after the attempt ends.
+	void disposal.catch(() => undefined);
+	await waitForDeliveryAttempt(disposal, signal);
+	throwIfDeliveryInterrupted(signal);
+}
+
+function waitForDeliveryAttempt(work: Promise<void>, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) return Promise.reject(new DeliveryAttemptInterruptedError(signal.reason));
+	let abort: (() => void) | undefined;
+	const interruption = new Promise<never>((_resolve, reject) => {
+		abort = () => reject(new DeliveryAttemptInterruptedError(signal.reason));
+		signal.addEventListener("abort", abort, { once: true });
+		if (signal.aborted) abort();
+	});
+	return Promise.race([work, interruption]).finally(() => {
+		if (abort) signal.removeEventListener("abort", abort);
+	});
+}
+
+function throwIfDeliveryInterrupted(signal: AbortSignal): void {
+	if (signal.aborted) throw new DeliveryAttemptInterruptedError(signal.reason);
+}
+
+class DeliveryAttemptInterruptedError extends Error {
+	constructor(cause: unknown) {
+		super("Slack event delivery attempt was interrupted.", { cause });
+		this.name = "DeliveryAttemptInterruptedError";
+	}
+}
+
+function attemptTimedOut(attemptSignal: AbortSignal, timeoutSignal: AbortSignal): boolean {
+	return timeoutSignal.aborted && attemptSignal.reason === timeoutSignal.reason;
+}
+
+function responseDisposalFailureMessage(
+	error: "response_body_error" | "timeout" | "transport_error",
+): string {
+	if (error === "timeout") {
+		return "Slack event delivery timed out while discarding its callback response body.";
+	}
+	if (error === "transport_error") {
+		return "Slack event delivery was interrupted while discarding its callback response body.";
+	}
+	return "Slack event callback response body could not be discarded.";
 }
 
 function logDeliveryOutcome(
