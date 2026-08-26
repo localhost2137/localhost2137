@@ -69,28 +69,37 @@ export default async function globalSetup() {
 ```
 
 ```ts
-// fixtures.ts
+// test-connection.ts — import this before application modules in every worker
+const encoded = process.env.LOCALHOST2137_TEST_CONNECTION;
+delete process.env.LOCALHOST2137_TEST_CONNECTION;
+if (!encoded) throw new Error("localhost2137 global setup did not provide a connection.");
+
+const decoded: unknown = JSON.parse(encoded);
+if (typeof decoded !== "object" || decoded === null) {
+	throw new Error("localhost2137 test connection is invalid.");
+}
+const token = Reflect.get(decoded, "token");
+const url = Reflect.get(decoded, "url");
+if (typeof token !== "string" || typeof url !== "string") {
+	throw new Error("localhost2137 test connection is incomplete.");
+}
+
+export const localhostTestConnection = Object.freeze({ token, url });
+```
+
+```ts
+// fixtures.ts — the only test entry point; it imports the holder first
 import { randomUUID } from "node:crypto";
 import { connectRuntime, type RuntimeClient } from "localhost2137/client";
 import { test as base } from "@playwright/test";
+import { localhostTestConnection } from "./test-connection.js";
 
 type WorkerFixtures = { localhost: { client: RuntimeClient; instanceId: string } };
 
 export const test = base.extend<{}, WorkerFixtures>({
 	localhost: [
 		async ({}, use) => {
-			const encoded = process.env.LOCALHOST2137_TEST_CONNECTION;
-			if (!encoded) throw new Error("localhost2137 global setup did not provide a connection.");
-			const connection: unknown = JSON.parse(encoded);
-			if (typeof connection !== "object" || connection === null) {
-				throw new Error("localhost2137 test connection is invalid.");
-			}
-			const token = Reflect.get(connection, "token");
-			const url = Reflect.get(connection, "url");
-			if (typeof token !== "string" || typeof url !== "string") {
-				throw new Error("localhost2137 test connection is incomplete.");
-			}
-			const client = connectRuntime({ token, url });
+			const client = connectRuntime(localhostTestConnection);
 			const instanceId = `playwright-${randomUUID()}`;
 			await client.createInstance({ id: instanceId, persistence: "ephemeral" });
 			try {
@@ -104,9 +113,13 @@ export const test = base.extend<{}, WorkerFixtures>({
 });
 ```
 
-The control token stays in the Playwright Node worker. Never expose it through `page.evaluate`, a
-browser environment variable, a trace, or a screenshot. Browser code receives only a plugin's
-public connection values.
+The test-only holder deletes the worker's environment copy before application modules load and keeps
+the token only in its module closure. Make the custom fixture the first import in each test. Start
+application subprocesses only afterward and pass a sanitized environment. The Playwright owner
+process necessarily retains its own environment copy until it has spawned workers and teardown runs;
+do not import application code or launch application subprocesses from that owner. Never expose the
+token through `page.evaluate`, a browser environment variable, a trace, or a screenshot. Browser code
+receives only a plugin's public connection values.
 
 ## Jest workers
 
@@ -134,21 +147,33 @@ export default async function setup() {
 ```ts
 // jest.global-teardown.ts
 export default async function teardown() {
-	delete process.env.LOCALHOST2137_TEST_CONNECTION;
-	await globalThis.localhost2137Owner?.close();
-	globalThis.localhost2137Owner = undefined;
+	try {
+		await globalThis.localhost2137Owner?.close();
+	} finally {
+		delete process.env.LOCALHOST2137_TEST_CONNECTION;
+		globalThis.localhost2137Owner = undefined;
+	}
 }
 ```
 
-Use the same validated parsing and per-instance `try/finally` shown in the Playwright fixture. If a
-Jest runner cannot preserve the global-setup owner until global teardown, put ownership in a small
-dedicated Node process and communicate over its private IPC channel; do not make workers race to
-own a shared descriptor or storage directory.
+Configure the `test-connection.ts` holder shown above as a Jest `setupFiles` entry, so every worker
+parses, validates, and deletes its inherited environment copy before the test framework or
+application modules load. Test files import the holder's frozen value, create unique instances, and
+destroy them in `afterAll`. Launch application subprocesses only after this bootstrap and pass an
+explicit environment that does not contain `LOCALHOST2137_TEST_CONNECTION`.
+
+The Jest owner process retains its own environment copy until global teardown because workers still
+need to inherit it. Keep application code and subprocesses out of that process. If a Jest runner
+cannot preserve the global-setup owner until global teardown, put ownership in a small dedicated Node
+process and communicate over its private IPC channel; do not make workers race to own a shared
+descriptor or storage directory.
 
 ## Token and failure handling
 
 - Treat the control token as a capability secret even on loopback. Do not log it, snapshot it, add
   it to test reports, persist it in an artifact, or pass it to browser code.
+- Delete token-bearing environment handoffs in the earliest worker bootstrap. Retain the parsed value
+  only inside test harness code, and sanitize the environment of every application child process.
 - Use only the OS-assigned loopback URL returned by the owner. Never rewrite it to a LAN interface.
 - Use collision-resistant instance IDs for remote workers; never derive correctness from a
   framework-specific worker number alone.
