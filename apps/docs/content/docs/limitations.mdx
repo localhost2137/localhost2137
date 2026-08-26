@@ -1,0 +1,107 @@
+---
+title: Limitations and troubleshooting
+description: Current product boundaries and the shortest checks for common configuration, runtime, callback, and cleanup failures.
+---
+
+These limits affect how a project should be structured. Deferred features are not present as empty
+methods or placeholder commands.
+
+## Current runtime boundaries
+
+- The server is loopback-only. Broad network binding and hosted execution are not implemented.
+- Plugins are trusted local code, not sandboxed code.
+- Instances isolate plugin state and storage, not plugin configuration or application callback URLs.
+- Callback interception and automatic per-instance callback rerouting are not implemented.
+- Config changes require a daemon restart; there is no hot reload or instance start/stop command.
+- Per-instance config overrides are not defined.
+- Snapshots, restore, forks, deterministic runtime randomness, MCP generation, and a web dashboard are
+  deferred and absent from the public API.
+- The runtime has no automatic wall-clock scheduler. Plugin time-derived work runs at documented API
+  boundaries or during explicit clock advancement.
+
+Plugin compatibility is narrower than the external provider unless the plugin says otherwise. Read
+the installed package's support matrix before committing a test strategy to it.
+
+## Parallel callbacks need an application rule
+
+Several instances can share one runtime and remain state-isolated. They still use the same plugin
+config. If `eventsUrl` or `webhookUrl` points to one application receiver, the runtime does not add an
+instance header or rewrite the callback automatically.
+
+Choose one of these deliberately:
+
+- make the shared receiver correlate callbacks using provider-shaped event data;
+- serialize callback scenarios that cannot be correlated safely;
+- run a separately configured runtime and receiver per worker.
+
+Do not claim callback isolation merely because each worker has a distinct instance ID.
+
+## Config will not import
+
+Run:
+
+```sh
+localhost doctor --json
+```
+
+A TypeScript `localhost.config.ts` imported from a CommonJS package may fail with the current generic
+`CONFIG_IMPORT_FAILED` diagnostic. Add `"type": "module"` to the package or use
+`localhost.config.mjs`. Adding a direct `tsx` dependency does not correct the package's module mode.
+
+Config discovery resolves paths relative to the config file. Use `--config <path>` if a nested
+working directory discovers the wrong project.
+
+## Runtime is missing or stale
+
+Control commands require an active daemon whose resolved config fingerprint matches the current
+config. Start `localhost dev`, or restart it after config changes. `localhost doctor` reports an
+absent or unhealthy descriptor, inconsistent control-token file, stored config mismatches, orphaned
+service data, invalid manifests, and pending trash transitions without mutating storage.
+
+Do not delete broad project directories to clear one problem. `localhost instance reset <id>` safely
+replaces one world; `localhost instance destroy <id>` removes the explicitly named world.
+
+## Operation or input is missing
+
+Use runtime discovery rather than a README remembered from another version:
+
+```sh
+localhost describe <service> --json
+localhost exec <service> --help
+localhost exec <service> <operation> --help
+```
+
+An unknown instance error lists existing IDs and the exact create hint. JSON-only operation inputs
+must use `--input-json`; generated help explains why flags were not safe to produce.
+
+## Async assertions race
+
+After an operation schedules callbacks, call `await instance.idle()` before observing delivery
+effects. If it fails, inspect bounded logs and the plugin's operation-level inspection surface. An
+idle failure is evidence of failed tracked work; adding an arbitrary sleep hides the failure and does
+not establish completion.
+
+Retries that depend on virtual time may require a later positive clock advance even after the
+initial attempt becomes idle.
+
+## Test cleanup fails
+
+Destroy every test-owned instance before closing its runtime. If cleanup fails,
+`TestRuntimeCleanupError` retains the exact temporary storage path for diagnosis. Report that path;
+do not recursively delete an unresolved environment variable or a broad temporary directory.
+
+Keep the control token inside the test harness. Never put it in application environment, browser
+code, screenshots, traces, snapshots, or build artifacts.
+
+## Native SQLite installation
+
+The first-party Slack and Stripe plugins use `better-sqlite3`. A package manager may compile the
+native module when no matching prebuild exists. Node.js 24 is the supported baseline. Treat a compiler
+toolchain failure as an installation issue, not an emulator compatibility result.
+
+## New plugin contract fixtures
+
+The current `@localhost2137/plugin-testkit` version contract requires positive versions ordered
+`old < current < future`. A genuinely new state-version-1 plugin has no honest predecessor. Do not
+fabricate one or increment the schema only to satisfy the fixture. Use focused public tests until the
+plugin has a real historical schema, then add the full upgrade proof.

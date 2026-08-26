@@ -1,0 +1,135 @@
+---
+title: Building and testing plugins
+description: Implement a small stateful emulator through the public Hono, Zod, lifecycle, operation, and testkit contracts.
+---
+
+A plugin is ordinary trusted TypeScript packaged for npm. It owns an executable service, not a set of
+static response fixtures. Build the smallest coherent provider surface that a real application or SDK
+needs, then say what remains unsupported.
+
+## Keep the dependency direction simple
+
+```text
+HTTP routes + control operations
+             │
+             v
+       domain services
+             │
+             v
+   plugin-owned persistence
+```
+
+Public routes and operations call the same domain behavior; they never call each other. The plugin
+owns response mapping, state, identities, transactions, migrations, events, and retry policy. The
+runtime owns mounting, instance storage locations, lifecycle timing, operation adapters, tracked
+transport, virtual-time delivery, and control authentication.
+
+Plugins import only the public `localhost2137` package root. A missing public capability is a contract
+question, not a reason to reach into runtime source internals.
+
+## Minimal authoring shape
+
+This compact file plugin uses only the public authoring contract. A real provider emulator will
+normally split domain, persistence, API, operation, and lifecycle ownership once each part has a
+separate reason to change.
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import { Hono } from "hono";
+import { defineOperation, definePlugin, type PluginEnv } from "localhost2137";
+import { z } from "zod";
+
+type Config = Readonly<Record<string, never>>;
+type State = Readonly<{ valuePath: string }>;
+
+const operation = defineOperation<"counter", State, Config>();
+const read = operation({
+  description: "Read this instance's counter",
+  input: z.object({}),
+  output: z.object({ value: z.int() }),
+  run: async (ctx) => ({
+    value: Number(await readFile(ctx.state.valuePath, "utf8")),
+  }),
+});
+
+const api = new Hono<PluginEnv<State, Config>>();
+api.get("/value", async (c) => {
+  const { state } = c.get("lh");
+  return c.json({ value: Number(await readFile(state.valuePath, "utf8")) });
+});
+
+export const counter = definePlugin({
+  id: "counter",
+  description: "Stateful counter emulator",
+  stateVersion: 1,
+  configSchema: z.object({}),
+  api,
+  operations: { read },
+  lifecycle: {
+    create: (ctx) => writeFile(ctx.storage.path("value"), "0", "utf8"),
+    start: (ctx): State => ({ valuePath: ctx.storage.path("value") }),
+  },
+  connection: ({ baseUrl, instanceId, serviceKey }) => {
+    const apiUrl = `${baseUrl}/${instanceId}/${serviceKey}`;
+    return { values: { apiUrl }, env: { COUNTER_API_URL: apiUrl } };
+  },
+});
+```
+
+Bind `defineOperation` once for one literal plugin ID, state, and config combination. Operation
+inputs are Zod objects; outputs are JSON-compatible and validated by every adapter. Throw
+`LocalhostError` for expected control failures, while public routes return provider-compatible
+failure shapes.
+
+The Hono app is a shared route table. Read instance state only from `c.get("lh")`; never close over
+mutable state opened by a lifecycle hook.
+
+## Lifecycle and durable state
+
+| Hook | Responsibility |
+| --- | --- |
+| `create` | Initialize empty service storage once. |
+| `update` | Migrate stopped durable state from the recorded `stateVersion`. |
+| `start` | Open process resources on every start and return instance state. |
+| `onStarted` | Reconcile durable running work before readiness. |
+| `seed` | Apply explicitly requested, schema-validated baseline data. |
+| `onTimeAdvanced` | Reconcile one committed time window idempotently by `advanceId`. |
+| `stop` | Close process resources after a successful start. |
+
+Only `create` and `start` are required. `stateVersion` describes the durable storage format, not the
+npm release. Increment it only for a real storage contract change and keep the old fixture needed to
+prove the migration. A newer stored state must fail rather than downgrade silently.
+
+Pair `seedSchema` with `lifecycle.seed`, or omit both. Use `ctx.clock.now()` for emulator time. Send
+outbound HTTP through `ctx.fetch`, and register other asynchronous work with `ctx.tasks.track`.
+There must be no untracked fire-and-forget promise.
+
+## Contract and semantic tests
+
+`@localhost2137/plugin-testkit` supplies shared runtime-integration cases. Register them with the
+test runner so each case is visible:
+
+```ts
+import { createPluginContractCases } from "@localhost2137/plugin-testkit";
+import { describe, it } from "vitest";
+import { pluginContractFixture } from "./plugin-contract-fixture.js";
+
+describe("plugin contract", () => {
+  for (const contractCase of createPluginContractCases(pluginContractFixture)) {
+    it(contractCase.name, () => contractCase.run(), 30_000);
+  }
+});
+```
+
+The selected-plugin harness must call the production factory for base, fault, and historical
+variants. Do not add test-only operations or response fields to the production inventory.
+
+The current fixture requires positive versions ordered `old < current < future`. A new
+state-version-1 plugin has no honest predecessor and cannot satisfy that contract yet. Do not bump it
+to version 2 or invent an old schema. Cover import behavior, public routes, lifecycle, isolation,
+persistence, reset, seed, restart, and future-version rejection with focused public-surface tests;
+add the shared upgrade case once a real prior schema exists.
+
+The generic contract proves runtime integration, not provider fidelity. Add semantic tests for every
+supported endpoint, real request encodings, target SDK behavior, domain transactions, signatures,
+retry schedules, recovery, and each meaningful unsupported boundary.

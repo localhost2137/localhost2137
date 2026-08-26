@@ -1,0 +1,103 @@
+---
+title: Slack plugin
+description: Supported Slack Web API, Bolt wiring, workspace operations, signed events, and deliberate differences.
+---
+
+`@localhost2137/slack` implements a stateful local Slack workspace with SQLite persistence, a tested
+Web API subset, control operations, and signed Events API callbacks. It is a concrete plugin built on
+the same runtime contract available to third parties.
+
+## Configure
+
+```ts
+import { slack } from "@localhost2137/slack";
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+  services: {
+    slack: slack({
+      config: {
+        workspaceName: "Local workspace",
+        botToken: "xoxb-local-workspace",
+        signingSecret: "local-signing-secret",
+        eventsUrl: "http://127.0.0.1:3000/slack/events",
+      },
+    }),
+  },
+});
+```
+
+`eventsUrl` defaults to `null`. Connection values are `apiUrl`, `botToken`, and `signingSecret`; the
+environment projection is `SLACK_API_URL`, `SLACK_BOT_TOKEN`, and `SLACK_SIGNING_SECRET`. `apiUrl`
+ends in `/api/` and can be passed directly to Slack Bolt as `clientOptions.slackApiUrl`.
+
+## Supported Web API
+
+| Method | Supported behavior |
+| --- | --- |
+| `auth.test` | local workspace and installed bot identity |
+| `users.list` | installed bot and local users with stable cursor pagination |
+| `conversations.list` | public channels, membership, counts, and pagination |
+| `conversations.members` | channel member IDs with pagination |
+| `conversations.history` | newest-first messages, bounds, cursors, and thread fields |
+| `chat.postMessage` | bot messages, optional `thread_ts`, and event emission |
+
+Requests may use JSON or form-encoded POST bodies; list methods also accept query parameters. The
+configured bearer token is supported for every method, and a form-body token is accepted for SDK
+compatibility. Recognized Slack failures use HTTP 200 with `{ ok: false, error }`.
+
+## Control operations
+
+| Operation | Use |
+| --- | --- |
+| `createUser` | Create a user with an optional admin flag. |
+| `createChannel` | Create a public channel; the installed bot joins automatically. |
+| `addUserToChannel` | Add a user by ID or exact name, idempotently. |
+| `sendMessage` | Simulate a member message and enqueue an Events callback. |
+| `listMessages` | Inspect newest-first persisted messages. |
+
+Example setup and trigger:
+
+```sh
+localhost exec slack create-user --name Ada --json
+localhost exec slack create-channel --name general --json
+localhost exec slack add-user-to-channel --channel general --user Ada --json
+localhost exec slack send-message --channel general --from Ada --text ping --json
+```
+
+## Bolt wiring
+
+```ts
+import { App } from "@slack/bolt";
+
+const app = new App({
+  token: connection.botToken,
+  signingSecret: connection.signingSecret,
+  clientOptions: { slackApiUrl: connection.apiUrl },
+  endpoints: "/slack/events",
+});
+```
+
+The repository's `examples/slack-ping-bot` test receives a correctly signed `message` event, replies
+through Bolt's normal `chat.postMessage` path, waits for tracked delivery, and observes the persisted
+`pong` through `listMessages`.
+
+## Events and retries
+
+Each message event has a stable ID and compact body. The plugin signs it with the configured secret
+and sends Slack timestamp/signature headers through tracked runtime fetch. Attempt outcome and the
+next deadline are persisted.
+
+Retries are bounded: one immediate retry, then retries after one and five minutes. There is no
+wall-clock scheduler, so due retries run during a later positive virtual-time advance. A receiver can
+suppress remaining retries with `X-Slack-No-Retry: 1`.
+
+Use real clock mode with Bolt's default callback replay-window check. In pinned-time signature tests,
+verify the supplied virtual timestamp directly.
+
+## Deliberate differences
+
+The plugin does not implement HTTPS, OAuth, scopes, rate limits, enterprise/grid, DMs, private
+channels, files, reactions, rich blocks or attachments, presence, search, or message editing and
+deletion. Public channels are the only accepted conversation type. Local IDs and timestamps use
+deterministic database sequences, and only the configured bot receives a token.

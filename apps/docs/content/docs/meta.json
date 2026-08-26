@@ -1,4 +1,15 @@
 {
 	"title": "localhost2137",
-	"pages": ["index", "getting-started", "configuration", "cli", "testing", "virtual-time"]
+	"pages": [
+		"index",
+		"getting-started",
+		"configuration",
+		"cli",
+		"testing",
+		"virtual-time",
+		"plugins",
+		"first-party",
+		"agents",
+		"limitations"
+	]
 }

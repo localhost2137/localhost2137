@@ -1,0 +1,106 @@
+---
+title: Stripe plugin
+description: Supported Stripe SDK resources, recurring billing, virtual-time renewal, webhooks, and limits.
+---
+
+`@localhost2137/stripe` implements a deterministic local Stripe account for the recurring-billing
+slice. It uses plugin-owned SQLite state, supports the official Node SDK through a small fetch
+adapter, and reconciles invoices and webhooks from explicit virtual-time advancement.
+
+## Configure
+
+```ts
+import { stripe } from "@localhost2137/stripe";
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+  clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+  services: {
+    stripe: stripe({
+      config: {
+        secretKey: "sk_test_local",
+        webhookSecret: "whsec_local",
+        webhookUrl: null,
+      },
+    }),
+  },
+});
+```
+
+Connection values are `apiUrl`, `secretKey`, and `webhookSecret`; the environment projection is
+`STRIPE_API_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`.
+
+## Use the official SDK
+
+Stripe's client fixes requests to `api.stripe.com`, while a localhost2137 service URL includes
+instance and service path segments. `createStripeSdkFetch` rewrites only that origin and preserves
+the SDK's request path and query:
+
+```ts
+import { createStripeSdkFetch } from "@localhost2137/stripe";
+import Stripe from "stripe";
+
+const client = new Stripe(connection.secretKey, {
+  httpClient: Stripe.createFetchHttpClient(
+    createStripeSdkFetch(connection.apiUrl),
+  ),
+  maxNetworkRetries: 0,
+});
+
+const customer = await client.customers.create({ name: "Ada" });
+```
+
+The adapter does not emulate SDK retry behavior. `maxNetworkRetries: 0` keeps application tests
+explicit and prevents SDK retries from obscuring plugin delivery behavior.
+
+## Supported HTTP surface
+
+| Resource | Methods |
+| --- | --- |
+| customers | create, retrieve, list |
+| products | retrieve, list |
+| prices | retrieve, list |
+| subscriptions | create, retrieve, cancel |
+| invoices | retrieve, list |
+
+Requests use bearer authentication. POST bodies use Stripe's form encoding and list endpoints use
+deterministic opaque pagination. Products and prices are created through control operations in the
+current compatibility slice. Unsupported endpoints return the normal not-found response; the plugin
+does not pretend to implement general payment processing.
+
+## Control operations
+
+`createCustomer`, `createProduct`, `createPrice`, `createSubscription`, `listInvoices`, `listEvents`,
+and `setNextPaymentOutcome` arrange and inspect billing state. Public routes and operations share the
+same domain services and repositories.
+
+## Renewal through virtual time
+
+Every subscription uses an exact 30-day billing period. A positive advance creates each crossed
+invoice in stable order:
+
+```ts
+const product = await instance.stripe.createProduct({ name: "Pro" });
+const price = await instance.stripe.createPrice({
+  productId: product.id,
+  unitAmount: 2500,
+});
+const customer = await instance.stripe.createCustomer({ name: "Ada" });
+const subscription = await instance.stripe.createSubscription({
+  customerId: customer.id,
+  priceId: price.id,
+});
+
+await instance.clock.advance("30d");
+
+const invoices = await instance.stripe.listInvoices({
+  subscriptionId: subscription.id,
+});
+```
+
+Replaying one durable advance ID and window is idempotent. Canceled subscriptions do not renew.
+
+Invoice events and webhook outbox rows commit in one transaction. Delivery is at least once: if the
+receiver observes a request and the process stops before local completion, restart may send the same
+event ID and byte-identical body again. Applications should deduplicate webhook events as they would
+with the real provider.

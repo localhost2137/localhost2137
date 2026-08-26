@@ -1,0 +1,4 @@
+{
+	"title": "First-party plugins",
+	"pages": ["slack", "stripe"]
+}

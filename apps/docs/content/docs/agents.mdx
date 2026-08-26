@@ -1,0 +1,62 @@
+---
+title: Coding agents and skills
+description: Give a coding agent enough product context to discover plugins, preserve application boundaries, and verify real behavior.
+---
+
+localhost2137 uses ordinary developer interfaces: TypeScript config, HTTP, CLI, files, and tests. A
+coding agent does not need a product-specific protocol. It does need accurate plugin context and the
+same resource-ownership discipline expected from a human contributor.
+
+## A useful agent loop
+
+Give the agent the repository, installed packages, and permission to run the local test workflow.
+Then ask it to:
+
+1. inspect the existing application integration and installed plugin;
+2. use `describe --json` or generated help instead of guessing operations;
+3. configure the plugin and pass its connection through the application's normal SDK or adapter;
+4. create an isolated instance and arrange state with operations;
+5. trigger behavior through the application-facing interface;
+6. await tracked plugin work and inspect the outcome;
+7. clean up resources and report exact compatibility limits.
+
+This loop is useful because it turns an external dependency into local state the agent can control.
+It does not make every provider feature available: capability still comes from the installed plugin.
+
+## Repository skills
+
+Two agent skills live in the repository:
+
+| Skill | Use it for |
+| --- | --- |
+| `skills/use-localhost2137` | Configuring an installed plugin, wiring an app, and building or diagnosing integration tests. |
+| `skills/build-localhost2137-plugin` | Authoring, extending, reviewing, and contract-testing emulator plugins. |
+
+The use skill tells an agent to inspect the installed plugin, preserve the provider-facing
+application boundary, use operations only for control, choose explicit runtime ownership, verify
+cleanup, and disclose unsupported behavior.
+
+The authoring skill tells an agent to keep service semantics in the plugin, share domain behavior
+below HTTP and operation adapters, own persistence and migrations, track outbound work, avoid runtime
+internals, and prove compatibility claims through public tests.
+
+## Use the skills manually
+
+Point the coding agent at the appropriate `SKILL.md`, or copy the entire skill directory into the
+skill location documented by that agent tool. Keep its `references/` and `agents/` files with it;
+the main file intentionally sends the agent to those details only when relevant.
+
+There is no automatic skill installer, symlink behavior, or npm lifecycle hook in the current
+project. Do not make package installation mutate a developer's agent configuration.
+
+## What the agent should tell the human
+
+An agent's handoff should make the same facts useful to its human collaborator:
+
+- which application boundary now points to the emulator;
+- how the world is arranged, triggered, and observed;
+- which installed plugin behavior the scenario relies on;
+- how the work was verified and cleaned up;
+- which relevant behavior is unsupported or unverified.
+
+Avoid claims about autonomy or compatibility that the demonstrated test does not establish.

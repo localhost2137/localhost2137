@@ -1,0 +1,64 @@
+---
+title: Using plugins
+description: Evaluate an installed plugin's compatible API, control operations, connection values, and limits.
+---
+
+localhost2137 is a plugin runtime. Installing the runtime does not imply that a particular service
+emulator exists or supports a particular provider feature. Treat the installed plugin package and
+its runtime description as the authority.
+
+## Inspect before wiring
+
+For an installed plugin, check:
+
+1. package exports and TypeScript declarations;
+2. configuration and connection fields;
+3. supported HTTP or SDK compatibility;
+4. control operations and their input/output schemas;
+5. persistence, callback, retry, and virtual-time behavior;
+6. deliberate omissions that affect the scenario.
+
+With the daemon running, use live introspection:
+
+```sh
+localhost describe <service> --json
+localhost exec <service> --help
+localhost exec <service> <operation> --help
+```
+
+The service key comes from your config. Do not infer one plugin's fields or commands from another.
+
+## Preserve the application interface
+
+Pass `instance.<service>.connection` into the application's existing provider adapter. Prefer the
+official SDK when the plugin documents compatibility with it. A plugin-supplied adapter is
+appropriate only when the SDK hardcodes behavior that prevents a path-scoped local endpoint.
+
+Operations are privileged arrangement and inspection tools. They should not enter production
+application code and should not replace the provider-facing API call under test.
+
+```text
+application code -> provider SDK -> plugin HTTP API
+test setup       -> operation     -> same plugin domain state
+```
+
+This distinction makes the test meaningful: setup may create a customer through an operation while
+the application creates a subscription through the normal Stripe SDK.
+
+## Mounting and environment values
+
+The configured service key defines the public prefix `/{instance}/{service}`. Mounting the same
+plugin twice under different keys creates separate service state inside every instance.
+
+Plugins choose connection value and environment names. If two mounts export the same environment
+name, config resolution fails. Set `exportEnv: false` and pass typed connection values explicitly;
+do not rename variables after generation and imply that automatic multi-mount wiring exists.
+
+## Evaluate a compatibility claim
+
+A useful plugin states the endpoints and behaviors it supports, the SDK or request encodings it has
+actually exercised, and material differences from the external service. “Compatible” without a
+surface and executable test does not tell you whether an integration will work.
+
+When behavior is missing, report the precise gap. Do not add test-only responses around the plugin
+that make the application pass without exercising the intended service behavior.
