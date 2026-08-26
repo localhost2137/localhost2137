@@ -27,12 +27,11 @@ runtime mode.
 
 ```sh
 pnpm add -D localhost2137 @localhost2137/slack
+pnpm exec localhost init
 ```
 
-Create `localhost.config.ts` manually using the next section. `pnpm exec localhost init` is a
-reviewed documentation-first command and is not implemented in the current CLI. When implemented,
-it will create that file only when absent, add `.localhost2137/` to `.gitignore`, avoid choosing or
-installing plugins, and refuse to replace an existing config.
+`localhost init` creates `localhost.config.ts` only when absent, adds `.localhost2137/` to
+`.gitignore`, avoids choosing or installing plugins, and refuses to replace an existing config.
 
 If the project uses a TypeScript config, its package must use ESM (`"type": "module"`). A project
 that must remain CommonJS can use `localhost.config.mjs` instead.
@@ -93,9 +92,7 @@ pnpm exec localhost exec slack add-user-to-channel \
 Your application should continue using its normal provider SDK or HTTP adapter. Point that boundary
 at the plugin connection values; do not replace application behavior with control operations.
 
-## Clone an example after the command ships
-
-The reviewed demo-clone contract is also not implemented in the current CLI:
+## Start from an executable example
 
 ```sh
 pnpm exec localhost demo clone slack-ping-bot ./slack-ping-bot
@@ -103,14 +100,9 @@ cd ./slack-ping-bot
 pnpm test
 ```
 
-`localhost demo clone <name> [directory]` will create a standalone copy in a new or empty directory,
-install it with pnpm, and refuse to overwrite existing files. `slack-ping-bot` uses the official
-Slack Bolt SDK and a signed local Events API callback. Until that command ships, run the checked-in
-workspace example instead:
-
-```sh
-pnpm --filter @localhost2137/example-slack-ping-bot test
-```
+`localhost demo clone <name> [directory]` creates a standalone copy in a new or empty directory,
+installs it with pnpm, and refuses to overwrite existing files. `slack-ping-bot` uses the official
+Slack Bolt SDK and a signed local Events API callback.
 
 Next, read [Configuration](/configuration) for world templates or [Integration testing](/testing)
 for disposable instances.
