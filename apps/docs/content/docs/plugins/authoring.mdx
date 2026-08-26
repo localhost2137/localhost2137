@@ -1,11 +1,13 @@
 ---
-title: Building and testing plugins
+title: Plugin design and testing
 description: Implement a small stateful emulator through the public Hono, Zod, lifecycle, operation, and testkit contracts.
 ---
 
 A plugin is ordinary trusted TypeScript packaged for npm. It owns an executable service, not a set of
 static response fixtures. Build the smallest coherent provider surface that a real application or SDK
 needs, then say what remains unsupported.
+
+For a guided implementation before the full contract, [build your first plugin](/plugins/first-plugin).
 
 ## Keep the dependency direction simple
 

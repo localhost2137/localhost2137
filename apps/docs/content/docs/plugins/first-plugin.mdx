@@ -1,0 +1,264 @@
+---
+title: Build your first plugin
+description: Build, run, and test a file-backed status service with an application-facing API and typed control operations.
+---
+
+This tutorial builds one complete plugin beside an existing `localhost.config.ts`. The result is a
+small status service with two interfaces over the same isolated state:
+
+- an application reads `GET /v1/status`;
+- a developer, test, or coding agent changes and inspects status through typed operations.
+
+The example is deliberately a local teaching service, not an imitation of a named provider. It
+proves the plugin contract without making a compatibility claim it cannot support.
+
+You need Node.js 24 or later, pnpm, and a project that already has `localhost2137`. Add the authoring
+and test dependencies if the project does not have them:
+
+```sh
+pnpm add -D hono zod vitest
+```
+
+Keeping the plugin in the application repository is useful while its behavior is still changing.
+Packaging it later does not change the runtime contract.
+
+## Define one stateful service
+
+Create `status.plugin.ts` next to the config:
+
+```ts title="status.plugin.ts"
+import { readFile, writeFile } from "node:fs/promises";
+import { Hono } from "hono";
+import { defineOperation, definePlugin, type PluginEnv } from "localhost2137";
+import { z } from "zod";
+
+const statusSchema = z.object({
+  state: z.enum(["operational", "degraded", "outage"]),
+  message: z.string().nullable(),
+});
+const setStatusInput = z.object({
+  state: statusSchema.shape.state,
+  message: z.string().optional(),
+});
+
+type Config = Readonly<Record<string, never>>;
+type State = Readonly<{ statusPath: string }>;
+type Status = z.output<typeof statusSchema>;
+
+const initialStatus: Status = Object.freeze({
+  state: "operational",
+  message: null,
+});
+
+const operation = defineOperation<"status", State, Config>();
+
+const setStatus = operation({
+  description: "Set the status exposed to the application",
+  input: setStatusInput,
+  output: statusSchema,
+  run: async (context, input) => {
+    const status: Status = {
+      state: input.state,
+      message: input.message ?? null,
+    };
+    await saveStatus(context.state.statusPath, status);
+    return status;
+  },
+});
+
+const readStatus = operation({
+  description: "Read the current status",
+  input: z.object({}),
+  output: statusSchema,
+  run: (context) => loadStatus(context.state.statusPath),
+});
+
+const api = new Hono<PluginEnv<State, Config>>();
+api.get("/v1/status", async (context) => {
+  const { state } = context.get("lh");
+  return context.json(await loadStatus(state.statusPath));
+});
+
+export const statusPlugin = definePlugin({
+  id: "status",
+  description: "Local status service",
+  stateVersion: 1,
+  configSchema: z.object({}),
+  api,
+  operations: { readStatus, setStatus },
+  lifecycle: {
+    create: (context) =>
+      saveStatus(context.storage.path("status.json"), initialStatus),
+    start: (context): State => ({
+      statusPath: context.storage.path("status.json"),
+    }),
+  },
+  connection: ({ baseUrl, instanceId, serviceKey }) => {
+    const apiUrl = `${baseUrl}/${instanceId}/${serviceKey}`;
+    return {
+      values: { apiUrl },
+      env: { STATUS_API_URL: apiUrl },
+    };
+  },
+});
+
+async function loadStatus(path: string): Promise<Status> {
+  return statusSchema.parse(JSON.parse(await readFile(path, "utf8")));
+}
+
+async function saveStatus(path: string, status: Status): Promise<void> {
+  await writeFile(path, `${JSON.stringify(status)}\n`, "utf8");
+}
+```
+
+The Hono route and both operations call the same persistence functions. They do not call each
+other. That keeps the public API free to use application-facing request and response shapes while
+operations remain privileged controls.
+
+`api` is one shared route table. The runtime injects the selected instance into `context.get("lh")`
+for each request. Closing over a mutable `status` variable at module scope would make instances
+share state and defeat isolation.
+
+## Mount it under a service key
+
+Configure the plugin:
+
+```ts title="localhost.config.ts"
+import { defineConfig } from "localhost2137";
+import { statusPlugin } from "./status.plugin.js";
+
+export default defineConfig({
+  services: {
+    status: statusPlugin({ config: {} }),
+  },
+});
+```
+
+The `status` key becomes the route segment, CLI selector, storage namespace, and typed instance
+property. The plugin ID identifies the implementation; it does not replace that configured key.
+
+Start the development runtime in one terminal:
+
+```sh
+pnpm exec localhost dev
+```
+
+In another terminal, read the empty world's initial state through both interfaces:
+
+```sh
+pnpm exec localhost exec status read-status --json
+curl --fail --silent --show-error \
+  http://127.0.0.1:2137/dev/status/v1/status
+```
+
+Both return the equivalent of:
+
+```json
+{"state":"operational","message":null}
+```
+
+Now arrange a degraded world through the control operation, then read it as an application would:
+
+```sh
+pnpm exec localhost exec status set-status \
+  --state degraded --message "database maintenance" --json
+curl --fail --silent --show-error \
+  http://127.0.0.1:2137/dev/status/v1/status
+```
+
+The operation is allowed to set internal emulator state because only the control plane exposes it.
+The HTTP request proves that the application-facing route observes the same world. Replacing the
+HTTP request with `readStatus` would inspect state, but would not test the Hono route.
+
+Stop the foreground daemon with Ctrl-C when you finish exploring. The persistent `dev` instance
+remains on disk; reset it explicitly when you want the initial status again.
+
+## Prove the boundary and isolation
+
+Create `test/status.plugin.test.ts`:
+
+```ts title="test/status.plugin.test.ts"
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
+
+it("exposes isolated status through the application API", async () => {
+  const runtime = await createTestRuntime({
+    config,
+    port: 0,
+    storage: "temporary",
+  });
+
+  try {
+    const degraded = await runtime.createInstance();
+    try {
+      const fresh = await runtime.createInstance();
+      try {
+        await degraded.status.setStatus({
+          state: "degraded",
+          message: "database maintenance",
+        });
+
+        const degradedResponse = await fetch(
+          `${degraded.status.connection.apiUrl}/v1/status`,
+        );
+        expect(degradedResponse.status).toBe(200);
+        await expect(degradedResponse.json()).resolves.toEqual({
+          state: "degraded",
+          message: "database maintenance",
+        });
+
+        const freshResponse = await fetch(
+          `${fresh.status.connection.apiUrl}/v1/status`,
+        );
+        expect(freshResponse.status).toBe(200);
+        await expect(freshResponse.json()).resolves.toEqual({
+          state: "operational",
+          message: null,
+        });
+      } finally {
+        await fresh.destroy();
+      }
+    } finally {
+      await degraded.destroy();
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+```
+
+Run only this test:
+
+```sh
+pnpm exec vitest run test/status.plugin.test.ts
+```
+
+The test owns one temporary runtime and destroys both instances before closing it. One instance is
+arranged through a typed operation and observed through the application-facing route. The other
+remains at its independently created initial state. No assertion depends on plugin storage paths or
+the control HTTP protocol.
+
+## What to keep as the plugin grows
+
+This first slice has one reason to change, so one source file is enough. Split domain, persistence,
+HTTP, operations, and lifecycle code only when those parts acquire separate behavior or tests. Keep
+these boundaries when you do:
+
+- Hono handlers and operations call shared domain behavior; they do not call each other.
+- Instance data comes from the injected context and `context.storage`, never mutable module state or
+  a project-global path.
+- Operations return schema-validated data and never print it.
+- Application tests use the public HTTP or SDK boundary for the behavior they claim to prove.
+- A supported feature has semantic tests; an unsupported feature stays explicit rather than gaining
+  a test-only response.
+
+A real provider plugin also needs a bounded compatibility target, provider-shaped failures,
+transaction and concurrency rules, durable migration and recovery, and tests against the encodings
+or SDK versions it claims. The file store above is enough for this sequential tutorial; it does not
+establish those properties.
+
+Continue with [Plugin design and testing](/plugins/authoring) for lifecycle, virtual time, tracked
+work, state versions, and contract-test requirements. Read
+[Provider compatibility](/compatibility) before describing a plugin as compatible with an external
+service.

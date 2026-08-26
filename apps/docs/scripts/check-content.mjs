@@ -25,6 +25,7 @@ const expectedPages = new Map([
 	["testing.mdx", "/testing"],
 	["virtual-time.mdx", "/virtual-time"],
 	["plugins/using.mdx", "/plugins/using"],
+	["plugins/first-plugin.mdx", "/plugins/first-plugin"],
 	["plugins/authoring.mdx", "/plugins/authoring"],
 	["first-party/slack.mdx", "/first-party/slack"],
 	["first-party/stripe.mdx", "/first-party/stripe"],
@@ -108,7 +109,7 @@ assert(!diagnosing?.includes("`task`, `lifecycle`"));
 const cli = content.get("cli.mdx");
 assert(cli?.includes("request, operation, delivery, and plugin logs"));
 assert(!cli?.includes("request, operation, lifecycle"));
-for (const file of ["cli.mdx", "diagnosing.mdx"]) {
+for (const file of ["cli.mdx", "diagnosing.mdx", "plugins/first-plugin.mdx"]) {
 	for (const fence of content.get(file)?.matchAll(/```sh\n([\s\S]*?)```/g) ?? []) {
 		assert(
 			!/<[^>\n]+>/.test(fence[1]),
