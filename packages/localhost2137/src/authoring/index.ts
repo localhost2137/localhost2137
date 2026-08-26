@@ -1,5 +1,6 @@
 export {
 	defineConfig,
+	type InstanceClockAdvanceResult,
 	type InstanceClockStatus,
 	type InstanceHandle,
 	type ReservedServiceKey,

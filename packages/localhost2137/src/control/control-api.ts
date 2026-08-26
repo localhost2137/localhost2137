@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { LocalhostError } from "../authoring/localhost-error.js";
 import type { InstanceSummary } from "../kernel/instance-manager.js";
+import type { InstanceClockAdvanceResult } from "../kernel/durable-time-advancement.js";
 import { ServiceNotFoundError } from "../kernel/instance-manager.js";
 import type { OperationJsonValue } from "../kernel/operation-json.js";
 import type { StructuredLogSnapshot } from "../kernel/structured-log.js";
@@ -8,6 +9,7 @@ import { ControlAuthenticator } from "./control-authentication.js";
 import { controlErrorEnvelope, mapControlError } from "./control-error-mapping.js";
 import {
 	parseCreateInstance,
+	parseClockAdvance,
 	parseEmptyMutation,
 	parseIdle,
 	parseResetInstance,
@@ -24,6 +26,11 @@ const LIFECYCLE_TIMEOUT_MS = 30_000;
 type ControlEnvironment = { Variables: { correlationId: string } };
 
 export interface ControlRuntime {
+	advanceClock(
+		id: string,
+		duration: string,
+		options: Readonly<{ signal?: AbortSignal; timeoutMs: number }>,
+	): Promise<InstanceClockAdvanceResult>;
 	create(
 		options: Readonly<{
 			id: string;
@@ -160,6 +167,19 @@ export function createControlApi(
 	app.get("/instances/:instance/clock", async (context) =>
 		success((await input.runtime.get(requiredParam(context.req.param("instance")))).clock),
 	);
+	app.post("/instances/:instance/clock/advance", async (context) => {
+		const advance = parseClockAdvance(await readControlJson(context.req.raw, bodyLimitBytes));
+		return success(
+			await input.runtime.advanceClock(
+				requiredParam(context.req.param("instance")),
+				advance.duration,
+				{
+					signal: context.req.raw.signal,
+					timeoutMs: LIFECYCLE_TIMEOUT_MS,
+				},
+			),
+		);
+	});
 	app.post("/instances/:instance/idle", async (context) => {
 		const options = parseIdle(await readControlJson(context.req.raw, bodyLimitBytes));
 		await input.runtime.idle(requiredParam(context.req.param("instance")), {

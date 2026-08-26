@@ -16,6 +16,7 @@ describe("CLI command program", () => {
 			["instance", "list", "--json"],
 			["logs", "--json"],
 			["clock", "status", "--json"],
+			["clock", "advance", "30d", "--json"],
 			["doctor", "--json"],
 		]) {
 			const fixture = cliFixture();
@@ -42,6 +43,7 @@ describe("CLI command program", () => {
 			["seed", "--instance", "review"],
 			["env", "--instance", "review", "--format", "dotenv"],
 			["logs", "fixture", "--instance", "review", "--tail", "5"],
+			["clock", "advance", "30d", "--instance", "review"],
 		];
 		for (const arguments_ of commands) {
 			expect(
@@ -68,6 +70,7 @@ describe("CLI command program", () => {
 			serviceKey: "fixture",
 			tail: 5,
 		});
+		expect(fixture.actions.advanceClock).toHaveBeenCalledWith("review", "30d");
 	});
 
 	it("passes run argv directly and returns the child exit code", async () => {
@@ -244,7 +247,7 @@ describe("CLI command program", () => {
 		for (const arguments_ of [
 			["instance", "destroy"],
 			["instance", "reset"],
-			["clock", "advance", "1d"],
+			["clock", "advance"],
 			["snapshot", "save", "name"],
 		]) {
 			const fixture = cliFixture();
@@ -301,6 +304,12 @@ function cliFixture(): CliFixture {
 	let stdout = "";
 	let stderr = "";
 	const actions: MockActions = {
+		advanceClock: vi.fn(async () => ({
+			advanceId: "advance_12345678",
+			from: "2026-08-25T12:00:00.000Z",
+			mode: "real",
+			to: "2026-09-24T12:00:00.000Z",
+		})),
 		clockStatus: vi.fn(async () => ({ mode: "real", now: "2026-08-25T12:00:00.000Z" })),
 		createInstance: vi.fn(async () => ({ id: "review" })),
 		describe: vi.fn(async () => ({ services: ["fixture"] })),

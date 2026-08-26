@@ -24,6 +24,11 @@ export interface RuntimeClientLogOptions extends RuntimeClientRequestOptions {
 /** A deliberately untyped client whose data contracts are discovered at runtime. */
 export interface RuntimeClient {
 	readonly url: string;
+	clockAdvance(
+		instanceId: string,
+		duration: string,
+		options?: RuntimeClientRequestOptions,
+	): Promise<ControlJsonValue>;
 	clockStatus(instanceId: string, options?: RuntimeClientRequestOptions): Promise<ControlJsonValue>;
 	createInstance(
 		input: RuntimeClientCreateInput,

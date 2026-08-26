@@ -43,6 +43,12 @@ export function parseIdle(value: unknown): Readonly<{ timeoutMs: number }> {
 	return Object.freeze({ timeoutMs: Number(timeoutMs) });
 }
 
+export function parseClockAdvance(value: unknown): Readonly<{ duration: string }> {
+	const input = strictObject(value, ["duration"]);
+	if (typeof input.duration !== "string") invalid("Clock advance requires a string duration.");
+	return Object.freeze({ duration: input.duration });
+}
+
 export function parseEmptyMutation(value: unknown): void {
 	strictObject(value, []);
 }

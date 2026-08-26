@@ -22,6 +22,8 @@ export function createTestControlClient(
 	};
 
 	return Object.freeze({
+		clockAdvance: (instanceId: string, duration: string, options?: RuntimeClientRequestOptions) =>
+			start(() => client.clockAdvance(instanceId, duration, options)),
 		clockStatus: (instanceId: string, options?: RuntimeClientRequestOptions) =>
 			start(() => client.clockStatus(instanceId, options)),
 		createInstance: (input: RuntimeClientCreateInput, options?: RuntimeClientRequestOptions) =>

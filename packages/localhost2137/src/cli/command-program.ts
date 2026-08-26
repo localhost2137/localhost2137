@@ -181,6 +181,15 @@ async function runStatic(input: DispatchCliInput): Promise<number> {
 		);
 
 	const clock = addBootstrapHelp(program.command("clock")).description("inspect instance time");
+	addBootstrapHelp(clock.command("advance"))
+		.description("advance instance time and reconcile service work")
+		.argument("<duration>")
+		.option("--instance <id>", "target instance", input.defaultInstance)
+		.option("--json", "print only valid JSON")
+		.action(async (duration: string, options: InstanceJsonOptions) => {
+			const data = await input.actions.advanceClock(options.instance, duration);
+			writeData(input.io, data, options.json === true);
+		});
 	addBootstrapHelp(clock.command("status"))
 		.option("--instance <id>", "target instance", input.defaultInstance)
 		.option("--json", "print only valid JSON")

@@ -40,6 +40,21 @@ describe("control client", () => {
 		});
 	});
 
+	it("sends clock advancement through the versioned mutation endpoint", async () => {
+		const transport = vi.fn(async () => jsonResponse({ data: { advanceId: "advance_1" } }));
+		const client = connectRuntime({ fetch: transport, token: TOKEN, url: URL });
+
+		await client.clockAdvance("review", "30d");
+
+		expect(transport).toHaveBeenCalledWith(
+			`${URL}/_/v1/instances/review/clock/advance`,
+			expect.objectContaining({ body: '{"duration":"30d"}', method: "POST" }),
+		);
+		await expect(Reflect.apply(client.clockAdvance, client, ["review", 30])).rejects.toThrow(
+			/string/,
+		);
+	});
+
 	it("preserves safe remote error identity, correlation, status, and immutable details", async () => {
 		const response = new Response(
 			'{"error":{"code":"INSTANCE_NOT_FOUND","correlationId":"correlation-2137","details":{"__proto__":{"safe":true},"instances":["dev"]},"message":"Instance not found."}}',

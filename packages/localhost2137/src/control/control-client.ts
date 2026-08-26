@@ -156,6 +156,21 @@ export class ControlClient {
 		});
 	}
 
+	clockAdvance(
+		instanceId: string,
+		duration: string,
+		options: ControlRequestOptions = {},
+	): Promise<ControlJsonValue> {
+		if (typeof duration !== "string") {
+			return Promise.reject(new TypeError("Clock duration must be a string."));
+		}
+		return this.#request(`instances/${segment(instanceId)}/clock/advance`, {
+			body: Object.freeze({ duration }),
+			method: "POST",
+			...options,
+		});
+	}
+
 	idle(
 		instanceId: string,
 		input: Readonly<{ timeoutMs?: number }> = {},

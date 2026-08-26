@@ -64,6 +64,8 @@ export function createNodeCliActions(
 	};
 
 	const actions: CliActions = {
+		advanceClock: (instanceId, duration) =>
+			forTarget(instanceId, ({ client }) => client.clockAdvance(instanceId, duration)),
 		clockStatus: (instanceId) =>
 			forTarget(instanceId, ({ client }) => client.clockStatus(instanceId)),
 		createInstance: async (id, seed) => {

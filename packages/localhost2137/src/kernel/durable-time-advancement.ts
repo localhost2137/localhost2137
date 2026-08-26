@@ -5,12 +5,7 @@ import type { AnyServiceLifecycle } from "./service-lifecycle.js";
 import type { InstanceManifest, PendingTimeAdvance } from "./manifests.js";
 import { ownInstanceManifest } from "./manifests.js";
 
-export interface InstanceClockAdvanceResult {
-	readonly advanceId: string;
-	readonly from: string;
-	readonly mode: "pinned" | "real";
-	readonly to: string;
-}
+export type { InstanceClockAdvanceResult } from "../authoring/config.js";
 
 export class PendingTimeAdvanceConflictError extends Error {
 	readonly advanceId: string;
@@ -208,3 +203,4 @@ function resultFor(
 		to: new Date(advance.toMs).toISOString(),
 	});
 }
+import type { InstanceClockAdvanceResult } from "../authoring/config.js";

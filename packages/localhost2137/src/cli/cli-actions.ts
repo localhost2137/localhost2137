@@ -6,6 +6,7 @@ export interface CliDevOptions {
 }
 
 export interface CliActions {
+	advanceClock(instanceId: string, duration: string): Promise<unknown>;
 	clockStatus(instanceId: string): Promise<unknown>;
 	createInstance(id: string, seed: boolean): Promise<unknown>;
 	describe(instanceId: string, serviceKey?: string): Promise<unknown>;

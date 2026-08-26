@@ -311,7 +311,7 @@ describe("control API policy", () => {
 		expect(directCorrelation).not.toHaveBeenCalled();
 	});
 
-	it("routes every v0.1 lifecycle, log, clock, and idle endpoint through the runtime", async () => {
+	it("routes every lifecycle, log, clock, and idle endpoint through the runtime", async () => {
 		const fixture = controlFixture();
 		const mutation = (path: string, body: unknown, method: "DELETE" | "POST" = "POST") =>
 			fixture.app.request(path, {
@@ -328,13 +328,14 @@ describe("control API policy", () => {
 		const clock = await fixture.app.request("/instances/dev/clock", {
 			headers: authorization(),
 		});
+		const advance = await mutation("/instances/dev/clock/advance", { duration: "30d" });
 		const logs = await fixture.app.request("/instances/dev/logs?tail=10&service=fixture", {
 			headers: authorization(),
 		});
 
 		expect(create.status).toBe(201);
-		expect([reset, seed, idle, destroy, clock, logs].map(({ status }) => status)).toEqual([
-			200, 200, 200, 200, 200, 200,
+		expect([reset, seed, idle, destroy, clock, advance, logs].map(({ status }) => status)).toEqual([
+			200, 200, 200, 200, 200, 200, 200,
 		]);
 		expect(fixture.runtime.create).toHaveBeenCalledWith({
 			id: "review",
@@ -354,6 +355,10 @@ describe("control API policy", () => {
 			timeoutMs: 1234,
 		});
 		expect(fixture.runtime.destroy).toHaveBeenCalledOnce();
+		expect(fixture.runtime.advanceClock).toHaveBeenCalledWith("dev", "30d", {
+			signal: expect.any(AbortSignal),
+			timeoutMs: 30_000,
+		});
 		expect(await clock.json()).toEqual({ data: instanceSummary().clock });
 		expect(await logs.json()).toEqual({
 			data: { droppedEntries: 0, entries: [] },
@@ -401,6 +406,12 @@ type ControlRuntimeSpies = ControlRuntime & {
 
 function runtimeSpies(): ControlRuntimeSpies {
 	return {
+		advanceClock: vi.fn(async () => ({
+			advanceId: "advance_12345678",
+			from: "2026-08-25T12:00:00.000Z",
+			mode: "real" as const,
+			to: "2026-09-24T12:00:00.000Z",
+		})),
 		create: vi.fn(async () => instanceSummary()),
 		destroy: vi.fn(async () => undefined),
 		get: vi.fn(async () => instanceSummary()),

@@ -1,4 +1,9 @@
-import type { InstanceClockStatus, InstanceHandle, ServiceRecord } from "../authoring/config.js";
+import type {
+	InstanceClockAdvanceResult,
+	InstanceClockStatus,
+	InstanceHandle,
+	ServiceRecord,
+} from "../authoring/config.js";
 import { ownJsonValue } from "../authoring/json-value.js";
 import type { ResolvedConfig } from "../config/config-resolution.js";
 import { resolveInstanceConnections } from "../config/instance-connections.js";
@@ -43,7 +48,14 @@ export function createTestInstanceHandle<Services extends ServiceRecord>(
 		defineEntry(handle, serviceKey, Object.freeze(serviceHandle));
 	}
 
-	defineEntry(handle, "clock", Object.freeze({ status: () => owner.clockStatus() }));
+	defineEntry(
+		handle,
+		"clock",
+		Object.freeze({
+			advance: (duration: string) => owner.clockAdvance(duration),
+			status: () => owner.clockStatus(),
+		}),
+	);
 	defineEntry(handle, "destroy", () => owner.destroy());
 	defineEntry(handle, "env", connections.env);
 	defineEntry(handle, "idle", () => owner.idle());
@@ -59,7 +71,7 @@ class TestInstanceHandleOwner {
 	readonly #client: ControlClient;
 	#destroyPromise: Promise<void> | undefined;
 	readonly #instanceId: string;
-	#mutation: Promise<void> | undefined;
+	#mutation: Promise<unknown> | undefined;
 	readonly #runtime: TestRuntimeGate;
 	#state: "active" | "destroying" = "active";
 
@@ -86,6 +98,20 @@ class TestInstanceHandleOwner {
 	async clockStatus(): Promise<InstanceClockStatus> {
 		this.#assertUsable();
 		return ownClockStatus(await this.#client.clockStatus(this.#instanceId));
+	}
+
+	clockAdvance(duration: string): Promise<InstanceClockAdvanceResult> {
+		try {
+			this.#assertUsable();
+			if (typeof duration !== "string") throw new TypeError("Clock duration must be a string.");
+			return this.#beginMutation(() =>
+				this.#client
+					.clockAdvance(this.#instanceId, duration)
+					.then((value) => ownClockAdvanceResult(value)),
+			);
+		} catch (cause) {
+			return Promise.reject(cause);
+		}
 	}
 
 	destroy(): Promise<void> {
@@ -140,9 +166,9 @@ class TestInstanceHandleOwner {
 		if (this.#state !== "active") throw new TestInstanceClosedError(this.#instanceId);
 	}
 
-	#beginMutation(start: () => Promise<void>): Promise<void> {
+	#beginMutation<Value>(start: () => Promise<Value>): Promise<Value> {
 		if (this.#mutation) return Promise.reject(new TestInstanceBusyError(this.#instanceId));
-		let operation: Promise<void>;
+		let operation: Promise<Value>;
 		try {
 			operation = start();
 		} catch (cause) {
@@ -167,6 +193,34 @@ function ownClockStatus(value: ControlJsonValue): InstanceClockStatus {
 		throw new TypeError("Runtime clock response has an invalid RFC 3339 timestamp.");
 	}
 	return Object.freeze({ mode: value.mode, now: value.now });
+}
+
+function ownClockAdvanceResult(value: ControlJsonValue): InstanceClockAdvanceResult {
+	if (!isControlObject(value) || !hasExactKeys(value, ["advanceId", "from", "mode", "to"])) {
+		throw new TypeError(
+			"Runtime clock advance response must be an exact { advanceId, from, mode, to } object.",
+		);
+	}
+	if (typeof value.advanceId !== "string" || value.advanceId.length === 0) {
+		throw new TypeError("Runtime clock advance response has an invalid advanceId.");
+	}
+	if (value.mode !== "pinned" && value.mode !== "real") {
+		throw new TypeError("Runtime clock advance response has an invalid mode.");
+	}
+	if (
+		typeof value.from !== "string" ||
+		typeof value.to !== "string" ||
+		Number.isNaN(Date.parse(value.from)) ||
+		Number.isNaN(Date.parse(value.to))
+	) {
+		throw new TypeError("Runtime clock advance response has invalid RFC 3339 timestamps.");
+	}
+	return Object.freeze({
+		advanceId: value.advanceId,
+		from: value.from,
+		mode: value.mode,
+		to: value.to,
+	});
 }
 
 function ownResetOptions(options: unknown): Readonly<{ seed: boolean }> {

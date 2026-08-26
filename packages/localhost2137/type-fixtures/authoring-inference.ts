@@ -4,6 +4,7 @@ import {
 	defineOperation,
 	definePlugin,
 	type InstanceClockStatus,
+	type InstanceClockAdvanceResult,
 	type InstanceHandle,
 	LocalhostError,
 	type PluginEnv,
@@ -138,18 +139,17 @@ declare const instance: InstanceHandle<typeof config.services>;
 const alice = instance.slack.createUser({ name: "Alice" });
 const instanceEnvironment: Readonly<Record<string, string>> = instance.env;
 const clockStatus: Promise<InstanceClockStatus> = instance.clock.status();
+const clockAdvance: Promise<InstanceClockAdvanceResult> = instance.clock.advance("1h");
 const destroyResult: Promise<void> = instance.destroy();
 const idleResult: Promise<void> = instance.idle();
 const resetResult: Promise<void> = instance.reset({ seed: true });
 void instanceEnvironment;
 void clockStatus;
+void clockAdvance;
 void destroyResult;
 void idleResult;
 void resetResult;
 void scenario.slack.connection.apiUrl;
-
-// @ts-expect-error clock advancement is intentionally absent until v0.2
-instance.clock.advance("1h");
 
 type _ConfigOutput = Expect<Equal<SlackConfig["eventsUrl"], string | null>>;
 type _OperationOutput = Expect<

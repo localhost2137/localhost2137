@@ -226,6 +226,7 @@ function actionFixture() {
 		url: "http://127.0.0.1:42137",
 	};
 	const client = {
+		clockAdvance: vi.fn(),
 		clockStatus: vi.fn(),
 		createInstance: vi.fn(),
 		describeService: vi.fn(),

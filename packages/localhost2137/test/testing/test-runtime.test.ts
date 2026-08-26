@@ -54,6 +54,20 @@ describe("test runtime", () => {
 				mode: "pinned",
 				now: "2026-01-02T03:04:05.000Z",
 			});
+			expect(Object.keys(first.clock).sort()).toEqual(["advance", "status"]);
+			expect(await first.clock.advance("1d")).toMatchObject({
+				from: "2026-01-02T03:04:05.000Z",
+				mode: "pinned",
+				to: "2026-01-03T03:04:05.000Z",
+			});
+			expect(await first.clock.status()).toEqual({
+				mode: "pinned",
+				now: "2026-01-03T03:04:05.000Z",
+			});
+			expect(await second.clock.status()).toEqual({
+				mode: "pinned",
+				now: "2026-01-02T03:04:05.000Z",
+			});
 		} finally {
 			await Promise.all([first.destroy(), second.destroy()]);
 			await runtime.close();

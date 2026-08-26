@@ -4,6 +4,12 @@ import {
 	InstanceNotFoundError,
 } from "../kernel/active-instance-registry.js";
 import { InstanceMutationCommittedError } from "../kernel/durable-instance-mutations.js";
+import { InvalidClockDurationError } from "../kernel/clock-duration.js";
+import {
+	PendingTimeAdvanceConflictError,
+	TimeAdvanceCommittedError,
+	TimeAdvanceServiceMissingError,
+} from "../kernel/durable-time-advancement.js";
 import { InvalidIdentifierError } from "../kernel/identifiers.js";
 import {
 	LeaseAbortedError,
@@ -48,6 +54,9 @@ export function mapControlError(cause: unknown, correlationId: string): Localhos
 	if (cause instanceof InvalidIdentifierError) {
 		return error("INVALID_REQUEST", "Invalid instance or service identifier.", 400, correlationId);
 	}
+	if (cause instanceof InvalidClockDurationError) {
+		return error("INVALID_REQUEST", cause.message, 400, correlationId);
+	}
 	if (cause instanceof InstanceNotFoundError) {
 		return error("INSTANCE_NOT_FOUND", "Instance not found.", 404, correlationId);
 	}
@@ -69,6 +78,12 @@ export function mapControlError(cause: unknown, correlationId: string): Localhos
 			409,
 			correlationId,
 		);
+	}
+	if (
+		cause instanceof PendingTimeAdvanceConflictError ||
+		cause instanceof TimeAdvanceServiceMissingError
+	) {
+		return error("LIFECYCLE_CONFLICT", redactText(cause.message), 409, correlationId, true);
 	}
 	if (cause instanceof TaskIdleTimeoutError || cause instanceof LeaseTimeoutError) {
 		return error(
@@ -103,6 +118,23 @@ export function mapControlError(cause: unknown, correlationId: string): Localhos
 			"The instance mutation committed but finalization did not complete cleanly.",
 			500,
 			correlationId,
+		);
+	}
+	if (cause instanceof TimeAdvanceCommittedError) {
+		return new LocalhostError(
+			"INSTANCE_MUTATION_COMMITTED",
+			"The clock moved, but time reconciliation did not complete cleanly.",
+			{
+				correlationId,
+				details: {
+					advanceId: cause.result.advanceId,
+					from: cause.result.from,
+					mode: cause.result.mode,
+					to: cause.result.to,
+				},
+				retryable: true,
+				status: 500,
+			},
 		);
 	}
 	if (cause instanceof TrackedTaskFailuresError) {

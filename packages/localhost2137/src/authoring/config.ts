@@ -59,7 +59,15 @@ export interface InstanceClockStatus {
 	readonly now: string;
 }
 
+export interface InstanceClockAdvanceResult {
+	readonly advanceId: string;
+	readonly from: string;
+	readonly mode: "pinned" | "real";
+	readonly to: string;
+}
+
 interface InstanceClockHandle {
+	advance(duration: string): Promise<InstanceClockAdvanceResult>;
 	status(): Promise<InstanceClockStatus>;
 }
 
