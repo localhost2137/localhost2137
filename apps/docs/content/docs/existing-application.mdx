@@ -71,29 +71,33 @@ streams remain attached. Ctrl-C is forwarded. The command is not a process manag
 restart the child.
 
 If the application's environment names differ, map the plugin values explicitly at the existing
-configuration boundary. Do not make application code read `.localhost2137` runtime metadata or the
-control token. The daemon also writes `.localhost2137/.env` for tools that already load dotenv files,
-but `localhost run` makes the selected environment ownership explicit.
+configuration boundary. Do not make application code read runtime discovery metadata or the control
+token. The daemon also writes a `.env` file inside the resolved `storage.dir`; `dev` prints its exact
+path. With the default storage directory, that path is `.localhost2137/.env`. This supports tools that
+already load dotenv files, but `localhost run` makes the selected environment ownership explicit.
 
 ## Arrange the world through discovered operations
 
 Ask the running service for its actual control surface instead of copying operation names from
-another plugin or version:
+another plugin or version. In the shell you use for control commands, replace the value below with a
+service key from `localhost.config.ts`:
 
 ```sh
-pnpm exec localhost describe <service> --json
-pnpm exec localhost exec <service> --help
-pnpm exec localhost exec <service> <operation> --help
+localhost_service_key="replace-with-configured-service-key"
+pnpm exec localhost describe "$localhost_service_key" --json
+pnpm exec localhost exec "$localhost_service_key" --help
 ```
 
-Then invoke only the setup operation the scenario needs:
+Choose an operation from that output, then replace this value and inspect its generated input help:
 
 ```sh
-pnpm exec localhost exec <service> <operation> [generated flags] --json
+localhost_operation_key="replace-with-discovered-operation-key"
+pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
 ```
 
-Simple operation inputs become flags. Generated help tells you when a nested input requires
-`--input-json`. Keep this step in a development script, test, or explicit setup command; the
+To invoke the operation, replace `--help` in the last command with the input flags it documents and
+append `--json`. Simple inputs become flags; generated help tells you when a nested input requires
+`--input-json`. Keep the invocation in a development script, test, or explicit setup command; the
 application should not gain a localhost2137 control-client dependency.
 
 ## Exercise the application, then observe
@@ -106,11 +110,11 @@ Use application output as the primary result. When the scenario also needs emula
 it through a documented plugin operation. Runtime logs help establish which boundary actually ran:
 
 ```sh
-pnpm exec localhost logs <service> --tail 50 --json
+pnpm exec localhost logs "$localhost_service_key" --tail 50 --json
 ```
 
-The log stream distinguishes public API requests, control operations, lifecycle work, and outbound
-deliveries. It is diagnostic evidence, not a replacement for an application assertion.
+The current runtime emits public API request, control operation, outbound delivery, and plugin log
+entries. They are diagnostic evidence, not a replacement for an application assertion.
 
 If setup data exists but the application cannot see it, compare the instance and service in the
 application's connection URL with the target used by `exec`. [Operations and emulated APIs](/operations-and-apis)
@@ -130,9 +134,13 @@ Every setup and inspection command for that scenario must also target `review-42
 `--instance` flags in reusable scripts:
 
 ```sh
-pnpm exec localhost exec <service> <operation> --instance review-42 [generated flags] --json
-pnpm exec localhost logs <service> --instance review-42 --tail 50 --json
+pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" \
+  --instance review-42 --help
+pnpm exec localhost logs "$localhost_service_key" --instance review-42 --tail 50 --json
 ```
+
+For the actual named-world invocation, replace `--help` with the same documented input flags and
+append `--json`.
 
 Destroy the named world when the scenario is finished:
 
