@@ -47,6 +47,10 @@ guess operation names or inputs: use generated help or `describe --json`.
 Most commands target `dev`. Set `LOCALHOST_INSTANCE` to change the process-wide default, or use
 `--instance`. `--config <path>` is accepted across commands and bypasses config discovery.
 
+When a command is only the first visible failure, [Diagnose a failing scenario](/diagnosing) follows
+the same instance and correlation through discovery, control, plugin work, callbacks, and application
+completion.
+
 ## Machine behavior
 
 `--json` writes valid JSON to stdout without banners or explanatory suffixes. Diagnostics go to

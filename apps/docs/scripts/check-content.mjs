@@ -21,6 +21,7 @@ const expectedPages = new Map([
 	["configuration.mdx", "/configuration"],
 	["seeding.mdx", "/seeding"],
 	["cli.mdx", "/cli"],
+	["diagnosing.mdx", "/diagnosing"],
 	["testing.mdx", "/testing"],
 	["virtual-time.mdx", "/virtual-time"],
 	["plugins/using.mdx", "/plugins/using"],

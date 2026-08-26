@@ -1,0 +1,149 @@
+---
+title: Diagnose a failing scenario
+description: Locate a failure across project discovery, the runtime, a provider-shaped API, callbacks, and application completion without hiding the broken boundary.
+---
+
+Diagnosis is successful when you know which boundary failed. It is not successful merely because a
+test passes after adding a sleep, replacing an SDK call with an operation, or clearing all local
+state.
+
+Start with one failing scenario. Record its instance ID, service key, config path, command or
+application request, and expected application effect. Keep those identifiers fixed while you move
+through the checks below.
+
+## Check the project before the scenario
+
+Run the read-only project inspection first:
+
+```sh
+pnpm exec localhost doctor --json
+```
+
+`doctor` loads the resolved config, inspects runtime discovery, and reads stored manifests. It does
+not start a daemon, create directories, or repair state. Check these parts of its result:
+
+- `config.loaded`, `config.path`, and `config.storageRoot` identify the project that was inspected;
+- `runtime.state` distinguishes an absent runtime from an unhealthy or healthy one;
+- `issues` reports config, discovery, manifest, service-version, and pending-cleanup problems;
+- `storage.instances` reports each stored world's status, seed status, and service keys.
+
+An absent runtime is expected before `localhost dev` starts. A config fingerprint mismatch means the
+running daemon still has a different resolved config; restart it after saving the intended config.
+Fix config import and discovery failures before interpreting plugin behavior.
+
+Do not delete `.localhost2137` to silence one issue. Reset or destroy an explicitly named instance
+when that is the intended recovery. Preserve an unexpected manifest or pending trash entry until you
+have recorded the diagnostic.
+
+## Confirm the selected world
+
+Ask the running daemon what it actually exposes:
+
+```sh
+pnpm exec localhost describe <service> --instance <id> --json
+pnpm exec localhost env --instance <id> --format json
+```
+
+The service name is the key from `services` in your config, not necessarily the plugin package name.
+Use `describe` or generated `exec` help for the installed operation names and inputs. Do not copy an
+operation from documentation for a different plugin version and treat its absence as a runtime bug.
+
+When a connection value is a URL, check that it names the same instance and service. `env` contains
+application-facing connection values only. The control token is separate and must not enter the
+application, browser code, logs, screenshots, or a bug report.
+
+## Classify the first broken boundary
+
+Follow the request from left to right and stop at the first place where observed behavior differs
+from the claim:
+
+| Symptom | Boundary to inspect first | What it establishes |
+| --- | --- | --- |
+| Config will not load, or the wrong project is found | Config resolution | The intended plugin set has not reached a runtime yet. |
+| `describe`, `exec`, or instance commands cannot reach the daemon | Discovery, control authentication, or instance selection | The control path failed before a plugin operation ran. |
+| An operation rejects its input or fails | Operation schema or plugin control behavior | Privileged setup or inspection failed; it says nothing by itself about the provider-shaped API. |
+| The application SDK or HTTP client receives an unexpected response | Provider-shaped HTTP surface and application adapter | The normal application integration path was exercised. |
+| A callback is absent | Callback configuration, receiver, signature handling, or delivery | The outbound delivery path needs to be traced separately from the triggering request. |
+| `idle()` rejects | Tracked plugin work | At least one tracked task failed; an arbitrary delay cannot make that evidence disappear. |
+| `idle()` succeeds but the expected application effect is absent | Application completion | Plugin-owned work is idle, but the application may still have its own queue, transaction, or background job. |
+| Behavior changes after reset or restart | Instance lifecycle or persisted plugin state | The failure depends on world state or reconciliation rather than only the request. |
+| The local result differs from the real provider | Documented compatibility surface | The gap may be unsupported behavior; it is not automatically an emulator defect. |
+
+This classification prevents a common false fix: arranging the desired result through an operation
+when the scenario is supposed to prove an SDK call or callback handler. Operations remain useful for
+setup and inspection, but they cannot supply evidence for a boundary they bypass.
+
+## Follow the correlation through logs
+
+Control errors include a correlation ID. Read the latest structured entries for the same instance
+and, when known, service:
+
+```sh
+pnpm exec localhost logs <service> --instance <id> --tail 50 --json
+```
+
+Match `correlationId` first, then read `kind`, `status`, `message`, and any safe `attributes`.
+`request`, `operation`, `delivery`, `task`, `lifecycle`, and `plugin` entries distinguish work that
+may otherwise occur within the same wall-clock second. `virtualTime` shows the instance clock when it
+is relevant; `wallTime` shows when the entry was recorded.
+
+Logs are a bounded diagnostic ring, not an audit trail. A non-zero `droppedEntries` means older or
+oversized entries are unavailable, so reproduce the smallest failing scenario before drawing a
+conclusion from absence. Body-like attributes are omitted and known sensitive values are redacted,
+but still review entries before sharing them. If a request body is essential, capture only the
+necessary fields at the application boundary with its own safe instrumentation.
+
+## Treat asynchronous failures as evidence
+
+Call `await instance.idle()` after the plugin schedules callbacks or other tracked work. If it
+rejects, inspect the matching task or delivery entries instead of adding a delay. If it resolves,
+only plugin-tracked work is known to be idle. Wait on the application's explicit completion boundary
+before asserting application state.
+
+Work scheduled for a later virtual time does not run merely because the current work became idle.
+Advance the clock by a positive duration when the documented behavior depends on a later retry or
+deadline, then wait for completion again. See [Virtual time and asynchronous work](/virtual-time)
+for the distinction between clock movement, reconciliation, and idle work.
+
+Some lifecycle failures require extra care. `LIFECYCLE_CONFLICT` means the requested action is not
+valid for the current instance state or generation. Inspect the instance before choosing another
+action. `INSTANCE_MUTATION_COMMITTED` means the mutation took effect but finalization did not finish
+cleanly; do not blindly retry it. For a committed clock advance, the error details include the
+`from`, `to`, `advanceId`, mode, and whether reconciliation remains pending. Read the current state
+and those details before deciding whether any recovery action is needed.
+
+Seed failures have action-specific recovery rules. [Seed test worlds](/seeding#recover-according-to-the-outer-mutation)
+distinguishes an in-place seed failure from a failed seeded create or reset.
+
+## Keep the broken boundary visible
+
+During diagnosis:
+
+- do not replace the application's SDK or HTTP call with a control operation;
+- do not read or edit a plugin database from the application test;
+- do not add a test-only success endpoint to the application or plugin;
+- do not widen a cleanup command from one owned instance to project storage;
+- do not label a provider difference a bug until the installed plugin claims that behavior.
+
+If the plugin does not support the required request, response field, callback, or lifecycle behavior,
+write down that precise compatibility gap. [Provider compatibility](/compatibility) explains the
+evidence required for broader parity claims.
+
+## Leave a useful diagnostic record
+
+A report another person can act on includes:
+
+- the localhost2137, plugin, SDK, and Node.js versions;
+- the resolved config path, service key, and instance ID;
+- the exact boundary exercised and the smallest reproducing command or application action;
+- the error code and correlation ID;
+- the relevant structured log entries and `droppedEntries` count;
+- `doctor` issue codes, expected behavior, and observed behavior;
+- the plugin support-matrix entry or documentation claim when provider compatibility is involved.
+
+Remove control tokens, provider credentials, personal data, and unnecessary request bodies. The aim
+is a reproducible boundary failure, not a complete dump of the local environment.
+
+[CLI workflow and reference](/cli) defines command and exit behavior, while
+[Limitations and troubleshooting](/limitations) lists current product boundaries and short fixes for
+known failure classes.
