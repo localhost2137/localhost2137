@@ -105,3 +105,6 @@ Run `localhost seed`, create an instance with `--seed`, or reset with `--seed`. 
 configuration order, followed by the top-level scenario. A successful seed cannot run twice until
 reset; a failed cross-plugin seed requires reset because the runtime cannot roll back arbitrary
 plugin storage transactionally.
+
+[Seed test worlds](/seeding) shows when this reusable baseline is preferable to per-test operations
+or application-facing setup, and how to recover from a partial seed failure.
