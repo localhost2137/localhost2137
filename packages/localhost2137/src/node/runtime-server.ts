@@ -38,6 +38,7 @@ export class RuntimeServer {
 	#fatalOccurred = false;
 	readonly #fatalListeners = new Set<(cause: unknown) => void>();
 	#ownerReport: Promise<void> | undefined;
+	#prepare: Promise<void> | undefined;
 	#settled: Promise<void> | undefined;
 	#start: Promise<HttpServerAddress> | undefined;
 
@@ -57,6 +58,15 @@ export class RuntimeServer {
 		}
 		this.#fatalListeners.add(listener);
 		return () => this.#fatalListeners.delete(listener);
+	}
+
+	/** Reconciles and starts persisted worlds without binding the HTTP listener. */
+	prepare(): Promise<void> {
+		if (this.#settled || this.#closeReport) {
+			return Promise.reject(new Error("Runtime server shutdown has started."));
+		}
+		this.#prepare ??= invokeOwner(() => this.#runtime.startPersisted());
+		return this.#prepare;
 	}
 
 	start(options: Readonly<{ host: LoopbackHost; port: number }>): Promise<HttpServerAddress> {
@@ -96,7 +106,7 @@ export class RuntimeServer {
 	}
 
 	async #startOwned(options: HttpServerOptions): Promise<HttpServerAddress> {
-		await this.#runtime.startPersisted();
+		await this.prepare();
 		try {
 			return await this.#http.start(options);
 		} catch (cause) {

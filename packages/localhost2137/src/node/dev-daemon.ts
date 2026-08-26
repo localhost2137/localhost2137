@@ -113,7 +113,7 @@ export async function startDevDaemon(
 			fatalEvent.resolve(cause);
 			if (ready) void close().catch(() => undefined);
 		});
-		await runtime.instances.startPersisted();
+		await runtime.server.prepare();
 		await ensureDevInstance(runtime);
 		const address = await runtime.server.start(serverOptions);
 		const descriptor = createRuntimeDescriptor({

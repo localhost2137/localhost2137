@@ -2,10 +2,11 @@ import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ResolvedConfig, resolveConfig } from "../../src/config/config-resolution.js";
 import { discoverActiveRuntime } from "../../src/node/active-runtime-discovery.js";
 import { type DevDaemon, startDevDaemon } from "../../src/node/dev-daemon.js";
+import { createDevProjectRuntime } from "../../src/node/dev-runtime-dependencies.js";
 import { storagePaths } from "../../src/node/storage-paths.js";
 
 const temporaryDirectories: string[] = [];
@@ -18,6 +19,7 @@ afterEach(async () => {
 			.splice(0)
 			.map((directory) => rm(directory, { force: true, recursive: true })),
 	);
+	vi.restoreAllMocks();
 });
 
 describe("dev daemon", () => {
@@ -114,6 +116,77 @@ describe("dev daemon", () => {
 				},
 			),
 		).rejects.toBe(failure);
+		expect(await pathExists(storagePaths(fixture.storage).lock)).toBe(false);
+	});
+
+	it("prepares persisted worlds once before creating dev and binding HTTP", async () => {
+		const fixture = await fixtureConfig();
+		const events: string[] = [];
+		let persistedStarts = 0;
+		const daemon = await startDevDaemon(
+			{ cwd: fixture.project, port: 0 },
+			{
+				createRuntime(config, controlToken) {
+					const runtime = createDevProjectRuntime(config, controlToken);
+					const startPersisted = runtime.instances.startPersisted.bind(runtime.instances);
+					vi.spyOn(runtime.instances, "startPersisted").mockImplementation(() => {
+						persistedStarts += 1;
+						events.push("runtime:prepare");
+						return startPersisted();
+					});
+					const create = runtime.instances.create.bind(runtime.instances);
+					vi.spyOn(runtime.instances, "create").mockImplementation((options) => {
+						events.push("instance:create");
+						return create(options);
+					});
+					const startServer = runtime.server.start.bind(runtime.server);
+					vi.spyOn(runtime.server, "start").mockImplementation((options) => {
+						events.push("http:start");
+						return startServer(options);
+					});
+					return runtime;
+				},
+				loadConfig: async () => fixture.config,
+			},
+		);
+		daemons.push(daemon);
+
+		expect(events).toEqual(["runtime:prepare", "instance:create", "http:start"]);
+		expect(persistedStarts).toBe(1);
+	});
+
+	it("does not create dev or bind HTTP when runtime preparation fails", async () => {
+		const fixture = await fixtureConfig();
+		const failure = new Error("persisted runtime failed");
+		let createCalls = 0;
+		let bindCalls = 0;
+
+		await expect(
+			startDevDaemon(
+				{ cwd: fixture.project, port: 0 },
+				{
+					createRuntime(config, controlToken) {
+						const runtime = createDevProjectRuntime(config, controlToken);
+						vi.spyOn(runtime.instances, "startPersisted").mockRejectedValue(failure);
+						const create = runtime.instances.create.bind(runtime.instances);
+						vi.spyOn(runtime.instances, "create").mockImplementation((options) => {
+							createCalls += 1;
+							return create(options);
+						});
+						const startServer = runtime.server.start.bind(runtime.server);
+						vi.spyOn(runtime.server, "start").mockImplementation((options) => {
+							bindCalls += 1;
+							return startServer(options);
+						});
+						return runtime;
+					},
+					loadConfig: async () => fixture.config,
+				},
+			),
+		).rejects.toBe(failure);
+
+		expect(createCalls).toBe(0);
+		expect(bindCalls).toBe(0);
 		expect(await pathExists(storagePaths(fixture.storage).lock)).toBe(false);
 	});
 });

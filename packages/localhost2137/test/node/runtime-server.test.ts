@@ -30,6 +30,48 @@ describe("RuntimeServer", () => {
 
 		await expect(server.start({ host: "127.0.0.1", port: 0 })).resolves.toBe(ADDRESS);
 		expect(events).toEqual(["runtime:start", "http:start"]);
+		expect(fixture.runtime.startPersisted).toHaveBeenCalledOnce();
+	});
+
+	it("memoizes explicit preparation and start awaits the same runtime work", async () => {
+		const events: string[] = [];
+		const fixture = owners();
+		const runtimeStarted = deferred<void>();
+		fixture.runtime.startPersisted.mockImplementation(() => {
+			events.push("runtime:prepare");
+			return runtimeStarted.promise;
+		});
+		fixture.http.start.mockImplementation(async () => {
+			events.push("http:start");
+			return ADDRESS;
+		});
+		const server = new RuntimeServer(fixture.runtime, fixture.http);
+
+		const preparation = server.prepare();
+		expect(server.prepare()).toBe(preparation);
+		const started = server.start({ host: "127.0.0.1", port: 0 });
+		expect(events).toEqual(["runtime:prepare"]);
+		runtimeStarted.resolve();
+
+		await expect(preparation).resolves.toBeUndefined();
+		await expect(started).resolves.toBe(ADDRESS);
+		expect(events).toEqual(["runtime:prepare", "http:start"]);
+		expect(fixture.runtime.startPersisted).toHaveBeenCalledOnce();
+	});
+
+	it("memoizes preparation failures and never binds HTTP", async () => {
+		const fixture = owners();
+		const failure = new Error("persisted runtime failed");
+		fixture.runtime.startPersisted.mockRejectedValue(failure);
+		const server = new RuntimeServer(fixture.runtime, fixture.http);
+
+		const preparation = server.prepare();
+		expect(server.prepare()).toBe(preparation);
+		await expect(preparation).rejects.toBe(failure);
+		await expect(server.start({ host: "127.0.0.1", port: 0 })).rejects.toBe(failure);
+
+		expect(fixture.runtime.startPersisted).toHaveBeenCalledOnce();
+		expect(fixture.http.start).not.toHaveBeenCalled();
 	});
 
 	it("rejects untyped host values before starting either owner", async () => {
