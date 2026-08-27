@@ -1,162 +1,122 @@
 ---
 title: Run an existing application
-description: Point an application's existing service boundary at one daemon instance without adding local behavior branches.
+description: Point an application's existing provider boundary at one local instance, then arrange and inspect that same world.
 ---
 
-This guide starts after the runtime and plugin packages are installed and the plugin is mounted in
-`localhost.config.ts`. If the package is missing, first
-[install and evaluate the plugin](/plugins/using). If it is installed but not mounted,
-[Configuration](/configuration) defines how to activate it; configuration does not install packages.
+This guide assumes the runtime and one emulator plugin are installed and mounted in
+`localhost.config.ts`. Start with [Getting started](/getting-started) if they are not.
 
-The goal is to change where the application connects, not how it behaves:
+## Keep the application path
 
-```text
-production connection ──> existing application adapter ──> external service
-local connection      ──> existing application adapter ──> emulated service
+The example application's entire provider boundary is ordinary HTTP and two environment values:
+
+```ts title="src/read-workspace.ts"
+type UsersListResponse =
+	| { members: Array<{ id: string; name: string }>; ok: true }
+	| { error: string; ok: false };
+
+const apiUrl = requiredEnvironment("SLACK_API_URL");
+const botToken = requiredEnvironment("SLACK_BOT_TOKEN");
+const response = await fetch(new URL("users.list", apiUrl), {
+	headers: { authorization: `Bearer ${botToken}` },
+});
+const payload = (await response.json()) as UsersListResponse;
+
+if (!response.ok || !payload.ok) {
+	throw new Error(
+		`Local Slack request failed: ${"error" in payload ? payload.error : response.status}`,
+	);
+}
+
+console.log(JSON.stringify(payload.members.map(({ id, name }) => ({ id, name }))));
+
+function requiredEnvironment(name: string): string {
+	const value = process.env[name];
+	if (!value) throw new Error(`Missing ${name}. Run this command through localhost run.`);
+	return value;
+}
 ```
 
-The provider SDK, HTTP client, webhook handler, or service adapter should remain the application's
-boundary in both cases. localhost2137 operations belong to local setup and inspection code, not the
-production application. For callbacks, the traffic direction reverses, but the application still
-uses its normal handler and the plugin config selects its local destination.
+Keep this same SDK, HTTP client, callback handler, or adapter in local and production runs. Make its
+endpoint and credentials configurable; do not add a second implementation of provider behavior.
+Some SDKs accept a base URL directly, while others need the transport adapter documented by the
+installed plugin. Check [Provider compatibility](/compatibility) before relying on a route.
 
-## Confirm the configurable boundary
+Application code does not import the localhost2137 control client. Control operations arrange and
+inspect the local world from scripts or tests.
 
-Find where the application constructs its provider client. Identify the endpoint and credentials it
-already reads from configuration or environment variables. The installed plugin documents which
-connection values it supplies and which provider interface it supports.
-
-If the application hard-codes a provider endpoint, make that endpoint configurable at the client
-construction boundary. Avoid a broad `if (local)` branch: selecting an endpoint or credential is
-configuration; changing requests, responses, or business rules is a second implementation that the
-local run would no longer test.
-
-Some official SDKs accept a base URL directly. Others need a plugin-supplied transport adapter to
-support a path-scoped local endpoint. Use only the approach the installed plugin documents.
-
-## Start the persistent development world
-
-In one terminal, start the project daemon:
+## Run one persistent world
 
 ```sh
+# Terminal 1: keep the daemon in the foreground
 pnpm exec localhost dev
 ```
 
-The daemon loads the config once, starts configured services, and creates the empty persistent `dev`
-instance only when it does not already exist. Its ready output lists public service URLs, the
-generated environment file, and exported variable names. Restart the daemon after changing config.
-
-Do not copy the runtime control token into application configuration. The application needs only the
-plugin-owned connection values.
-
-## Inspect and inject the connection
-
-In another terminal, render the exact app-facing environment for `dev`:
-
 ```sh
+# Terminal 2: arrange dev, inspect the app-facing values, then run the normal app command
+pnpm exec localhost seed
 pnpm exec localhost env --format json
-```
-
-This is the quickest check that the installed plugin exports the names the application expects. It
-also exposes an endpoint-selection mistake before it looks like missing emulator state.
-
-Run the application's normal development command with those values:
-
-```sh
 pnpm exec localhost run -- pnpm dev
 ```
 
-`localhost run` starts exactly one child command in the current project. For that child only, plugin
-connection variables override same-named inherited values; other environment variables and standard
-streams remain attached. Ctrl-C is forwarded. The command is not a process manager and does not
-restart the child.
+`localhost run` overrides plugin-owned connection variables for that child process. It does not
+inject the runtime control token, alter unrelated variables, restart the child, or replace its
+standard streams. Tools that already load dotenv can instead use the `.env` path printed by `dev`.
 
-If the application's environment names differ, map the plugin values explicitly at the existing
-configuration boundary. Do not make application code read runtime discovery metadata or the control
-token. The daemon also writes a `.env` file inside the resolved `storage.dir`; `dev` prints its exact
-path. With the default storage directory, that path is `.localhost2137/.env`. This supports tools that
-already load dotenv files, but `localhost run` makes the selected environment ownership explicit.
+Changing `localhost.config.ts` requires a daemon restart. Restarting preserves the persistent `dev`
+world; seed, reset, and destroy change world state explicitly.
 
-## Arrange the world through discovered operations
+## Arrange, run, inspect
 
-Ask the running service for its actual control surface instead of copying operation names from
-another plugin or version. In the shell you use for control commands, replace the value below with a
-service key from `localhost.config.ts`:
+Use the concrete service key from `localhost.config.ts`. The crash-course project mounts Slack as
+`slack`, so the complete loop is:
 
 ```sh
-localhost_service_key="replace-with-configured-service-key"
-pnpm exec localhost describe "$localhost_service_key" --json
-pnpm exec localhost exec "$localhost_service_key" --help
+# Discover the installed plugin's actual control surface
+pnpm exec localhost describe slack --json
+pnpm exec localhost exec slack --help
+pnpm exec localhost exec slack send-message --help
+
+# Arrange through a control operation
+pnpm exec localhost exec slack send-message \
+  --channel general --from Ada --text "message before the app runs" --json
+
+# Exercise the application through provider-shaped traffic
+pnpm exec localhost run -- pnpm dev
+
+# Inspect the same instance, then collect boundary evidence
+pnpm exec localhost exec slack list-messages --channel general --json
+pnpm exec localhost logs slack --tail 50 --json
 ```
 
-Choose an operation from that output, then replace this value and inspect its generated input help:
+Generated operation help is the source of truth for flags and nested JSON input. `exec` is for local
+actors and inspection; it is not an alternate provider API for application code. Runtime logs contain
+request, operation, delivery, and plugin entries. Prefer an application assertion for application
+behavior and use logs to find the first boundary that failed.
+
+If arranged data is missing, compare the instance and service in the application's connection URL
+with every `exec` target. [Operations and emulated APIs](/operations-and-apis) explains how both
+interfaces reach one state without being interchangeable.
+
+## Run the same app against another world
 
 ```sh
-localhost_operation_key="replace-with-discovered-operation-key"
-pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
-```
-
-To invoke the operation, replace `--help` in the last command with the input flags it documents and
-append `--json`. Simple inputs become flags; generated help tells you when a nested input requires
-`--input-json`. Keep the invocation in a development script, test, or explicit setup command; the
-application should not gain a localhost2137 control-client dependency.
-
-## Exercise the application, then observe
-
-Trigger the behavior through the application's normal entry point: an HTTP request to the app, a
-job, a command, or another real application interface. That is the part that proves the application
-still speaks the provider-shaped protocol.
-
-Use application output as the primary result. When the scenario also needs emulator state, inspect
-it through a documented plugin operation. Runtime logs help establish which boundary actually ran:
-
-```sh
-pnpm exec localhost logs "$localhost_service_key" --tail 50 --json
-```
-
-The current runtime emits public API request, control operation, outbound delivery, and plugin log
-entries. They are diagnostic evidence, not a replacement for an application assertion.
-
-If setup data exists but the application cannot see it, compare the instance and service in the
-application's connection URL with the target used by `exec`. [Operations and emulated APIs](/operations-and-apis)
-explains why setup operations and application traffic share state without being interchangeable.
-
-## Use another world without another application branch
-
-Create a named instance when you want an independent scenario under the same runtime config:
-
-```sh
-pnpm exec localhost instance create review-42
+pnpm exec localhost instance create review-42 --seed
+pnpm exec localhost exec slack send-message \
+  --instance review-42 \
+  --channel general \
+  --from Ada \
+  --text "isolated review world" \
+  --json
 pnpm exec localhost env --instance review-42 --format json
 pnpm exec localhost run --instance review-42 -- pnpm dev
-```
-
-Every setup and inspection command for that scenario must also target `review-42`. Prefer explicit
-`--instance` flags in reusable scripts:
-
-```sh
-pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" \
-  --instance review-42 --help
-pnpm exec localhost logs "$localhost_service_key" --instance review-42 --tail 50 --json
-```
-
-For the actual named-world invocation, replace `--help` with the same documented input flags and
-append `--json`.
-
-Destroy the named world when the scenario is finished:
-
-```sh
+pnpm exec localhost exec slack list-messages \
+  --instance review-42 --channel general --json
+pnpm exec localhost logs slack --instance review-42 --tail 50 --json
 pnpm exec localhost instance destroy review-42
 ```
 
-For the long-lived `dev` world, reset is usually more useful than destroy. Reset is empty unless
-`--seed` is explicit:
-
-```sh
-pnpm exec localhost instance reset dev
-```
-
-Named instances isolate state, not plugin config or application callback URLs. Read
-[Instances and isolation](/instances#where-the-boundary-stops) before using one shared callback
-receiver for parallel worlds. For automated ownership and deterministic cleanup, continue with
-[Integration testing](/testing).
+Every command in a scenario must select the same instance. Instances isolate state, clock, logs, and
+routes; they still share plugin config and callback destinations. Read [Instances and
+isolation](/instances#where-the-boundary-stops) before parallelizing callback-driven scenarios. For
+temporary ownership and guaranteed cleanup, continue with [Integration testing](/testing).

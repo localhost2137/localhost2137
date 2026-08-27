@@ -245,6 +245,31 @@ assert(gettingStarted.includes("control token never enters the application proce
 assert(gettingStarted.includes("The Slack setup above has no time-driven work"));
 assert(gettingStarted.includes("same plugin config and callback destination"));
 
+const existingApplication = content.get("existing-application.mdx");
+assert(
+	existingApplication?.includes(
+		titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp),
+	),
+	"Existing-application guide must use the executable application boundary.",
+);
+for (const command of [
+	"pnpm exec localhost seed",
+	"pnpm exec localhost env --format json",
+	"pnpm exec localhost run -- pnpm dev",
+	"pnpm exec localhost describe slack --json",
+	"pnpm exec localhost exec slack send-message",
+	"pnpm exec localhost exec slack list-messages",
+	"pnpm exec localhost logs slack --tail 50 --json",
+	"pnpm exec localhost instance create review-42 --seed",
+	"pnpm exec localhost instance destroy review-42",
+]) {
+	assert(
+		existingApplication?.includes(command),
+		`Existing-application guide is missing the concrete workflow command: ${command}`,
+	);
+}
+assert(!existingApplication?.includes("replace-with-"));
+
 const diagnosing = content.get("diagnosing.mdx");
 assert(diagnosing?.includes("serialized diagnostic identifies the selected config path"));
 assert(!/\bLOCK(?:ED|_STALE|_CORRUPT)\b/.test(diagnosing ?? ""));
