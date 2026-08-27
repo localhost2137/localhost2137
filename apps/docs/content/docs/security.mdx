@@ -141,10 +141,11 @@ runtime has closed. Never turn cleanup into a broad or wildcard path.
 
 ## Application environment is not containment
 
-`localhost env` and `localhost run` do not inject the control token; they supply only plugin
-connection values. That reduces accidental exposure through application environment. It does not
-contain a same-user process: a Node process with the user's filesystem privileges may read project
-files, including the stored control token, and call the control API.
+`localhost env` renders plugin connection values. `localhost run` overlays those values on the
+child's inherited environment. Neither command injects the control token, and `run` does not
+sanitize inherited variables. This reduces accidental exposure through localhost2137's connection
+projection. It does not contain a same-user process: a Node process with the user's filesystem
+privileges may read project files, including the stored control token, and call the control API.
 
 A browser test needing privileged arrangement should perform it in the Node test harness or CLI,
 then pass only provider-shaped IDs or application-visible state into the browser. Origin rejection
