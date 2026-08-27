@@ -1,114 +1,103 @@
 ---
 title: What determinism means
-description: Separate repeatability, isolation, control, and provider compatibility when reasoning about local service tests.
+description: See exactly which inputs localhost2137 controls, which ones remain real, and what a repeatable test can claim.
 ---
 
-“Deterministic” is easy to overclaim. Running a service locally removes some sources of variation;
-it does not make the application, plugin, operating system, or provider model deterministic by
-itself. There is no switch in localhost2137 that makes an entire test repeatable.
+localhost2137 does not have a “make everything deterministic” switch. A useful test names the
+inputs it controls and leaves the rest visible.
 
-The useful goal is narrower: identify which inputs and asynchronous boundaries affect a claim, then
-control the ones that matter. A repeatable result is valuable, but it is not evidence that the local
-behavior matches everything the external provider does.
+This Stripe semantic test compares the same 30-day billing transition in two fresh worlds. It is
+source-backed evidence from the plugin suite, not a fragment to paste into an application test.
 
-## Four independent questions
+```ts title="plugin semantic test (source excerpt)"
+	it("uses the same exact 30-day renewal boundaries in pinned and real-offset modes", async () => {
+		const real = await startRuntime(createStripePlugin(), {
+			clock: { mode: "real" },
+			webhookUrl: null,
+		});
+		const realInstance = await real.createInstance();
+		const realSubscription = await createBillingWorld(realInstance.stripe);
+		const [realInitial] = await realInstance.stripe.listInvoices({
+			subscriptionId: realSubscription.id,
+		});
+		if (!realInitial) throw new TypeError("Expected a real-mode initial invoice.");
+		const pinned = await startRuntime(createStripePlugin(), {
+			clock: { mode: "pinned", startAt: realInitial.periodStart },
+			webhookUrl: null,
+		});
+		const pinnedInstance = await pinned.createInstance();
+		try {
+			const pinnedSubscription = await createBillingWorld(pinnedInstance.stripe);
+			await Promise.all([pinnedInstance.clock.advance("30d"), realInstance.clock.advance("30d")]);
+			const pinnedInvoices = await pinnedInstance.stripe.listInvoices({
+				subscriptionId: pinnedSubscription.id,
+			});
+			const realInvoices = await realInstance.stripe.listInvoices({
+				subscriptionId: realSubscription.id,
+			});
+			expect(pinnedInvoices).toHaveLength(2);
+			expect(realInvoices).toHaveLength(2);
+			expect(
+				pinnedInvoices.map(({ periodEnd, periodStart }) => ({ periodEnd, periodStart })),
+			).toEqual(realInvoices.map(({ periodEnd, periodStart }) => ({ periodEnd, periodStart })));
+			for (const invoice of [...pinnedInvoices, ...realInvoices]) {
+				expect(Date.parse(invoice.periodEnd) - Date.parse(invoice.periodStart)).toBe(
+					BILLING_PERIOD_MS,
+				);
+			}
+			expect(await pinnedInstance.stripe.listEvents({})).toEqual(
+				await realInstance.stripe.listEvents({}),
+			);
+		} finally {
+			await Promise.all([pinnedInstance.destroy(), realInstance.destroy()]);
+		}
+	});
+```
 
-These properties answer different questions:
+- **Controlled:** plugin version, configuration, billing inputs, separate instance state, one
+  explicit `30d` transition, and cleanup.
+- **Intentionally uncontrolled:** the real world's initial wall-clock instant. The pinned world
+  starts at the period boundary observed there, then the test compares invoices and events.
 
-| Property | Question |
-| --- | --- |
-| Repeatability | Given the same starting world and actions, does the scenario produce the same observable result? |
-| Isolation | Can this scenario change its state without changing another scenario's state? |
-| Control | Can the test arrange the state, event, failure, or time transition needed for its claim? |
-| Compatibility | Does the installed plugin behave like the provider for the particular API and semantics under test? |
-
-An in-process fake may be highly repeatable while bypassing HTTP transport. A real local service may
-run the actual service build while omitting hosted-only behavior or privileged controls. A provider
-sandbox may run provider-owned code while giving the test less control over account state. A
-localhost2137 plugin may offer isolation and explicit operations while implementing only a
-documented subset of the provider. None of those boundaries wins all four properties.
-
-[Choose the right test boundary](/test-boundaries) uses the defect a test must expose to choose
-among them. Locality can improve control; it does not supply compatibility automatically.
+That proves one Stripe invariant: both clock modes reconcile the same exact 30-day billing windows
+from the same logical starting instant. It does not prove that application clocks, random values,
+untracked promises, or external Stripe behavior are repeatable.
 
 ## Runtime mechanisms have defined scopes
 
-localhost2137 provides a few mechanisms that remove specific kinds of uncertainty:
+Each mechanism has a narrow owner:
 
-| Mechanism | What it controls | What remains outside |
+| Mechanism | Controlled | Intentionally outside its scope |
 | --- | --- | --- |
-| A new instance | Plugin state, service storage, clock state, logs, and tracked work for one local world. | Shared plugin configuration, callback destinations, application state, and other processes. |
-| A pinned clock | Time read through the plugin context and explicit time-advance hooks. | The application's clock, SDK wall-clock checks, and code that reads system time directly. |
-| Explicit seed and operations | The documented state and behavior those inputs arrange. | Plugin defaults and behavior the operation does not model. |
-| `idle()` | Completion or failure of plugin work registered with the instance task tracker. | Application work, untracked plugin promises, and the timing or content of external systems. |
+| New instance | Plugin state, service storage, instance clock, logs, tracked work | Application state, callback destinations, other processes |
+| Pinned clock | Time read through plugin clock APIs and explicit advancement | System time, application clocks, SDK wall-clock checks |
+| Seed and operations | The state and transition documented by that input | Provider behavior the plugin has not modeled |
+| `idle()` | Plugin work registered with the instance task tracker | Application jobs and untracked promises |
 
-Pinned time is therefore not frozen machine time. A plugin must use `ctx.clock.now()` for emulator
-time and reconcile its documented time-derived behavior during advancement. The application still
-sees its normal clock unless it has its own clock seam. Some SDKs validate callback timestamps
-against wall time, which is why real clock mode can be the correct choice for a particular test.
+Pinned time is not frozen machine time. A plugin must read its context clock and implement its
+time-derived transitions. Real clock mode is sometimes necessary, for example when an SDK checks a
+callback timestamp against wall time.
 
-Likewise, `idle()` is not “wait until Node.js has nothing left to do.” It waits for work the plugin
-registered through runtime tracking, including nested tracked work, and surfaces failures from that
-scope. An arbitrary sleep controls neither completion nor failure reporting.
+`idle()` is also not “wait until Node has no work.” It reports completion or failure only for tasks
+registered with that instance. Application queues need their own synchronization boundary.
 
-## The plugin supplies the service semantics
+## Four separate claims
 
-The runtime does not choose provider-shaped IDs, list ordering, pagination, transaction rules,
-signatures, retry schedules, or error responses. Each plugin owns those decisions. It also decides
-which operations exist and how time advancement changes its state.
+| Claim | What to assert |
+| --- | --- |
+| Repeatability | The same starting world and actions produce the same observed result. |
+| Isolation | One scenario cannot read or mutate another scenario's state. |
+| Control | The test can arrange the state, failure, event, or time transition it needs. |
+| Compatibility | The installed plugin matches the provider for the exact exercised surface. |
 
-That separation matters when reading a test result. A pinned clock can ensure that a plugin sees the
-same instant, but it cannot make an unstable plugin algorithm stable. Isolated storage can prevent
-one instance from mutating another, but it cannot prove that either instance returns the response a
-real provider would return.
+These properties do not imply one another. A repeatable emulator can return the wrong error every
+time. An isolated world can still model an outdated provider rule. A passing SDK call proves only
+the installed version and path the test actually exercised.
 
-localhost2137 currently provides no deterministic randomness facility. A plugin may generate stable
-identities when that is an intentional, documented compatibility choice, or it may use randomness
-when the modeled behavior requires it. Do not infer repeatable IDs or ordering from the runtime
-alone; read the plugin's support notes and semantic tests.
+localhost2137 currently supplies no deterministic randomness facility. Do not infer stable IDs or
+ordering from the runtime. Those are plugin semantics and must be documented and tested by the
+plugin when an application depends on them.
 
-The shared plugin contract tests prove lifecycle and runtime integration. Evidence of provider
-fidelity still comes from plugin-specific API, SDK, persistence, event, retry, and negative-case tests.
-[Building and testing plugins](/plugins/authoring#contract-and-semantic-tests) keeps those two kinds
-of evidence separate.
-
-## A repeatable scenario has explicit owners
-
-Consider the recurring-billing example in
-[Integration testing](/testing#start-one-typed-in-process-world).
-The test starts a temporary runtime, creates a fresh instance under a pinned clock, arranges catalog
-data, uses the official SDK to create customer and subscription state, advances time, and inspects
-the resulting invoices.
-
-Different components make different parts of that scenario repeatable:
-
-- the test owns the runtime, instance, starting instant, inputs, and cleanup;
-- the runtime owns the isolated world, clock transition, and tracked-work boundary;
-- the Stripe plugin owns the 30-day interval, invoice transaction, IDs, events, webhook behavior,
-  and the response surface exercised by the SDK calls;
-- the application owns its adapter, callback handler, database, concurrency, and any system-time or
-  randomness it uses.
-
-If the test later adds webhook delivery, `idle()` can establish that tracked plugin delivery settled.
-It cannot establish that unrelated application jobs finished unless the application exposes its own
-synchronization boundary. If the same scenario passes twice, it proves repeatability only for the
-observed behavior and the installed versions involved.
-
-This ownership model also explains why two independent scenarios should normally create two
-instances instead of resetting one world concurrently. Instance isolation protects plugin state;
-it does not serialize a shared callback receiver or application database.
-
-## Repeatable does not mean correct
-
-A perfectly repeatable emulator can be perfectly wrong. It can omit a provider error, accept an
-invalid request, produce the wrong signature, or implement an old SDK contract in exactly the same
-way on every run.
-
-Treat repeatability as a way to make failures reproducible, not as a substitute for a compatibility
-claim. Keep the claim narrow enough to match the plugin's documented surface. Retain provider-facing
-checks for external credentials, account configuration, hosted-only behavior, and the small number
-of production contracts whose risk justifies them.
-
-For the concrete mechanisms, see [Instances and isolation](/instances),
-[Virtual time and asynchronous work](/virtual-time), and [Integration testing](/testing). For the
-boundaries those mechanisms cannot cross, see [Runtime boundaries](/limitations).
+For executable application-level time control, continue with
+[Virtual time and asynchronous work](/virtual-time). For evidence scope, see
+[Provider compatibility](/compatibility) and [Choose the right test boundary](/test-boundaries).

@@ -214,7 +214,9 @@ assert.equal(
 );
 assert(operationsAndApis?.includes('fetch(new URL("users.list"'));
 assert(operationsAndApis?.includes('instance.slack.createUser({ name: "Grace" })'));
-assert(operationsAndApis?.includes("direct test-side `fetch` does not prove an application adapter"));
+assert(
+	operationsAndApis?.includes("direct test-side `fetch` does not prove an application adapter"),
+);
 assert(!operationsAndApis?.includes("`listUsers`"));
 
 const gettingStarted = content.get("getting-started.mdx");
@@ -282,9 +284,7 @@ assert(gettingStarted.includes("same plugin config and callback destination"));
 
 const existingApplication = content.get("existing-application.mdx");
 assert(
-	existingApplication?.includes(
-		titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp),
-	),
+	existingApplication?.includes(titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp)),
 	"Existing-application guide must use the executable application boundary.",
 );
 for (const command of [
@@ -305,7 +305,9 @@ for (const command of [
 }
 assert(!existingApplication?.includes("replace-with-"));
 assert(!existingApplication?.includes("list-messages"));
-assert(existingApplication?.includes("only for the crash-course config's first unseeded dev world"));
+assert(
+	existingApplication?.includes("only for the crash-course config's first unseeded dev world"),
+);
 
 const seeding = content.get("seeding.mdx");
 const seedingConfig = await readFile(
@@ -436,7 +438,9 @@ for (const [title, path] of [
 		`Callback concept must match the checked example ${path}.`,
 	);
 }
-assert(callbacks?.indexOf("await bot.start()") < callbacks?.indexOf("await instance.slack.sendMessage"));
+assert(
+	callbacks?.indexOf("await bot.start()") < callbacks?.indexOf("await instance.slack.sendMessage"),
+);
 assert(callbacks?.includes('expect(messages.map(({ text }) => text)).toEqual(["pong", "ping"])'));
 assert(callbacks?.includes("timeout and retry behavior"));
 assert(callbacks?.includes("Those details are part of the plugin's compatibility surface"));
@@ -455,8 +459,65 @@ assert(
 );
 assert(instances?.includes("expect(firstUrl.origin).toBe(secondUrl.origin)"));
 assert(instances?.includes("expect(firstUrl.pathname).not.toBe(secondUrl.pathname)"));
-assert(instances?.includes('readUserNames(second.slack.connection)).resolves.toEqual([\n\t\t\t\t\t"localhost2137-bot"'));
+assert(
+	instances?.includes(
+		'readUserNames(second.slack.connection)).resolves.toEqual([\n\t\t\t\t\t"localhost2137-bot"',
+	),
+);
 assert(instances?.indexOf("await second.destroy()") < instances?.indexOf("await first.destroy()"));
+const determinism = content.get("determinism.mdx");
+const stripeClockTests = await readFile(
+	join(repositoryRoot, "plugins/stripe/test/clock-and-recovery.test.ts"),
+	"utf8",
+);
+const clockContrast = sourceSliceBefore(
+	stripeClockTests,
+	'\tit("uses the same exact 30-day renewal boundaries in pinned and real-offset modes"',
+	"\n});\n\nasync function startRuntime",
+);
+assert(
+	determinism?.includes(
+		titledCodeBlock("ts", "plugin semantic test (source excerpt)", clockContrast),
+	),
+	"Determinism concept must match the checked pinned-versus-real Stripe semantic test.",
+);
+assert.equal(
+	determinism?.match(/```[a-z]+[^\n]*\n/)?.[0],
+	'```ts title="plugin semantic test (source excerpt)"\n',
+	"Determinism concept must lead with source-backed behavior.",
+);
+assert(determinism?.includes("**Controlled:**"));
+assert(determinism?.includes("**Intentionally uncontrolled:**"));
+assert(!/deterministic mode/i.test(determinism ?? ""));
+
+const compatibility = content.get("compatibility.mdx");
+const stripeSdkAdapter = await readFile(
+	join(repositoryRoot, "examples/stripe-sdk/src/local-stripe.ts"),
+	"utf8",
+);
+const stripeSdkTest = await readFile(
+	join(repositoryRoot, "examples/stripe-sdk/test/subscription.test.ts"),
+	"utf8",
+);
+const stripeSdkManifest = JSON.parse(
+	await readFile(join(repositoryRoot, "examples/stripe-sdk/package.json"), "utf8"),
+);
+assert.equal(stripeSdkManifest.dependencies.stripe, "22.5.0");
+assert(compatibility?.includes("pnpm add stripe@22.5.0"));
+assert(
+	compatibility?.includes(titledCodeBlock("ts", "src/local-stripe.ts", stripeSdkAdapter)),
+	"Compatibility concept must match the checked official SDK adapter.",
+);
+assert(
+	compatibility?.includes(titledCodeBlock("ts", "test/subscription.test.ts", stripeSdkTest)),
+	"Compatibility concept must match the checked official SDK workflow.",
+);
+assert(compatibility?.includes('client.customers.retrieve("cus_missing")'));
+assert(compatibility?.includes('code: "customer_missing"'));
+assert(compatibility?.includes('type: "StripeInvalidRequestError"'));
+assert(compatibility?.includes("With Stripe Node `22.5.0`, this checked path establishes"));
+assert(compatibility?.includes("It does not claim that the"));
+assert(compatibility?.includes("application-facing Stripe API created those two resources"));
 const pluginAuthoring = content.get("plugins/authoring.mdx");
 assert(
 	pluginAuthoring?.includes("Importing the plugin, or a config that mounts it, must be inert"),
@@ -837,6 +898,14 @@ function codeUnitOrder(left, right) {
 
 function titledCodeBlock(language, title, source) {
 	return `\`\`\`${language} title="${title}"\n${source.trimEnd()}\n\`\`\``;
+}
+
+function sourceSliceBefore(source, start, before) {
+	const startIndex = source.indexOf(start);
+	assert.notEqual(startIndex, -1, `Source excerpt start is missing: ${start}`);
+	const endIndex = source.indexOf(before, startIndex);
+	assert.notEqual(endIndex, -1, `Source excerpt end is missing after: ${start}`);
+	return source.slice(startIndex, endIndex);
 }
 
 async function assertMissing(path) {

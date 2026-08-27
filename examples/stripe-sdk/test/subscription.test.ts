@@ -39,6 +39,11 @@ describe("official Stripe SDK", () => {
 				email: "ada@example.test",
 				name: "Ada",
 			});
+			await expect(client.customers.retrieve("cus_missing")).rejects.toMatchObject({
+				code: "customer_missing",
+				statusCode: 404,
+				type: "StripeInvalidRequestError",
+			});
 			const subscription = await client.subscriptions.create({
 				customer: customer.id,
 				items: [{ price: price.id }],

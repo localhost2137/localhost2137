@@ -1,147 +1,158 @@
 ---
 title: Provider compatibility
-description: Read compatibility as a bounded, versioned set of executable claims rather than a promise that a plugin reproduces an entire provider.
+description: Read one version-pinned SDK workflow, its negative case, and the exact claim that workflow supports.
 ---
 
-A plugin is not “compatible with a provider” in the abstract. It is compatible with particular
-requests, responses, state transitions, events, and client versions under stated conditions.
+Install the client version exercised by this repository:
 
-That narrower wording is not legal caution. It is what makes the claim useful. An application needs
-to know whether its own integration path is covered, not what percentage of a provider's product
-catalog has been copied.
-
-## Compatibility has several layers
-
-An endpoint name is only the beginning of a compatibility claim:
-
-| Layer | Questions the claim must answer |
-| --- | --- |
-| Routing | Which methods and paths exist? Which query shapes select them? |
-| Transport | Which authentication, headers, encodings, status codes, and error envelopes are accepted or returned? |
-| Data | Which fields, defaults, identities, pagination rules, and validation constraints are represented? |
-| State | Which sequences and invariants connect one request to later requests? Which changes are atomic? |
-| Time and delivery | Which timestamps, scheduled transitions, callbacks, signatures, retries, ordering, and duplicate rules are modeled? |
-| Client | Which SDK, adapter, or raw HTTP versions and configurations have actually exercised the surface? |
-
-A route can return the right happy-path JSON while accepting an encoding the provider would reject.
-An SDK call can succeed while pagination, errors, or a later webhook remain wrong. A callback can
-contain familiar fields while using the wrong signature or redelivery rule. Each is partial evidence,
-not a percentage score that can be averaged into “mostly compatible.”
-
-The relevant layers depend on the application. A read-only reporting job may care about list
-pagination but never callbacks. A webhook consumer may care about byte-level signatures and stable
-event identity without using the provider's SDK at all.
-
-## SDK success proves one path
-
-An official SDK is valuable executable evidence because it emits the client's real serialization
-and authentication fields and applies its response parsing and other client assumptions. It does
-not enlarge the plugin's surface. A passing call supports only the request, outcome, and client
-version the scenario actually asserts; authentication rejection and other negative behavior need
-their own cases.
-
-An adapter does not change that boundary. The first-party Stripe adapter rewrites the SDK's fixed
-origin to an instance-scoped local URL while preserving its request path and query. It does not add
-missing resources, emulate SDK retries, or make untested SDK versions compatible.
-
-The same distinction applies when an SDK initializes successfully. Initialization may call one
-identity endpoint and establish that its response is sufficient. It does not prove that every later
-method used by the client has been implemented.
-
-Treat the resolved SDK version as part of the evidence. A passing example against one locked version
-does not silently establish a range of older and newer versions. A plugin may support a wider range,
-but that range needs its own statement and tests.
-
-## Stateful compatibility is about sequences
-
-Stateful emulation earns its cost when later behavior depends on earlier actions. That also means a
-support matrix made only of endpoint names is incomplete.
-
-For example, creating a subscription is not just one accepted request. The useful claim may include
-retrieving it, canceling it, advancing time, producing an invoice exactly once for a committed time
-window, and exposing the result through the same API. A chat message may need to appear in history,
-obey membership rules, emit a signed event, survive restart, and preserve ordering.
-
-Not every plugin must implement every sequence. It must identify the sequences it does implement and
-test the invariants that connect them. A broad list of routes with unrelated fixtures may be less
-useful than a small coherent slice supporting one real application workflow.
-
-[Operations and emulated APIs](/operations-and-apis) explains how provider routes and privileged
-operations can share domain behavior without pretending that an operation proves HTTP compatibility.
-
-## Unsupported behavior should be visible
-
-An unsupported request should not return a plausible success merely to keep an application moving.
-That turns a known gap into a passing test and makes the compatibility boundary harder to inspect.
-
-Useful plugin documentation distinguishes:
-
-- supported behavior with executable evidence;
-- deliberate local differences whose consequences are understood;
-- unsupported behavior that fails visibly;
-- behavior that has not been verified.
-
-Those categories are not interchangeable. “Unsupported” says the plugin deliberately rejects or
-omits the behavior. “Unverified” says no reliable claim has been established yet. A deliberate
-difference can be acceptable for a local test only when it does not bypass the defect that test is
-supposed to expose.
-
-Public routes should fail in the provider's shape where that failure is part of the supported
-surface. Control operations use localhost2137's structured error model because they are a separate
-privileged interface. A test-only operation or response field must not patch over a missing
-application-facing contract.
-
-## Evidence has different jobs
-
-No single test suite establishes every compatibility layer:
-
-| Evidence | What it can establish |
-| --- | --- |
-| Runtime plugin contract | Import behavior, lifecycle, isolation, persistence, reset, seed, public mounting, operation adapters, and version migration mechanics. |
-| Protocol fixtures | Exact request encodings and normalized responses for selected provider cases. |
-| SDK or application examples | One real client path across the documented local surface. |
-| Plugin semantic tests | Domain transactions, state sequences, signatures, retries, recovery, ordering, and meaningful negative cases. |
-| Provider-facing checks | Provider-owned account configuration and selected external contracts that a local implementation cannot prove. |
-
-The generic `@localhost2137/plugin-testkit` contract proves runtime integration. It does not know
-provider rules and cannot certify provider fidelity. Conversely, a protocol fixture says little
-about lifecycle cleanup or recovery unless a separate test exercises those properties.
-
-Evidence should fail when the production plugin drifts. Harnesses that replace the production
-factory, add test-only operations, or normalize away meaningful differences can make a large suite
-say very little.
-
-## Compatibility is versioned
-
-At least four moving parts affect a result: the plugin package, localhost2137 runtime, application
-client or SDK, and external provider contract. Pinning packages removes one source of variation from
-a local failure; it does not prevent the provider or SDK from evolving.
-
-Read a compatibility statement together with the installed versions that produced its evidence.
-After an upgrade, rerun the application path that matters instead of assuming a semver range proves
-behavior. Keep a provider-facing check where external drift would create material risk.
-
-The runtime version governs plugin integration and lifecycle contracts. It cannot make a plugin's
-provider behavior current. Updating the runtime alone is not evidence that an emulator now matches a
-new provider field, event, or error rule.
-
-## Make the application claim concrete
-
-Before depending on a plugin, write the claim as a sequence a test could falsify:
-
-```text
-given this starting world
-when the application sends or receives these provider-shaped requests
-then these application and service effects occur
-under these installed versions and documented limits
+```sh
+pnpm add stripe@22.5.0
 ```
 
-Map each step to the plugin's support notes and executable examples. Include the errors, callbacks,
-time transitions, or retries that change the application's behavior, not every provider feature that
-exists. If one required step is unsupported or unverified, the local scenario cannot establish the
-whole claim.
+Point the official client at one instance-scoped URL. This adapter is the complete first-party
+example; `maxNetworkRetries: 0` keeps retry behavior outside the claim.
 
-[Using plugins](/plugins/using) gives the installation-time checklist. The
-[Slack](/first-party/slack) and [Stripe](/first-party/stripe) references show concrete support
-matrices and deliberate differences. [Choose the right test boundary](/test-boundaries) explains
-what evidence to retain outside the emulator.
+```ts title="src/local-stripe.ts"
+import { createStripeSdkFetch } from "@localhost2137/stripe";
+import Stripe from "stripe";
+
+export interface LocalStripeConnection {
+	readonly apiUrl: string;
+	readonly secretKey: string;
+}
+
+/** Builds the official Stripe SDK against one localhost2137 instance-scoped account. */
+export function createLocalStripe(connection: LocalStripeConnection): Stripe {
+	return new Stripe(connection.secretKey, {
+		httpClient: Stripe.createFetchHttpClient(createStripeSdkFetch(connection.apiUrl)),
+		maxNetworkRetries: 0,
+	});
+}
+```
+
+The checked workflow uses normal SDK calls for a success, a provider-shaped error, and a later
+state transition:
+
+```ts title="test/subscription.test.ts"
+import { stripe } from "@localhost2137/stripe";
+import { defineConfig } from "localhost2137";
+import { createTestRuntime } from "localhost2137/testing";
+import { afterEach, describe, expect, it } from "vitest";
+import { createLocalStripe } from "../src/local-stripe.js";
+
+const runtimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
+
+afterEach(async () => {
+	await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
+});
+
+describe("official Stripe SDK", () => {
+	it("creates and renews a subscription through normal SDK calls", async () => {
+		const config = defineConfig({
+			clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+			services: {
+				stripe: stripe({
+					config: {
+						secretKey: "sk_test_local_sdk",
+						webhookSecret: "whsec_local_sdk",
+						webhookUrl: null,
+					},
+				}),
+			},
+		});
+		const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+		runtimes.push(runtime);
+		const instance = await runtime.createInstance();
+		try {
+			const product = await instance.stripe.createProduct({ name: "Pro" });
+			const price = await instance.stripe.createPrice({
+				productId: product.id,
+				unitAmount: 2_500,
+			});
+			const client = createLocalStripe(instance.stripe.connection);
+
+			const customer = await client.customers.create({
+				email: "ada@example.test",
+				name: "Ada",
+			});
+			await expect(client.customers.retrieve("cus_missing")).rejects.toMatchObject({
+				code: "customer_missing",
+				statusCode: 404,
+				type: "StripeInvalidRequestError",
+			});
+			const subscription = await client.subscriptions.create({
+				customer: customer.id,
+				items: [{ price: price.id }],
+			});
+			expect(subscription).toMatchObject({
+				customer: customer.id,
+				id: "sub_000001",
+				latest_invoice: "in_000001",
+				status: "active",
+			});
+
+			await instance.clock.advance("30d");
+			const invoices = await client.invoices.list({
+				limit: 10,
+				subscription: subscription.id,
+			});
+			expect(invoices.data.map(({ id }) => id)).toEqual(["in_000001", "in_000002"]);
+			expect(invoices.data[1]).toMatchObject({
+				amount_paid: 2_500,
+				customer: customer.id,
+				paid: true,
+				subscription: subscription.id,
+			});
+		} finally {
+			await instance.destroy();
+		}
+	});
+});
+```
+
+```sh
+pnpm --filter @localhost2137/example-stripe-sdk test
+```
+
+## The exact claim
+
+With Stripe Node `22.5.0`, this checked path establishes all of the following together:
+
+- the SDK can create a customer and an active subscription through the local adapter;
+- retrieving one missing customer becomes a `404` `StripeInvalidRequestError` with the documented
+  local `customer_missing` code;
+- advancing the instance clock by 30 days produces one additional paid invoice;
+- the SDK can filter invoices by that subscription and parse the returned objects.
+
+The test uses privileged operations only to arrange a product and price. It does not claim that the
+application-facing Stripe API created those two resources.
+
+## What this does not establish
+
+The workflow says nothing about customer listing, subscription cancellation, another Stripe SDK
+version, every field on the returned objects, webhook delivery, retry policy, pagination, external
+account configuration, or behavior on Stripe's servers.
+
+Do not turn “unverified” into “unsupported.” Unsupported behavior is deliberately rejected or
+omitted. Unverified behavior simply has no claim here. Check the [Stripe support reference](/first-party/stripe)
+and add an application-level test for every extra path your code depends on.
+
+## Read compatibility in layers
+
+| Layer | Evidence to look for |
+| --- | --- |
+| Routing and transport | Exact methods, paths, query or body encoding, authentication, status, and error envelope |
+| Data | Fields, defaults, IDs, validation, ordering, and pagination used by the application |
+| State | The sequence connecting one request to later reads or writes |
+| Time and delivery | Clock transitions, event identity, signatures, retries, duplicates, and ordering |
+| Client | The locked SDK or adapter version that exercised the path |
+
+An endpoint name is not a compatibility claim. A passing happy path does not establish its errors.
+A correct error envelope does not establish retry behavior. Keep each statement no broader than its
+executable evidence.
+
+The generic plugin contract verifies lifecycle, isolation, persistence, routing, and runtime
+integration. Provider fidelity comes from plugin-specific protocol, SDK, state, event, and negative
+tests. [Operations and emulated APIs](/operations-and-apis) explains why control operations and
+provider routes are separate evidence; [Choose the right test boundary](/test-boundaries) explains
+which claims still need provider-facing checks.
