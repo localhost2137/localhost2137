@@ -12,15 +12,13 @@ inventory of configured services.
 
 ## Install the runtime and plugin
 
-Add the runtime, the selected plugin, and the runtime's host peers as development dependencies:
+Use the installed plugin's exact package command. This guide uses the shipped Slack plugin as one
+concrete adoption path; the same runtime sequence applies to other plugins, but their config,
+connection values, operations, and compatibility surface come from their own package.
 
-```text
-pnpm add -D localhost2137 <plugin-package> hono@^4.13.4 zod@^4.4.3
+```sh
+pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3 vitest
 ```
-
-Replace `<plugin-package>` with the package that implements the service behavior you need. Install
-the provider SDK or client separately as an ordinary application dependency. A plugin reference
-should give the exact command and state which client version its compatibility tests exercise.
 
 This only installs packages. The plugin remains inactive until its factory is mounted under a
 service key in `localhost.config.ts`.
@@ -64,8 +62,32 @@ helps decide whether the missing evidence belongs in this emulator at all.
 
 ## Mount it explicitly
 
-Follow the plugin package's own factory and config types. The value below one service key must be the
-descriptor returned by that factory; the runtime does not infer a package from the key.
+Follow the plugin package's own factory and config types. The runtime does not infer a package from
+the key. Here is the complete config from the canonical [Getting started](/getting-started)
+executable example:
+
+```ts title="localhost.config.ts"
+import { slack } from "@localhost2137/slack";
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+	clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+	services: {
+		slack: slack({
+			config: {
+				botToken: "xoxb-local-crash-course",
+				eventsUrl: null,
+				signingSecret: "local-crash-course-signing-secret",
+				workspaceName: "Local workspace",
+			},
+			seed: {
+				users: [{ id: "U_ADA", name: "Ada" }],
+				channels: [{ id: "C_GENERAL", name: "general", members: ["U_ADA"] }],
+			},
+		}),
+	},
+});
+```
 
 The chosen key becomes the route segment, storage namespace, CLI selector, and typed instance
 property for that mount. It does not have to equal the plugin ID. Renaming the key creates a new
@@ -89,14 +111,12 @@ gives the test one cleanup owner. It is still a process-level trust boundary, no
 
 ## Inspect the live control contract
 
-After starting the daemon, inspect the definition it actually loaded. Replace the value below with a
-key from `localhost.config.ts`:
+After starting the daemon, inspect the definition it actually loaded:
 
 ```sh
-localhost_service_key="replace-with-configured-service-key"
 pnpm exec localhost describe --json
-pnpm exec localhost describe "$localhost_service_key" --json
-pnpm exec localhost exec "$localhost_service_key" --help
+pnpm exec localhost describe slack --json
+pnpm exec localhost exec slack --help
 ```
 
 The two `describe` forms return different projections:
@@ -110,11 +130,10 @@ The two `describe` forms return different projections:
   `stateVersion`, and backend status.
 
 Operation-specific help turns the same metadata into the invocation accepted by this installed
-version:
+version. After discovering `send-message` in the scoped description:
 
 ```sh
-localhost_operation_key="replace-with-discovered-operation-key"
-pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
+pnpm exec localhost exec slack send-message --help
 ```
 
 Live description is deliberately narrower than plugin documentation:
@@ -150,6 +169,40 @@ plugin-supplied adapter only for a documented transport problem such as an SDK t
 while the local service is path-scoped. Do not add a general `if (localhost)` branch that changes
 business behavior.
 
+This application reads the local world through the same Slack-shaped HTTP request it would put
+behind its service adapter:
+
+```ts title="src/read-workspace.ts"
+type UsersListResponse =
+	| { members: Array<{ id: string; name: string }>; ok: true }
+	| { error: string; ok: false };
+
+const apiUrl = requiredEnvironment("SLACK_API_URL");
+const botToken = requiredEnvironment("SLACK_BOT_TOKEN");
+const response = await fetch(new URL("users.list", apiUrl), {
+	headers: { authorization: `Bearer ${botToken}` },
+});
+const payload = (await response.json()) as UsersListResponse;
+
+if (!response.ok || !payload.ok) {
+	throw new Error(
+		`Local Slack request failed: ${"error" in payload ? payload.error : response.status}`,
+	);
+}
+
+console.log(JSON.stringify(payload.members.map(({ id, name }) => ({ id, name }))));
+
+function requiredEnvironment(name: string): string {
+	const value = process.env[name];
+	if (!value) throw new Error(`Missing ${name}. Run this command through localhost run.`);
+	return value;
+}
+```
+
+```sh
+pnpm exec localhost run -- pnpm dev
+```
+
 Operations remain outside production application code. They can arrange a local account, trigger an
 external actor or callback, and inspect state. They should not replace the provider-shaped request
 the test claims the application can make. [Operations and emulated APIs](/operations-and-apis)
@@ -160,6 +213,45 @@ shows how those interfaces share one world without proving the same thing.
 A package import, healthy daemon, and valid operation call prove that the basic runtime contract
 works. They do not prove the application integration. The acceptance test should cross every
 application boundary named by the behavior:
+
+```ts title="test/read-workspace.test.ts"
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
+
+const execFileAsync = promisify(execFile);
+
+it("reads one seeded world through the provider-shaped HTTP API", async () => {
+	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+
+	try {
+		const instance = await runtime.createInstance({ seed: true });
+		try {
+			const appPath = fileURLToPath(new URL("../src/read-workspace.ts", import.meta.url));
+			const { stderr, stdout } = await execFileAsync(process.execPath, [appPath], {
+				env: { ...process.env, ...instance.env },
+			});
+
+			expect(stderr).toBe("");
+			expect(JSON.parse(stdout)).toEqual([
+				{ id: "U000000", name: "localhost2137-bot" },
+				{ id: "U_ADA", name: "Ada" },
+			]);
+		} finally {
+			await instance.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
+});
+```
+
+```sh
+pnpm exec vitest run test/read-workspace.test.ts
+```
 
 1. Create an isolated world owned by the test.
 2. Arrange only the surrounding state through documented operations or seed data.

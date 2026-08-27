@@ -4,27 +4,43 @@ Read only the section that matches the requested workflow. Confirm signatures ag
 
 ## In-process tests
 
-Import `createTestRuntime` from `localhost2137/testing` and pass a complete typed config:
+This checked test owns the runtime, one explicitly seeded instance, and the application process. The
+child inherits the harness process environment with plugin connection values overlaid by
+`instance.env`:
 
-```ts
-const runtime = await createTestRuntime({
-  config,
-  port: 0,
-  storage: "temporary",
+```ts title="test/read-workspace.test.ts"
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
+
+const execFileAsync = promisify(execFile);
+
+it("reads one seeded world through the provider-shaped HTTP API", async () => {
+	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+
+	try {
+		const instance = await runtime.createInstance({ seed: true });
+		try {
+			const appPath = fileURLToPath(new URL("../src/read-workspace.ts", import.meta.url));
+			const { stderr, stdout } = await execFileAsync(process.execPath, [appPath], {
+				env: { ...process.env, ...instance.env },
+			});
+
+			expect(stderr).toBe("");
+			expect(JSON.parse(stdout)).toEqual([
+				{ id: "U000000", name: "localhost2137-bot" },
+				{ id: "U_ADA", name: "Ada" },
+			]);
+		} finally {
+			await instance.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
 });
-
-try {
-  const instance = await runtime.createInstance({ seed: false });
-  try {
-    // Arrange and inspect through instance.<service> operation methods.
-    // Pass instance.<service>.connection to the application under test.
-    // Await instance.idle() after plugin-owned asynchronous delivery work.
-  } finally {
-    await instance.destroy();
-  }
-} finally {
-  await runtime.close();
-}
 ```
 
 The test runtime owns one loopback server on an OS-assigned port and temporary storage. Its instances are path-isolated worlds. The typed instance handle contains:
@@ -66,71 +82,113 @@ Clock durations are positive whole values with one of `ms`, `s`, `m`, `h`, `d`, 
 
 ## Remote and parallel tests
 
-Import `connectRuntime` from `localhost2137/client`:
+Use `connectRuntime` from `localhost2137/client`. Keep this checked ownership helper intact when a
+worker owns an instance on a runtime started by another process:
 
-```ts
-import { randomUUID } from "node:crypto";
-import {
-  ControlApiError,
-  connectRuntime,
-  type RuntimeClient,
-} from "localhost2137/client";
+```ts title="test/owned-instance.ts"
+import { ControlApiError, type RuntimeClient } from "localhost2137/client";
 
-type OwnerClient = Pick<RuntimeClient, "createInstance" | "destroyInstance">;
+type InstanceOwnerClient = Pick<RuntimeClient, "createInstance" | "destroyInstance">;
 
-async function withOwnedInstance<Value>(
-  runtime: OwnerClient,
-  instanceId: string,
-  use: () => Promise<Value>,
+type Outcome<Value> =
+	| Readonly<{ ok: true; value: Value }>
+	| Readonly<{ cause: unknown; ok: false }>;
+
+/** Own one known worker instance ID without deleting an authoritative conflict. */
+export async function withOwnedInstance<Value>(
+	runtime: InstanceOwnerClient,
+	instanceId: string,
+	use: () => Promise<Value>,
 ): Promise<Value> {
-  let cleanupRequired = false;
-  let hasPrimary = false;
-  let primary: unknown;
+	try {
+		await runtime.createInstance({ id: instanceId, persistence: "ephemeral" });
+	} catch (cause) {
+		if (cause instanceof ControlApiError) throw cause;
+		return finishOwnership(runtime, instanceId, { cause, ok: false });
+	}
 
-  try {
-    try {
-      await runtime.createInstance({ id: instanceId, persistence: "ephemeral" });
-      cleanupRequired = true;
-    } catch (cause) {
-      if (cause instanceof ControlApiError) throw cause;
-      hasPrimary = true;
-      primary = cause;
-      cleanupRequired = true;
-      throw cause;
-    }
-
-    try {
-      return await use();
-    } catch (cause) {
-      hasPrimary = true;
-      primary = cause;
-      throw cause;
-    }
-  } finally {
-    if (cleanupRequired) {
-      try {
-        await runtime.destroyInstance(instanceId);
-      } catch (cleanup) {
-        const absent =
-          cleanup instanceof ControlApiError && cleanup.code === "INSTANCE_NOT_FOUND";
-        if (!absent && hasPrimary) {
-          throw new AggregateError([primary, cleanup], "Instance use and cleanup failed.", {
-            cause: primary,
-          });
-        }
-        if (!absent) throw cleanup;
-      }
-    }
-  }
+	let primary: Outcome<Value>;
+	try {
+		primary = { ok: true, value: await use() };
+	} catch (cause) {
+		primary = { cause, ok: false };
+	}
+	return finishOwnership(runtime, instanceId, primary);
 }
 
-const runtime = connectRuntime({ url, token });
-const instanceId = `worker-${randomUUID()}`;
+async function finishOwnership<Value>(
+	runtime: InstanceOwnerClient,
+	instanceId: string,
+	primary: Outcome<Value>,
+): Promise<Value> {
+	const cleanup = await destroyIfPresent(runtime, instanceId);
+	if (!primary.ok) {
+		if (!cleanup.ok) {
+			throw new AggregateError(
+				[primary.cause, cleanup.cause],
+				`Worker instance ${JSON.stringify(instanceId)} failed and cleanup also failed.`,
+				{ cause: primary.cause },
+			);
+		}
+		throw primary.cause;
+	}
+	if (!cleanup.ok) throw cleanup.cause;
+	return primary.value;
+}
 
-await withOwnedInstance(runtime, instanceId, async () => {
-  await runtime.executeOperation(instanceId, serviceKey, operationKey, input);
-  await runtime.idle(instanceId);
-});
+async function destroyIfPresent(
+	runtime: InstanceOwnerClient,
+	instanceId: string,
+): Promise<Outcome<void>> {
+	try {
+		await runtime.destroyInstance(instanceId);
+		return { ok: true, value: undefined };
+	} catch (cause) {
+		if (cause instanceof ControlApiError && cause.code === "INSTANCE_NOT_FOUND") {
+			return { ok: true, value: undefined };
+		}
+		return { cause, ok: false };
+	}
+}
+```
+
+The checked worker uses the helper with a collision-resistant ID and an introspection-driven remote
+client:
+
+```ts title="test/worker-contract.ts"
+import { randomUUID } from "node:crypto";
+import { connectRuntime } from "localhost2137/client";
+import { describe, expect, inject, it } from "vitest";
+import { arriveAtBarrier } from "./barrier.js";
+import { withOwnedInstance } from "./owned-instance.js";
+import "./runtime-connection.js";
+
+export function defineWorkerContract(label: string, increment: number): void {
+	describe(label, () => {
+		const harness = inject("localhost2137");
+		const runtime = connectRuntime(harness.connection);
+		const instanceId = `parallel-${randomUUID()}`;
+
+		it("owns isolated state on the shared runtime", async () => {
+			await withOwnedInstance(runtime, instanceId, async () => {
+				await expect(runtime.executeOperation(instanceId, "counter", "read", {})).resolves.toEqual({
+					value: 0,
+				});
+				await expect(
+					runtime.executeOperation(instanceId, "counter", "increment", { by: increment }),
+				).resolves.toEqual({ value: increment });
+				await arriveAtBarrier(
+					harness.barrier.directory,
+					label.split(" ")[0] ?? label,
+					harness.barrier.participants,
+				);
+				await expect(runtime.executeOperation(instanceId, "counter", "read", {})).resolves.toEqual({
+					value: increment,
+				});
+			});
+		});
+	});
+}
 ```
 
 Implement or reuse `withOwnedInstance` with these ownership rules:

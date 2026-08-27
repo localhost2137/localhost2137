@@ -27,12 +27,12 @@ plugin behavior. Report evidence before changing code.
 ### Build or extend a plugin
 
 ```text
-Build the smallest useful localhost2137 plugin slice for [behavior]. Keep service rules inside the
-plugin, share logic below HTTP and operation adapters, and prove behavior through public tests.
+Build the smallest coherent localhost2137 plugin behavior for the application path I describe. If
+that path is not explicit, ask before choosing scope. Share logic below HTTP and operation adapters,
+and prove the behavior through public tests.
 ```
 
-Replace the bracketed text with the behavior you need. Add repository-specific constraints only when
-they materially change the work.
+Add repository-specific constraints only when they materially change the work.
 
 ## Give an agent the right docs
 
@@ -79,7 +79,8 @@ Use $use-localhost2137 to integrate and test this service locally.
 ```
 
 ```text
-Use $build-localhost2137-plugin to implement and verify [behavior].
+Use $build-localhost2137-plugin for the application behavior I describe. Ask before implementation
+if the required application or SDK path is not explicit.
 ```
 
 ## What a useful handoff includes

@@ -7,6 +7,42 @@ localhost2137 runs stateful emulator plugins for external developer services. An
 to a plugin through its normal provider SDK or HTTP boundary. Tests, scripts, and developers control
 the same local world through typed operations or the CLI.
 
+```ts title="localhost.config.ts"
+import { slack } from "@localhost2137/slack";
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+	clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+	services: {
+		slack: slack({
+			config: {
+				botToken: "xoxb-local-crash-course",
+				eventsUrl: null,
+				signingSecret: "local-crash-course-signing-secret",
+				workspaceName: "Local workspace",
+			},
+			seed: {
+				users: [{ id: "U_ADA", name: "Ada" }],
+				channels: [{ id: "C_GENERAL", name: "general", members: ["U_ADA"] }],
+			},
+		}),
+	},
+});
+```
+
+```sh title="terminal 1"
+pnpm exec localhost dev
+```
+
+```sh title="terminal 2"
+pnpm exec localhost run -- pnpm dev
+```
+
+The config mounts emulator code and optional local seed data. `localhost dev` hosts the configured
+services; `localhost run --` starts the application with that instance's local URLs and fake
+credentials. Neither the developer nor a coding agent needs provider API keys for this local path.
+[Getting started](/getting-started) runs this exact config and shows what each command changes.
+
 It is not a generic request/response mock server, and a plugin is not a local copy of an entire
 provider. Each plugin implements a bounded service contract: provider-shaped HTTP behavior, state,
 control operations, persistence, and any callback delivery it supports.

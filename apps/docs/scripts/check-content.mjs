@@ -240,12 +240,55 @@ const runtimeInterfacesSkill = await readFile(
 	join(repositoryRoot, "skills/use-localhost2137/references/runtime-interfaces.md"),
 	"utf8",
 );
+const inProcessApplicationTest = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/read-workspace.test.ts"),
+	"utf8",
+);
+const remoteOwnershipHelper = await readFile(
+	join(repositoryRoot, "examples/testing-parallel/test/owned-instance.ts"),
+	"utf8",
+);
+const remoteWorkerContract = await readFile(
+	join(repositoryRoot, "examples/testing-parallel/test/worker-contract.ts"),
+	"utf8",
+);
+assert(
+	runtimeInterfacesSkill.includes(
+		titledCodeBlock("ts", "test/read-workspace.test.ts", inProcessApplicationTest),
+	),
+	"Runtime skill must match the checked in-process application test.",
+);
+assert(
+	runtimeInterfacesSkill.includes(
+		titledCodeBlock("ts", "test/owned-instance.ts", remoteOwnershipHelper),
+	),
+	"Runtime skill must match the checked remote ownership helper.",
+);
+assert(
+	runtimeInterfacesSkill.includes(
+		titledCodeBlock("ts", "test/worker-contract.ts", remoteWorkerContract),
+	),
+	"Runtime skill must match the checked remote worker contract.",
+);
 assert(runtimeInterfacesSkill.includes("A create `ControlApiError` is an authoritative rejection"));
 assert(runtimeInterfacesSkill.includes("A transport or protocol create failure is uncertain"));
 assert(runtimeInterfacesSkill.includes("primary failure first and as `cause`"));
 
 const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));
+const introductionConfig = await readFile(
+	join(repositoryRoot, "examples/getting-started/localhost.config.ts"),
+	"utf8",
+);
+assert(
+	introduction?.includes(titledCodeBlock("ts", "localhost.config.ts", introductionConfig)),
+	"Home page must reveal product shape with the checked config.",
+);
+assert.equal(
+	introduction.match(/```[^\n]*\n/)?.[0],
+	'```ts title="localhost.config.ts"\n',
+	"Home page must lead with the checked project shape.",
+);
 
 const testBoundaries = content.get("test-boundaries.mdx");
 for (const [title, path] of [
@@ -733,7 +776,25 @@ for (const [title, path] of [
 assert(firstPlugin?.includes("routes and operations call shared domain behavior"));
 assert(firstPlugin?.includes("It does not establish transaction"));
 const pluginUsing = content.get("plugins/using.mdx");
-assert(pluginUsing?.includes("pnpm add -D localhost2137 <plugin-package> hono@^4.13.4 zod@^4.4.3"));
+assert(
+	pluginUsing?.includes(
+		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3 vitest",
+	),
+);
+assert(
+	pluginUsing?.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),
+	"Plugin adoption guide must match the checked mounted config.",
+);
+assert(
+	pluginUsing?.includes(titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp)),
+	"Plugin adoption guide must match the checked application boundary.",
+);
+assert(
+	pluginUsing?.includes(
+		titledCodeBlock("ts", "test/read-workspace.test.ts", inProcessApplicationTest),
+	),
+	"Plugin adoption guide must match the checked application test.",
+);
 assert(pluginUsing?.includes("There is no plugin registry or automatic package discovery"));
 assert(pluginUsing?.includes("Temporary test storage limits what world state survives the test"));
 assert(pluginUsing?.includes("`describe` does not enumerate provider routes or connection values"));
