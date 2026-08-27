@@ -51,6 +51,7 @@ assert.deepEqual(
 );
 
 const pageUrls = new Set(expectedPages.values());
+const markdownUrls = new Set([...pageUrls].map(markdownRouteForPage));
 const content = new Map();
 for (const file of files) {
 	const source = await readFile(join(contentRoot, file), "utf8");
@@ -73,7 +74,10 @@ for (const [file, source] of content) {
 	for (const match of prose.matchAll(/\]\((\/[^\s)#?]*)(?:#([^\s)]+))?\)/g)) {
 		const target = match[1];
 		assert(
-			pageUrls.has(target) || target === "/llms.txt" || target === "/llms-full.txt",
+			pageUrls.has(target) ||
+				markdownUrls.has(target) ||
+				target === "/llms.txt" ||
+				target === "/llms-full.txt",
 			`${file} links to unknown internal page ${target}.`,
 		);
 		if (match[2]) assertInternalFragment(file, target, match[2], headingIdsByPage);
@@ -248,6 +252,33 @@ for (const [file, source] of content) {
 
 const navigation = JSON.parse(await readFile(join(contentRoot, "meta.json"), "utf8"));
 assert.equal(navigation.pages[0], "agents", "For LLMs must remain the first sidebar page.");
+assert.deepEqual(navigation.pages, [
+	"agents",
+	"---Start---",
+	"index",
+	"getting-started",
+	"---Guides---",
+	"existing-application",
+	"testing",
+	"seeding",
+	"diagnosing",
+	"---Concepts---",
+	"test-boundaries",
+	"operations-and-apis",
+	"instances",
+	"callbacks",
+	"determinism",
+	"compatibility",
+	"---Reference---",
+	"configuration",
+	"cli",
+	"virtual-time",
+	"limitations",
+	"security",
+	"---Plugins---",
+	"plugins",
+	"first-party",
+]);
 const layoutOptions = await readFile(join(docsRoot, "lib/layout.shared.tsx"), "utf8");
 assert(!layoutOptions.includes('text: "llms.txt"'));
 assert(!layoutOptions.includes('url: "/llms.txt"'));

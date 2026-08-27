@@ -3,13 +3,13 @@ title: What localhost2137 is
 description: What localhost2137 owns, what plugins own, and how an application interacts with both.
 ---
 
-localhost2137 runs stateful emulator plugins for external developer services. It is not a generic
-request/response mock server. [Choose the right test boundary](/test-boundaries) explains when a
-stateful emulator supplies useful evidence and when a simpler double or real service is the better
-fit. A plugin implements a small executable service with its own HTTP API, state, operations, and
-persistence.
-[Provider compatibility](/compatibility) explains how to read that service as a set of bounded,
-versioned claims rather than a local copy of an entire provider.
+localhost2137 runs stateful emulator plugins for external developer services. An application talks
+to a plugin through its normal provider SDK or HTTP boundary. Tests, scripts, and developers control
+the same local world through typed operations or the CLI.
+
+It is not a generic request/response mock server, and a plugin is not a local copy of an entire
+provider. Each plugin implements a bounded service contract: provider-shaped HTTP behavior, state,
+control operations, persistence, and any callback delivery it supports.
 
 ## Two interfaces, one local world
 
@@ -30,6 +30,18 @@ application, including signatures, retries, tracked work, and shared receiver co
 
 The service key in `localhost.config.ts` is the route, storage, CLI, and typed-handle identity. The
 `dev` Slack URL, for example, begins at `http://127.0.0.1:2137/dev/slack`.
+
+## When it fits
+
+Use localhost2137 when the behavior under test depends on a service world changing over a sequence:
+an SDK call creates state, another call reads it, time advances, or an event reaches the application.
+A function fake or HTTP stub is usually simpler when the claim concerns one call and no meaningful
+service lifecycle. A provider sandbox or real service is still needed for claims about live
+infrastructure and unimplemented provider behavior.
+
+[Choose the right test boundary](/test-boundaries) develops that decision from the defect a test
+must catch. [Provider compatibility](/compatibility) explains how to assess the narrower claims an
+installed plugin actually proves.
 
 ## Ownership boundary
 
@@ -54,7 +66,22 @@ general plugin ecosystem without learning each provider's rules in its kernel.
 
 [Instances and isolation](/instances) explains which resources belong to a world and which remain
 shared. In particular, instances do not create separate plugin configuration or callback URLs;
-before parallel event or webhook tests, read the
-[parallel-callback boundary](/limitations#callback-isolation-needs-an-application-rule).
-[What determinism means](/determinism) separates the repeatability the runtime can support from
-the provider compatibility each plugin must substantiate.
+before parallel event or webhook tests, read
+[Callbacks and webhooks](/callbacks#parallel-receivers-require-a-routing-rule).
+
+## Continue by intent
+
+- **See one complete loop:** [Getting started](/getting-started) runs, changes, and repeats the Slack
+  example.
+- **Adopt it in a project:** [Run an existing application](/existing-application) preserves the
+  application's normal service boundary, then [Integration testing](/testing) turns that setup into
+  an owned test harness.
+- **Evaluate the testing model:** [Choose the right test boundary](/test-boundaries), then read
+  [Operations and emulated APIs](/operations-and-apis), [Instances and isolation](/instances), and
+  [What determinism means](/determinism).
+- **Add service behavior:** [Using plugins](/plugins/using) starts with an installed package;
+  [Build your first plugin](/plugins/first-plugin) starts with a small executable contract.
+
+The reference section is for exact behavior once a task raises a question: start with
+[Configuration](/configuration), [CLI workflow and reference](/cli), or
+[Runtime boundaries](/limitations).
