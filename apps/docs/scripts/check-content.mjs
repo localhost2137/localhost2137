@@ -117,11 +117,66 @@ assert(runtimeBoundaries?.includes("This page describes current behavior"));
 assert(!/\b(deferred|roadmap|snapshots?|forks?|MCP)\b/i.test(runtimeBoundaries ?? ""));
 const security = content.get("security.mdx");
 assert(security?.includes("title: Local security model"));
+const repositoryIgnore = await readFile(join(repositoryRoot, ".gitignore"), "utf8");
+assert(repositoryIgnore.split("\n").includes(".localhost2137/"));
+assert(
+	security?.includes(titledCodeBlock("text", ".gitignore", ".localhost2137/\n")),
+	"Security reference must lead with the repository's exact storage ignore rule.",
+);
+assert.equal(
+	security?.match(/```[a-z]+[^\n]*\n/)?.[0],
+	'```text title=".gitignore"\n',
+	"Security reference must lead with a safe project file.",
+);
 assert(security?.includes("The runtime bearer token does not protect provider-shaped routes"));
 assert(/There is no process, filesystem, or\s+network sandbox/.test(security ?? ""));
 assert(security?.includes('{ "data": { "status": "ok", "version": "v1" } }'));
+assert(security?.includes("curl --silent http://127.0.0.1:2137/_/v1/health"));
+assert(!security?.includes("authorization: Bearer"));
+const runtimeHttpApplication = await readFile(
+	join(repositoryRoot, "packages/localhost2137/src/http/runtime-http-application.ts"),
+	"utf8",
+);
+const controlApi = await readFile(
+	join(repositoryRoot, "packages/localhost2137/src/control/control-api.ts"),
+	"utf8",
+);
+assert(runtimeHttpApplication.includes('app.route("/_/v1", input.control)'));
+assert(controlApi.includes('app.get("/health", () => success({ status: "ok", version: "v1" }))'));
 assert(security?.includes("Ordinary string values and the log"));
 assert(security?.includes("message pass through unchanged"));
+const testedLogAttributes = {
+	authorization: "[REDACTED]",
+	circular: "[CIRCULAR]",
+	nested: { payload: "[OMITTED]", token: "[REDACTED]", visible: "safe" },
+};
+assert(
+	security?.includes(
+		titledCodeBlock("json", "tested log attributes", JSON.stringify(testedLogAttributes, null, 2)),
+	),
+	"Security log example must match the tested redaction result.",
+);
+const structuredLogTests = await readFile(
+	join(repositoryRoot, "packages/localhost2137/test/kernel/structured-log.test.ts"),
+	"utf8",
+);
+for (const evidence of [
+	'authorization: "[REDACTED]"',
+	'circular: "[CIRCULAR]"',
+	'nested: { payload: "[OMITTED]", token: "[REDACTED]", visible: "safe" }',
+]) {
+	assert(structuredLogTests.includes(evidence), `Security redaction evidence drifted: ${evidence}`);
+}
+const diagnosticPage = content.get("diagnosing.mdx");
+const removedBeforeSharing = sourceSliceBefore(
+	diagnosticPage ?? "",
+	"## Removed before sharing",
+	"\n```",
+);
+assert(
+	security?.includes(titledCodeBlock("md", "share-check.md", removedBeforeSharing)),
+	"Security sharing check must match the canonical diagnostic report section.",
+);
 assert(runtimeBoundaries?.includes("A service-key change is not itself a migration"));
 
 const commandProgram = await readFile(

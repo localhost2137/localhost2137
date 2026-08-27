@@ -1,87 +1,55 @@
 ---
 title: Runtime boundaries
-description: Current limits on provider fidelity, instance isolation, local execution, configuration, storage, and installation.
+description: Decide which claims localhost2137 can establish and when a scenario needs another runtime or external test.
 ---
 
-localhost2137 provides a local, stateful implementation of the surface an installed plugin
-documents. It does not make every property of an external service local.
-
-This page describes current behavior. It is not a list of possible additions.
+This page describes current behavior. localhost2137 runs the surface an installed plugin documents;
+it does not make every property of an external service local.
 
 ## Boundary summary
 
 | A local scenario can establish | It cannot establish by itself | Canonical detail |
 | --- | --- | --- |
-| Behavior in the installed plugin's documented and tested surface | Broader provider parity or behavior from an untested client version | [Provider compatibility](/compatibility) |
-| Application traffic that crosses its normal SDK or HTTP boundary | The same application behavior when setup or inspection operations replace that boundary | [Operations and emulated APIs](/operations-and-apis) |
-| Provider-shaped callbacks accepted by the application's configured receiver | External dashboard configuration, internet delivery, or callback isolation the application cannot express | [Callbacks and webhooks](/callbacks) |
-| Independent plugin state, storage, clocks, logs, and tracked work for each instance | Different plugin config, callback destinations, processes, users, or security boundaries | [Instances and isolation](/instances) |
-| An explicit instance clock transition and the plugin reconciliation it invokes | Control of application clocks, system time, or work the plugin did not track | [Virtual time and asynchronous work](/virtual-time) |
-| Loopback HTTP behavior in one developer or CI environment | DNS, TLS, production networking, load, regional behavior, or provider availability | [Choose the right test boundary](/test-boundaries) |
-| Bearer-token authorization on control routes other than health | Authorization on provider-shaped routes or a sandbox around config and plugin code | [Local security model](/security) |
+| Installed plugin behavior for the exact tested request, response, state transition, event, and client version | Broader provider parity | [Provider compatibility](/compatibility) |
+| Application traffic crossing its normal SDK or HTTP boundary | The same claim when setup or inspection operations replace that traffic | [Operations and emulated APIs](/operations-and-apis) |
+| Provider-shaped callbacks accepted by one configured receiver | External dashboard setup, internet delivery, or receiver routing the application cannot express | [Callbacks and webhooks](/callbacks) |
+| Independent plugin state, clocks, logs, and tracked work per instance | Different plugin config, callback destinations, processes, users, or permissions | [Instances and isolation](/instances) |
+| Explicit clock windows and plugin reconciliation | Application clocks, system time, untracked work, or provider schedulers | [Virtual time and asynchronous work](/virtual-time) |
+| Plain loopback HTTP in one developer or CI environment | DNS, TLS, load, regions, production networking, or provider availability | [Choose the right test boundary](/test-boundaries) |
+| Bearer authorization on control routes except health | Authorization added by the runtime to provider-shaped routes, or a code sandbox | [Local security model](/security) |
 
-Use the linked page for the full model. The sections below collect only the operational constraints
-that affect whether localhost2137 can run a scenario at all.
+## Instance or runtime?
 
-## One runtime has one template
+| Required difference | Use |
+| --- | --- |
+| Service state, clock, logs, tracked work | Another instance in the same runtime |
+| Host, port, storage root, service set, plugin config, callback destination | Another runtime with another config |
+| Trust, process permissions, user, filesystem, or network policy | An OS or CI isolation boundary |
 
-A runtime is one loopback HTTP process, one resolved config, one control token, and one storage root.
-It can host many instances, but every instance uses the same configured plugins, service keys,
-plugin config, and callback destinations.
+One runtime is one loopback process, resolved config, control token, and storage root. Every instance
+uses the same service keys and plugin config. Plugins execute inside that runtime process; an instance
+is not a process or code sandbox.
 
-Use a new instance for independent mutable service state under that template. Use another runtime
-when host, port, storage ownership, service set, plugin config, or a config-owned receiver must
-differ. An instance is not a process or code sandbox: every installed plugin executes inside the
-runtime process.
+A service key owns its public route, CLI selector, typed handle, and durable storage namespace.
+A service-key change is not itself a migration. It removes one mount, creates another with separate
+state, and leaves the removed key's data stored until a deliberate plugin-supported migration moves
+it.
 
-The service key is a route, control, typed-handle, and durable storage identity.
-A service-key change is not itself a migration.
-It removes one mount and adds another; the new key starts with separate state while the removed key's
-data remains stored. Move data only through a deliberate migration the plugin supports.
+## Operational limits
 
-## The network boundary is loopback
+| Constraint | Current behavior | Consequence |
+| --- | --- | --- |
+| Network | `127.0.0.1`, `localhost`, or `::1`; plain HTTP | Suitable for local development and isolated CI, not public or production network claims. |
+| Config loading | Once at startup; executable trusted Node.js code | Save does not hot-reload. Restart; control commands reject a fingerprint mismatch. |
+| Storage ownership | One runtime owns one root at a time | Use normal shutdown or the exact lock-recovery procedure; never delete a broad directory to silence a lock. |
+| Persistence | Development worlds reopen; temporary test storage follows test-runtime cleanup | Reset/destroy affect one selected world. Local state is not a backup or shared database. |
+| Installation | Node.js 24 and pnpm; plugins may use native dependencies | A missing prebuilt binary may require a compiler toolchain before runtime behavior can be tested. |
 
-The server accepts only `127.0.0.1`, `localhost`, or `::1` and serves plain HTTP. This is appropriate
-for a developer machine, a local test process, or an isolated CI worker. It is not evidence about:
+Configuration imports and plugins have the Node process's filesystem and network privileges. Keep
+them trusted and free of unrelated import-time side effects. [Configuration](/configuration) covers
+validation and restart effects; [Local security model](/security) covers authority and data handling.
 
-- public DNS, TLS termination, or requests crossing a real network;
-- external account permissions, quotas, dashboard configuration, or provider credentials;
-- production load, latency, partial infrastructure failure, or multi-region behavior;
-- the security of a remotely reachable service.
-
-Use provider-facing or infrastructure tests for claims that depend on those properties. Keep them
-focused on the external boundary they alone can prove.
-
-## Configuration changes require a restart
-
-The runtime resolves its config when it starts. Saving the module does not update a running daemon,
-and existing instances cannot override the resolved template. The CLI rejects a running daemon when
-its config fingerprint no longer matches the project it loaded.
-
-Configuration is executable Node.js code. Importing it can execute dependencies, including installed
-plugins. Treat both as trusted development code, and keep config imports free of unrelated side
-effects. [Configuration](/configuration) defines discovery, path resolution, validation, and the
-effect of config changes on stored worlds.
-
-## Storage has one owner
-
-Only one runtime may own a storage root at a time. Persistent development worlds can reopen after a
-daemon restart. Temporary test storage belongs to the test runtime and is removed only after owned
-instances are destroyed and runtime cleanup succeeds.
-
-Reset and destroy affect one named world; neither is a project-wide cleanup command. Local storage
-is not a backup or shared database. Keep it out of source control and build artifacts. If startup
-reports a storage lock, follow
-[the exact recovery procedure](/diagnosing#recover-a-storage-lock-safely) instead of deleting a broad
-directory. [Integration testing](/testing#know-what-the-test-runtime-owns) defines test ownership and
-cleanup.
-
-## Installation may need native tooling
-
-The supported baseline is Node.js 24 and pnpm. A plugin may include native dependencies; the
-first-party Slack and Stripe plugins use `better-sqlite3`. When no matching prebuilt binary exists,
-installation may require a local compiler toolchain.
-
-Resolve installation failures before interpreting runtime or emulated-API behavior: neither has
-started yet. For failures after startup, preserve the first broken boundary and follow
+Persistent and temporary storage should stay out of source control and build artifacts. If startup
+reports a lock, follow [the exact recovery procedure](/diagnosing#recover-a-storage-lock-safely).
+For failures after startup, preserve the first broken boundary and use
 [Diagnose a failing scenario](/diagnosing).
