@@ -132,6 +132,9 @@ importers:
       '@slack/bolt':
         specifier: 5.0.0
         version: 5.0.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@7.29.0)
+      undici:
+        specifier: 7.29.0
+        version: 7.29.0
     devDependencies:
       '@localhost2137/slack':
         specifier: workspace:*
