@@ -1,7 +1,6 @@
 {
 	"name": "@localhost2137/slack",
 	"version": "0.0.0",
-	"private": true,
 	"type": "module",
 	"engines": {
 		"node": ">=24"
@@ -16,6 +15,9 @@
 		"dist",
 		"README.md"
 	],
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "tsc -b",
 		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
