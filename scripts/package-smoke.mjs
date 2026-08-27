@@ -12,13 +12,13 @@ const placeholderPackageBins = Object.freeze(
 		["create-localhost2137-plugin", "create-localhost2137-plugin"],
 	]),
 );
+const hostPeerPackages = Object.freeze([
+	"@localhost2137/plugin-testkit",
+	"@localhost2137/slack",
+	"@localhost2137/stripe",
+]);
 
-function runPnpm(
-	arguments_,
-	workingDirectory = repositoryRoot,
-	stdio = "inherit",
-	environment,
-) {
+function runPnpm(arguments_, workingDirectory = repositoryRoot, stdio = "inherit", environment) {
 	const result = spawnSync(pnpmExecutable, arguments_, {
 		cwd: workingDirectory,
 		...(environment === undefined ? {} : { env: environment }),
@@ -175,6 +175,22 @@ async function assertPlaceholderPackages(consumerDirectory, availablePackages) {
 		const result = runPnpm(["exec", binName], consumerDirectory, ["ignore", "pipe", "pipe"]);
 		if (result.stdout.toString() !== "To be implemented\n" || result.stderr.length !== 0) {
 			throw new Error(`Packed ${packageName} did not print its exact placeholder output`);
+		}
+	}
+}
+
+async function assertHostPeerRelease(consumerDirectory, hostManifest) {
+	if (typeof hostManifest.version !== "string" || hostManifest.version === "") {
+		throw new Error("Packed localhost2137 package does not declare a version");
+	}
+	for (const packageName of hostPeerPackages) {
+		const manifest = await readJson(
+			join(consumerDirectory, "node_modules", ...packageName.split("/"), "package.json"),
+		);
+		if (manifest.peerDependencies?.localhost2137 !== hostManifest.version) {
+			throw new Error(
+				`Packed ${packageName} must peer-depend exactly on localhost2137 ${hostManifest.version}`,
+			);
 		}
 	}
 }
@@ -731,7 +747,7 @@ void packedPlugin({ config: { token: "fixture" } });
 		);
 		await writeFile(
 			join(consumerDirectory, "pnpm-workspace.yaml"),
-			'packages:\n  - "."\n\nallowBuilds:\n  better-sqlite3: true\n  esbuild: true\n',
+			'packages:\n  - "."\n\nautoInstallPeers: false\nstrictPeerDependencies: true\n\nallowBuilds:\n  better-sqlite3: true\n  esbuild: true\n',
 		);
 		await writeFile(
 			join(consumerDirectory, "consumer.ts"),
@@ -768,6 +784,7 @@ void packedPlugin({ config: { token: "fixture" } });
 		const installedHostManifest = await readJson(
 			join(consumerDirectory, "node_modules/localhost2137/package.json"),
 		);
+		await assertHostPeerRelease(consumerDirectory, installedHostManifest);
 		if (installedHostManifest.bin?.localhost !== "./dist/bin.js") {
 			throw new Error("Packed localhost2137 package does not declare the localhost binary");
 		}
