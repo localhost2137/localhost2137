@@ -448,12 +448,69 @@ assert(!testing?.includes("it always attempts reconciliation after"));
 assert(testing?.includes("The remote client is intentionally untyped"));
 assert(!testing?.includes("one instance per test worker process, all on different ports"));
 const virtualTime = content.get("virtual-time.mdx");
+const clockTransitionTest = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/clock-transition.test.ts"),
+	"utf8",
+);
+assert(
+	virtualTime?.includes(
+		titledCodeBlock("ts", "test/clock-transition.test.ts", clockTransitionTest),
+	),
+	"Virtual-time reference must match the checked public transition test.",
+);
+assert.equal(
+	virtualTime?.match(/```[a-z]+[^\n]*\n/)?.[0],
+	'```ts title="test/clock-transition.test.ts"\n',
+	"Virtual-time reference must lead with the checked public transition.",
+);
+const pendingClockEnvelope = {
+	error: {
+		code: "INSTANCE_MUTATION_COMMITTED",
+		correlationId: "adapter-correlation",
+		details: {
+			advanceId: "advance_safe",
+			from: "2026-01-01T00:00:00.000Z",
+			mode: "pinned",
+			reconciliationPending: true,
+			to: "2026-01-01T00:00:01.000Z",
+		},
+		message: "The clock moved, but time reconciliation remains pending.",
+	},
+};
+assert(
+	virtualTime?.includes(
+		titledCodeBlock(
+			"json",
+			"tested control response",
+			JSON.stringify(pendingClockEnvelope, null, 2),
+		),
+	),
+	"Virtual-time committed failure must match the tested public control envelope.",
+);
+const controlErrorMappingTests = await readFile(
+	join(repositoryRoot, "packages/localhost2137/test/control/control-error-mapping.test.ts"),
+	"utf8",
+);
+for (const field of [
+	'code: "INSTANCE_MUTATION_COMMITTED"',
+	'correlationId: "adapter-correlation"',
+	'advanceId: "advance_safe"',
+	"reconciliationPending,",
+	'from: "2026-01-01T00:00:00.000Z"',
+	'to: "2026-01-01T00:00:01.000Z"',
+]) {
+	assert(
+		controlErrorMappingTests.includes(field),
+		`Clock error evidence lost tested field: ${field}`,
+	);
+}
 assert(virtualTime?.includes("Task tracking is a separate concern"));
 assert(virtualTime?.includes("`01s`"));
 assert(virtualTime?.includes("safe integer of milliseconds"));
 assert(virtualTime?.includes("In real mode, they add 60 days"));
 assert(virtualTime?.includes("does not expose the underlying cause"));
 assert(!virtualTime?.includes("Fix the reported plugin"));
+assert(!virtualTime?.includes("arrange durable plugin state"));
 const callbacks = content.get("callbacks.mdx");
 for (const [title, path] of [
 	["src/bot.ts", "examples/slack-ping-bot/src/bot.ts"],

@@ -1,170 +1,152 @@
 ---
 title: Virtual time and asynchronous work
-description: Advance instance clocks deliberately, observe reconciled service behavior, and wait at the correct completion boundary without wall-clock sleeps.
+description: Look up clock modes, duration grammar, public transition results, idle scope, and committed-failure recovery.
 ---
 
-Every instance owns a durable clock. Plugin code sees instance time only when it reads
-`ctx.clock.now()`; code that reads `Date.now()`, an SDK clock, or another source still sees that
-source. Task tracking is a separate concern: it controls which work the runtime waits for and which
-failures it surfaces, not which clock the work reads.
+Every instance owns its clock. This checked public test shows the complete `status()`, `advance()`,
+`idle()`, and cleanup shape:
 
-Virtual time is therefore useful only when the behavior under test belongs to a plugin and the
-installed plugin says that advancement drives it.
+```ts title="test/clock-transition.test.ts"
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
 
-## Choose a mode from the claim
+it("reports one exact instance-clock transition", async () => {
+	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+	try {
+		const instance = await runtime.createInstance();
+		try {
+			expect(await instance.clock.status()).toEqual({
+				mode: "pinned",
+				now: "2026-01-01T00:00:00.000Z",
+			});
 
-Configure one clock mode in `localhost.config.ts`:
+			const advanced = await instance.clock.advance("2h");
+			expect(advanced).toMatchObject({
+				from: "2026-01-01T00:00:00.000Z",
+				mode: "pinned",
+				to: "2026-01-01T02:00:00.000Z",
+			});
+			expect(advanced.advanceId.length).toBeGreaterThan(0);
 
-```ts title="localhost.config.ts"
-import { defineConfig } from "localhost2137";
-
-export default defineConfig({
-  clock: {
-    mode: "pinned",
-    startAt: "2026-01-01T00:00:00.000Z",
-  },
-  services: {},
+			await instance.idle();
+			expect(await instance.clock.status()).toEqual({
+				mode: "pinned",
+				now: "2026-01-01T02:00:00.000Z",
+			});
+		} finally {
+			await instance.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
 });
 ```
-
-| Claim | Mode | Why |
-| --- | --- | --- |
-| A plugin expires, renews, retries, or schedules work at an exact emulator instant | Pinned | Time stays at `startAt` until an explicit advance. |
-| A callback signature or SDK replay check must agree with machine time | Real | Plugin time follows wall time, plus any explicit persisted offset. |
-| The application itself runs a timer or compares `Date.now()` | Either is insufficient alone | Supply an application clock seam or wait for the application's own completion boundary. |
-| The real provider runs a hosted scheduler | Neither proves provider execution | Keep a provider-facing check for the hosted behavior. |
-
-A pinned clock in a persistent world remains fixed across daemon restarts. A real clock keeps moving
-with wall time and retains any offset added by explicit advances. Advancing real mode can therefore
-move plugin timestamps outside an SDK's wall-clock replay window. The clock belongs to the instance:
-creating or resetting a world starts it from the configured clock state, while restarting the daemon
-keeps a persistent world's current clock.
-
-[What determinism means](/determinism#runtime-mechanisms-have-defined-scopes) covers the other
-sources of variation that neither mode controls.
-
-## Inspect one exact transition
-
-Read the selected world before moving it:
 
 ```sh
-pnpm exec localhost clock status --instance dev --json
-pnpm exec localhost clock advance 2h --instance dev --json
+pnpm --filter @localhost2137/example-getting-started test
 ```
 
-Programmatic tests receive the same transition data:
+The clock moves only because the test calls `advance("2h")`. `idle()` does not move it.
 
-```ts
-const before = await instance.clock.status();
-expect(before).toEqual({
-  mode: "pinned",
-  now: "2026-01-01T00:00:00.000Z",
-});
+## Choose a mode
 
-const advanced = await instance.clock.advance("2h");
-expect(advanced).toMatchObject({
-  from: "2026-01-01T00:00:00.000Z",
-  mode: "pinned",
-  to: "2026-01-01T02:00:00.000Z",
-});
-expect(advanced.advanceId.length).toBeGreaterThan(0);
-```
+The checked config imported above sets
+`clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" }`.
 
-Durations are positive whole values without leading zeroes followed by `ms`, `s`, `m`, `h`, `d`, or
-`w`. Values such as `01s`, `1.5h`, `0s`, `-1d`, and `1month` are rejected. A syntactically valid
-duration must also fit in a safe integer of milliseconds, and advancing it must keep the clock inside
-the JavaScript `Date` range. There is no month or year unit because their length depends on a
-calendar. A plugin may define a fixed business interval—such as the first-party Stripe plugin's
-exact 30-day recurring period—but that is plugin behavior, not duration syntax.
+| Claim | Mode | Consequence |
+| --- | --- | --- |
+| Plugin work at an exact emulator instant | `{ mode: "pinned", startAt }` | Time stays at the RFC 3339 `startAt` value until explicit advancement. |
+| Plugin timestamps must follow machine time | `{ mode: "real" }` | Time follows wall time plus a persisted offset added by advances. |
+| Application timers or `Date.now()` | Neither controls them | Give the application its own clock seam or completion boundary. |
+| Provider-hosted scheduling | Neither executes it | Keep a provider-facing check. |
 
-An advance adds the requested duration. It does not set an absolute timestamp. In pinned mode, two
-successful `advance("30d")` calls move the clock by exactly 60 days. In real mode, they add 60 days
-to its persisted offset while wall time continues to pass. Every successful call receives a
-different advance ID.
+Plugin code sees instance time only through its context clock. Code that reads `Date.now()`, an SDK
+clock, or another process still sees that source. Task tracking is a separate concern: it controls
+which work the runtime waits for and which failures it surfaces, not which clock that work reads.
 
-## What a successful advance includes
+A pinned clock stays fixed across daemon restarts. A real clock keeps moving and retains its explicit
+offset. New and reset worlds start from config; an existing persistent world retains its current
+clock after restart.
 
-The runtime first commits an `{ advanceId, from, to }` window to the instance. It then presents that
-window to configured services in stable order. A service with `onTimeAdvanced` decides which of its
-deadlines were crossed, persists the corresponding effects, and acknowledges that advance ID.
+## Duration grammar
 
-Before acknowledging each service, the runtime waits for tracked work started during its
-reconciliation and surfaces failures from that scope. A successful `clock.advance()` therefore means
-the clock moved and every configured service finished reconciling that committed window. It does not
-mean that every application job caused by a delivered callback has finished.
+| Accepted | Milliseconds |
+| --- | ---: |
+| `1ms` | `1` |
+| `2s` | `2000` |
+| `3m` | `180000` |
+| `4h` | `14400000` |
+| `30d` | `2592000000` |
+| `2w` | `1209600000` |
 
-The runtime does not call a service once per deadline. One `30d` transition is one window; the plugin
-may create zero, one, or many effects inside it. Splitting a transition into two `15d` calls creates
-two windows. Treat the split and combined results as equivalent only when the plugin documents and
-tests that property.
+Durations are positive whole values without leading zeroes. `01s`, `1.5h`, `0s`, `-1d`, and
+`1month` are rejected. The parsed result must fit a safe integer of milliseconds, and the resulting
+clock must fit the JavaScript `Date` range. Month and year units do not exist.
 
-The runtime also does not invent time behavior for a plugin with no `onTimeAdvanced` hook. Its clock
-still moves, but service state changes only when the plugin implements and documents a reaction to
-that window.
+Advance adds a duration; it never sets an absolute timestamp. Two successful `advance("30d")` calls
+move pinned time by exactly 60 days. In real mode, they add 60 days to the persisted offset while
+wall time continues to pass. Each successful window has a new `advanceId`.
 
-## Use time and completion in the right order
+## What success means
 
-A time-based application scenario normally has three separate boundaries:
+| Awaited call | Established | Not established |
+| --- | --- | --- |
+| `clock.status()` | Current instance mode and RFC 3339 time | Any other clock source |
+| `clock.advance(duration)` | Window committed; each configured service reconciled and acknowledged it; tracked reconciliation work settled | Application queues, SDK timers, external systems |
+| `idle()` | Currently registered work for that instance settled or failed | Future scheduled retries, application jobs, untracked promises |
 
-```text
-arrange durable plugin state
-  -> advance plugin time and reconcile the window
-  -> wait for the application's observable completion
-```
+An advance commits `{ advanceId, from, to }`, presents it to configured services in stable order,
+waits for tracked work started during reconciliation, and then records acknowledgements. One `30d`
+call is one window; a plugin may produce zero, one, or many effects in it. Two `15d` calls are two
+windows and are equivalent only when that plugin documents and tests the invariant.
 
-For example, a subscription test can create a subscription through the application's normal SDK,
-advance the instance by the plugin's documented billing interval, and inspect the resulting invoice
-through a control operation. If webhook handling writes to an application database after returning
-its HTTP response, the test must also wait for that database or job boundary.
+A plugin without `onTimeAdvanced` still observes the new clock, but the runtime invents no service
+behavior. A retry stored for a future virtual instant is not currently tracked work; `idle()` can
+settle the failed attempt while the retry remains scheduled. Advance to the plugin's documented
+deadline to run it.
 
-Use `await instance.idle()` after an ordinary operation starts callbacks or other tracked plugin
-work. A successful clock advance already waits for work registered by its time-reconciliation hooks,
-so a second idle call does not extend that guarantee into the application. It can still be useful
-after a later operation, but it is not a general “everything is done” call.
-
-A retry persisted for a future virtual instant is not current tracked work. `idle()` can settle the
-failed attempt while the retry remains scheduled in plugin state. Move time again when the plugin's
-documented retry deadline is due.
-
-[Callbacks and webhooks](/callbacks#what-idle-establishes) separates delivery settlement from
-application completion. [Integration testing](/testing#start-one-typed-in-process-world) contains
-the complete first-party recurring-billing example.
+For callback-driven application effects, first await the operation or clock transition, then await
+the application's own database, queue, or job boundary. A second `idle()` does not extend runtime
+tracking into application code. [Callbacks and webhooks](/callbacks#what-idle-establishes) shows an
+actual receiver loop.
 
 ## Recover a committed failure without moving twice
 
-Clock advancement is durable because a process can stop after the clock moves but before every
-service acknowledges the window. An `INSTANCE_MUTATION_COMMITTED` control error means the clock
-already moved. Its error details contain `advanceId`, `from`, `to`, `mode`, and
-`reconciliationPending`.
+This is the exact tested control envelope when the clock committed but reconciliation remains
+pending. Runtime-generated `correlationId` and `advanceId` values differ in a real process.
+
+```json title="tested control response"
+{
+  "error": {
+    "code": "INSTANCE_MUTATION_COMMITTED",
+    "correlationId": "adapter-correlation",
+    "details": {
+      "advanceId": "advance_safe",
+      "from": "2026-01-01T00:00:00.000Z",
+      "mode": "pinned",
+      "reconciliationPending": true,
+      "to": "2026-01-01T00:00:01.000Z"
+    },
+    "message": "The clock moved, but time reconciliation remains pending."
+  }
+}
+```
 
 | Error state | Meaning | Next action |
 | --- | --- | --- |
-| `reconciliationPending: true` | At least one service has not acknowledged the committed window. | Identify and fix the cause from available delivery or plugin evidence, project configuration, and current state. A persistent instance resumes pending work during restart before becoming ready; calling advance again in the running daemon with the original duration resumes the same window. |
-| `reconciliationPending: false` | Reconciliation completed, but a storage operation reported a durability warning after committing. | Inspect current clock and service state. Do not repeat the duration as a repair. |
-| A different error code | The committed-mutation contract does not apply. | Read the error and current clock status before deciding whether anything moved. |
+| `reconciliationPending: true` | At least one service has not acknowledged the committed window. | Correct the service/config cause. Restart resumes persistent pending work; the same duration in the running daemon resumes the original window. |
+| `reconciliationPending: false` | Reconciliation finished, but a durability check failed after commit. | Inspect clock and service state. Do not repeat the duration as repair. |
+| Another error code | The committed-mutation contract does not apply. | Read current status before deciding whether anything moved. |
 
-While reconciliation remains pending, an advance with a different duration is rejected rather than
-creating a second window. If an unacknowledged service was removed from config, restore the prior
-service configuration and restart so the existing window can finish. Do not reset or delete the
-world merely to hide a pending transition.
+A different duration is rejected while reconciliation is pending. If a service owing an
+acknowledgement was removed, restore its prior config and restart. Do not reset or destroy the world
+to hide the pending transition.
 
-The public error has a generic message and does not expose the underlying cause or create a
-lifecycle log entry. The CLI prints that message and its boundary-scoped correlation ID;
-programmatic control clients also expose the window details on `ControlApiError`. Use available
-delivery and plugin evidence, project configuration, and current state to investigate. Use the
-window details and current clock status instead of inferring recovery from the duration you
-originally requested.
+The public error does not expose the underlying cause. The CLI prints the generic message and
+boundary correlation ID; `ControlApiError` also exposes the safe window details. Inspect available
+delivery/plugin evidence, config, and state rather than retrying from memory.
 
-[Diagnose a failing scenario](/diagnosing#treat-asynchronous-failures-as-evidence) explains committed
-mutations alongside lifecycle conflicts and boundary-scoped logs.
-
-## Keep the resulting claim narrow
-
-A useful virtual-time test can establish that the installed plugin saw a precise time window,
-reconciled its documented state, settled its tracked work, and produced the observed local result.
-It cannot establish that application clocks, SDK internals, external queues, DNS, TLS, or a real
-provider scheduler behaved the same way.
-
-State the starting instant, duration, installed plugin version, application boundary, and observed
-effect in the test. That is enough to make the scenario repeatable without calling the whole system
-deterministic.
+[Diagnose a failing scenario](/diagnosing#treat-asynchronous-failures-as-evidence) covers the first
+broken boundary. [What determinism means](/determinism) separates clock control from repeatability;
+[Provider compatibility](/compatibility) limits what the observed transition can claim.
