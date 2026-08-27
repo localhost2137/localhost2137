@@ -1048,7 +1048,10 @@ assert(!pluginTestkitReadme.includes("returned 18 named cases"));
 const workspacePolicy = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
 assert(workspacePolicy.includes(nativeBuildPermission));
 const packageSmoke = await readFile(join(repositoryRoot, "scripts/package-smoke.mjs"), "utf8");
-assert(packageSmoke.includes('"allowBuilds:\\n  better-sqlite3: true\\n'));
+assert(
+	packageSmoke.includes("allowBuilds:\\n  better-sqlite3: true\\n"),
+	"Package smoke workspace must permit the better-sqlite3 native build.",
+);
 for (const [file, source] of content) {
 	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(
