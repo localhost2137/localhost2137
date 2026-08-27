@@ -139,15 +139,21 @@ before posting them. Copy this source-synced section into a report and verify ev
 Destroy only explicitly owned worlds. Remove an explicitly owned temporary directory only after its
 runtime has closed. Never turn cleanup into a broad or wildcard path.
 
-## Browser tests stay on the public side
+## Application environment is not containment
 
-Application and browser code receive only plugin connection values. A browser test needing
-privileged arrangement should perform it in the Node test harness or CLI, then pass only
-provider-shaped IDs or application-visible state into the browser.
+`localhost env` and `localhost run` do not inject the control token; they supply only plugin
+connection values. That reduces accidental exposure through application environment. It does not
+contain a same-user process: a Node process with the user's filesystem privileges may read project
+files, including the stored control token, and call the control API.
 
-This keeps application compromise from automatically granting enumerate/reset/seed/destroy
-authority. Origin rejection is an additional guard, not a sandbox and not protection for a leaked
-token.
+A browser test needing privileged arrangement should perform it in the Node test harness or CLI,
+then pass only provider-shaped IDs or application-visible state into the browser. Origin rejection
+is an additional guard against browser-origin control traffic, not a sandbox or hostile-local-code
+boundary.
+
+Run hostile application code under a separate OS/process account or in an isolated CI boundary
+appropriate to the threat model. Merely starting it as another process under the same user is not
+isolation.
 
 [Runtime boundaries](/limitations) identifies claims requiring another environment.
 [Diagnose a failing scenario](/diagnosing) shows how to preserve useful evidence without deleting
