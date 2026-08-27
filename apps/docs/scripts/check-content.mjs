@@ -257,10 +257,10 @@ for (const command of [
 	"pnpm exec localhost env --format json",
 	"pnpm exec localhost run -- pnpm dev",
 	"pnpm exec localhost describe slack --json",
-	"pnpm exec localhost exec slack send-message",
-	"pnpm exec localhost exec slack list-messages",
+	"pnpm exec localhost exec slack create-user --name Grace --json",
 	"pnpm exec localhost logs slack --tail 50 --json",
 	"pnpm exec localhost instance create review-42 --seed",
+	"--instance review-42 --name Lin --json",
 	"pnpm exec localhost instance destroy review-42",
 ]) {
 	assert(
@@ -269,6 +269,8 @@ for (const command of [
 	);
 }
 assert(!existingApplication?.includes("replace-with-"));
+assert(!existingApplication?.includes("list-messages"));
+assert(existingApplication?.includes("only for the crash-course config's first unseeded dev world"));
 
 const diagnosing = content.get("diagnosing.mdx");
 assert(diagnosing?.includes("serialized diagnostic identifies the selected config path"));

@@ -53,8 +53,10 @@ pnpm exec localhost dev
 ```
 
 ```sh
-# Terminal 2: arrange dev, inspect the app-facing values, then run the normal app command
-pnpm exec localhost seed
+# Terminal 2: the next line is only for the crash-course config's first unseeded dev world
+# pnpm exec localhost seed
+
+# Inspect the app-facing values, then run the normal app command
 pnpm exec localhost env --format json
 pnpm exec localhost run -- pnpm dev
 ```
@@ -75,17 +77,15 @@ Use the concrete service key from `localhost.config.ts`. The crash-course projec
 # Discover the installed plugin's actual control surface
 pnpm exec localhost describe slack --json
 pnpm exec localhost exec slack --help
-pnpm exec localhost exec slack send-message --help
+pnpm exec localhost exec slack create-user --help
 
-# Arrange through a control operation
-pnpm exec localhost exec slack send-message \
-  --channel general --from Ada --text "message before the app runs" --json
+# Arrange state the application reads
+pnpm exec localhost exec slack create-user --name Grace --json
 
-# Exercise the application through provider-shaped traffic
+# Exercise the application through provider-shaped traffic; its output includes Grace
 pnpm exec localhost run -- pnpm dev
 
-# Inspect the same instance, then collect boundary evidence
-pnpm exec localhost exec slack list-messages --channel general --json
+# Collect evidence from that same service and instance
 pnpm exec localhost logs slack --tail 50 --json
 ```
 
@@ -102,16 +102,11 @@ interfaces reach one state without being interchangeable.
 
 ```sh
 pnpm exec localhost instance create review-42 --seed
-pnpm exec localhost exec slack send-message \
-  --instance review-42 \
-  --channel general \
-  --from Ada \
-  --text "isolated review world" \
-  --json
+pnpm exec localhost exec slack create-user \
+  --instance review-42 --name Lin --json
 pnpm exec localhost env --instance review-42 --format json
+# Output includes Lin and does not include Grace
 pnpm exec localhost run --instance review-42 -- pnpm dev
-pnpm exec localhost exec slack list-messages \
-  --instance review-42 --channel general --json
 pnpm exec localhost logs slack --instance review-42 --tail 50 --json
 pnpm exec localhost instance destroy review-42
 ```
