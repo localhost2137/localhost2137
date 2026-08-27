@@ -718,6 +718,20 @@ assert(
 	),
 );
 assert(pluginAuthoring?.includes("A state-version-1 plugin has no honest predecessor"));
+const firstPlugin = content.get("plugins/first-plugin.mdx");
+for (const [title, path] of [
+	["src/status-plugin.ts", "examples/status-plugin/src/status-plugin.ts"],
+	["localhost.config.ts", "examples/status-plugin/localhost.config.ts"],
+	["test/status-plugin.test.ts", "examples/status-plugin/test/status-plugin.test.ts"],
+]) {
+	const example = await readFile(join(repositoryRoot, path), "utf8");
+	assert(
+		firstPlugin?.includes(titledCodeBlock("ts", title, example)),
+		`First-plugin tutorial must match ${path}.`,
+	);
+}
+assert(firstPlugin?.includes("routes and operations call shared domain behavior"));
+assert(firstPlugin?.includes("It does not establish transaction"));
 const pluginUsing = content.get("plugins/using.mdx");
 assert(pluginUsing?.includes("pnpm add -D localhost2137 <plugin-package> hono@^4.13.4 zod@^4.4.3"));
 assert(pluginUsing?.includes("There is no plugin registry or automatic package discovery"));
