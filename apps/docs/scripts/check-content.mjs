@@ -164,6 +164,8 @@ assert(!virtualTime?.includes("Fix the reported plugin"));
 const callbacks = content.get("callbacks.mdx");
 assert(callbacks?.includes("timeout and retry behavior"));
 assert(callbacks?.includes("Those details are part of the plugin's compatibility surface"));
+assert(callbacks?.includes("Separate instance storage never proves callback routing"));
+assert(callbacks?.includes("When an installed plugin does"));
 const pluginAuthoring = content.get("plugins/authoring.mdx");
 assert(
 	pluginAuthoring?.includes("Importing the plugin, or a config that mounts it, must be inert"),
@@ -193,6 +195,10 @@ const pluginUsing = content.get("plugins/using.mdx");
 assert(pluginUsing?.includes("There is no plugin registry or automatic package discovery"));
 assert(pluginUsing?.includes("Temporary test storage limits what world state survives the test"));
 assert(pluginUsing?.includes("`describe` does not enumerate provider routes or connection values"));
+assert(pluginUsing?.includes("Unscoped `localhost describe --json` returns one summary"));
+assert(pluginUsing?.includes("scoped CLI output intentionally strips `pluginId`"));
+assert(pluginUsing?.includes("not a compatibility manifest or health check"));
+assert(pluginUsing?.includes("A `seed_failed` instance remains addressable"));
 assert(pluginUsing?.includes("`stateVersion` describes durable storage only"));
 assert(pluginUsing?.includes("Do not use reset as a rollback"));
 for (const [file, source] of content) {

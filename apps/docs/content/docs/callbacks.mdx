@@ -117,9 +117,14 @@ provider rule on its behalf.
 
 ## Parallel receivers require a routing rule
 
-Several instances can deliver to one configured callback URL. Their service state remains isolated,
-but one application receiver, database, or queue may still be shared. Parallel tests need one of
-three deliberate designs:
+Separate instance storage never proves callback routing. Some plugins define one callback
+destination in mount config. When an installed plugin does, every instance of that mount uses the
+same configured destination even though its service state remains isolated. Other plugins may define
+different destination or correlation behavior; inspect the installed plugin contract before running
+parallel deliveries.
+
+When several instances deliver to one receiver, database, or queue, parallel tests need one of three
+deliberate designs:
 
 - correlate callbacks using provider-shaped event data the plugin actually supplies;
 - serialize scenarios that cannot be correlated safely;

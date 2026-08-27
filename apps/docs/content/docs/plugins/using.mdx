@@ -84,10 +84,18 @@ pnpm exec localhost describe "$localhost_service_key" --json
 pnpm exec localhost exec "$localhost_service_key" --help
 ```
 
-The service description reports the configured key, plugin ID, state version, running status, and
-operation inventory. For each operation it includes a description, input and output schema metadata,
-and whether the generated CLI can use flags or requires JSON input. Operation-specific help turns
-that metadata into the invocation accepted by this installed version:
+The two `describe` forms return different projections:
+
+- Unscoped `localhost describe --json` returns one summary per configured service: `name`,
+  `description`, `pluginId`, `stateVersion`, and operation keys. It does not include lifecycle
+  status.
+- Scoped `localhost describe "$localhost_service_key" --json` returns `name`, `description`, and a
+  full metadata object for each operation. That metadata contains input and output schemas plus the
+  generated CLI representation. The scoped CLI output intentionally strips `pluginId`,
+  `stateVersion`, and backend status.
+
+Operation-specific help turns the same metadata into the invocation accepted by this installed
+version:
 
 ```sh
 localhost_operation_key="replace-with-discovered-operation-key"
@@ -98,13 +106,15 @@ Live description is deliberately narrower than plugin documentation:
 
 | It establishes | It does not establish |
 | --- | --- |
-| Which plugin and state format are mounted under the selected key. | Which provider routes, SDK versions, callbacks, or semantic edge cases are supported. |
-| Which operations exist and which JSON shapes their adapters validate. | That an operation models provider behavior correctly. |
-| Whether the selected service is currently running. | That the application can authenticate, encode a request, or handle a response. |
+| The live daemon accepted the selected instance and, for scoped output, resolved the configured service key. | That the service lifecycle is healthy or its public API can answer requests. |
+| Which operation keys exist; scoped output also exposes their adapter schemas and CLI form. | That an operation models provider behavior correctly. |
+| The plugin ID and stored-format target shown by the unscoped summary. | Which provider routes, connections, SDK versions, callbacks, or semantic edge cases are supported. |
 
 `describe` does not enumerate provider routes or connection values. It is control-surface discovery,
-not a compatibility manifest. The daemon holds the definition loaded at startup, so restart it after
-changing the config or installed package before treating live description as current.
+not a compatibility manifest or health check. A `seed_failed` instance remains addressable and can
+be described even though it requires recovery before another seed. The daemon holds the definition
+loaded at startup, so restart it after changing the config or installed package before treating live
+description as current.
 
 ## Preserve the application interface
 
@@ -160,10 +170,12 @@ resolution fails rather than silently choosing one value. Set `exportEnv: false`
 mounts and pass typed connection values manually. This changes only the merged environment; routes,
 operations, and `instance[serviceKey].connection` remain available.
 
-Do not infer callback isolation from separate storage. Callback destinations are ordinary mount
-config, and several instances of one mount still share them. Read
-[Parallel receivers require a routing rule](/callbacks#parallel-receivers-require-a-routing-rule)
-before running callback scenarios concurrently.
+Do not infer callback isolation from separate storage. If the installed plugin defines one callback
+destination in mount config, every instance of that mount shares the configured destination. Another
+plugin may define a different routing or correlation contract; inspect it before running callback
+scenarios concurrently. The runtime does not add an instance header or rewrite callback URLs on the
+plugin's behalf. Read [Parallel receivers require a routing rule](/callbacks#parallel-receivers-require-a-routing-rule)
+for the resulting choices.
 
 ## Upgrade without confusing storage and compatibility
 
