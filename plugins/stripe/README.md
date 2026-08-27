@@ -9,12 +9,20 @@ virtual-time renewals without a Stripe account or real credentials.
 Install the runtime, plugin, and runtime host peers as development dependencies. Install Stripe Node
 as an application dependency:
 
-```sh
-pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3
-pnpm add stripe
+The plugin uses `better-sqlite3`. Before installing, add its project-scoped build permission to
+`pnpm-workspace.yaml` at the project root, or merge it into the existing `allowBuilds` map:
+
+```yaml
+allowBuilds:
+  better-sqlite3: true
 ```
 
-Omit the second command when the application already provides its supported Stripe client.
+```sh
+pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3
+pnpm add stripe@22.5.0
+```
+
+Omit the second command when the application already has that exact tested client version.
 
 ## Configure
 

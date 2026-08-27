@@ -12,6 +12,7 @@ import {
 const docsRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contentRoot = join(docsRoot, "content/docs");
 const repositoryRoot = resolve(docsRoot, "../..");
+const nativeBuildPermission = "allowBuilds:\n  better-sqlite3: true";
 
 const expectedPages = new Map([
 	["index.mdx", "/"],
@@ -273,7 +274,9 @@ assert(
 		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3",
 	),
 );
-assert(firstPartySlack?.includes("pnpm add @slack/bolt"));
+assert(firstPartySlack?.includes("pnpm add @slack/bolt@5.0.0"));
+assert(firstPartySlack?.includes(nativeBuildPermission));
+assert(!/^pnpm add @slack\/bolt\s*$/m.test(firstPartySlack ?? ""));
 assert(
 	firstPartySlack?.includes("Public Web API channel arguments deliberately require stored IDs"),
 );
@@ -291,7 +294,9 @@ assert(
 		"pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3",
 	),
 );
-assert(firstPartyStripe?.includes("pnpm add stripe"));
+assert(firstPartyStripe?.includes("pnpm add stripe@22.5.0"));
+assert(firstPartyStripe?.includes(nativeBuildPermission));
+assert(!/^pnpm add stripe\s*$/m.test(firstPartyStripe ?? ""));
 assert(firstPartyStripe?.includes("Products and prices are intentionally read-only through HTTP"));
 assert(firstPartyStripe?.includes("Stripe Node 22.5.0"));
 assert(firstPartyStripe?.includes("this plugin does not schedule a retry"));
@@ -303,12 +308,12 @@ for (const [readmePath, installCommand, clientCommand] of [
 	[
 		"plugins/slack/README.md",
 		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3",
-		"pnpm add @slack/bolt",
+		"pnpm add @slack/bolt@5.0.0",
 	],
 	[
 		"plugins/stripe/README.md",
 		"pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3",
-		"pnpm add stripe",
+		"pnpm add stripe@22.5.0",
 	],
 ]) {
 	const source = await readFile(join(repositoryRoot, readmePath), "utf8");
@@ -320,12 +325,21 @@ for (const [readmePath, installCommand, clientCommand] of [
 		source.includes(clientCommand),
 		`${readmePath} must include its application client command.`,
 	);
+	assert(
+		source.includes(nativeBuildPermission),
+		`${readmePath} must include the better-sqlite3 build permission.`,
+	);
+	assert(!/^pnpm add (?:@slack\/bolt|stripe)\s*$/m.test(source));
 	assert(!source.includes("pnpm exec vitest run plugins/"));
 	assert(!source.includes("../../examples/"));
 	assert(!/\bdeterministic\b/i.test(source));
 }
 const slackReadme = await readFile(join(repositoryRoot, "plugins/slack/README.md"), "utf8");
 assert(!/upgrades relocate|v0\.1|preserved-/.test(slackReadme));
+const workspacePolicy = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
+assert(workspacePolicy.includes(nativeBuildPermission));
+const packageSmoke = await readFile(join(repositoryRoot, "scripts/package-smoke.mjs"), "utf8");
+assert(packageSmoke.includes('"allowBuilds:\\n  better-sqlite3: true\\n'));
 for (const [file, source] of content) {
 	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(
