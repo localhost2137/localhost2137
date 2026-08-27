@@ -9,8 +9,11 @@ project's installed package supplies the binary.
 
 ## Select the project and world
 
-Every command first selects a config. Without an override, discovery walks upward from the current
-working directory. `--config` accepts one explicit path and can appear before or after a command:
+Commands that inspect or act on a project attempt to locate its config. Actions that require a
+resolved config stop when loading fails; `doctor` instead records the config-loading issue and
+continues its read-only inspection. Help-only invocations do not load config. Without an override,
+discovery walks upward from the current working directory. `--config` accepts one explicit path and
+can appear before or after a command:
 
 ```sh
 pnpm exec localhost --config ./localhost.config.ts doctor --json
@@ -209,10 +212,13 @@ does not parse plugin process output to obtain them.
 | `10` | Other plugin, runtime, lifecycle, or unexpected failure |
 | `130` | CLI interruption |
 
-Control failures are written as `error: <message>` on stderr. When the runtime supplied a
-correlation ID, the CLI appends it to that boundary's message. It does not expose structured error
-details; use `ControlApiError` from the programmatic client when recovery depends on fields such as a
-committed clock window.
+Direct control failures are written as `error: <message>` on stderr. When the runtime supplied a
+correlation ID, the CLI appends it to that boundary's message. A missing target instance is
+intentionally different: the CLI replaces `INSTANCE_NOT_FOUND` with a target-specific message that
+lists existing instance IDs and the exact `localhost instance create <id>` hint. That CLI-owned
+guidance omits the original correlation ID. The CLI does not expose structured error details; use
+`ControlApiError` from the programmatic client when recovery depends on fields such as a committed
+clock window.
 
 `localhost run` is the exception to the table: after a child starts, the command passes through that
 child's exit code, including signal-derived codes such as 129, 130, or 143.
