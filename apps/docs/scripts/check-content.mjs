@@ -205,6 +205,9 @@ const firstPartySlack = content.get("first-party/slack.mdx");
 assert(
 	firstPartySlack?.includes("Public Web API channel arguments deliberately require stored IDs"),
 );
+assert(firstPartySlack?.includes("ascending stored-ID order"));
+assert(!firstPartySlack?.includes("users in creation order"));
+assert(firstPartySlack?.includes("first character must be an ASCII lowercase letter or digit"));
 assert(firstPartySlack?.includes("There are at most four attempts"));
 assert(firstPartySlack?.includes("The tested client is `@slack/bolt` 5.0.0"));
 assert(firstPartySlack?.includes("Messages and pending deliveries cannot be seeded"));

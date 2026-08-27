@@ -145,7 +145,7 @@ return not found rather than a plausible success.
 | `createSubscription` | `customerId` and `priceId`; creates an active subscription, paid initial invoice, and `invoice.paid` event. |
 | `listInvoices` | Optional `customerId` and `subscriptionId`; returns matching invoices in creation order. |
 | `listEvents` | Optional type filter for `invoice.paid` or `invoice.payment_failed`; returns stable event IDs and invoice IDs. |
-| `setNextPaymentOutcome` | `subscriptionId` and `succeeded` or `failed`; consumes that choice once at the next renewal invoice. |
+| `setNextPaymentOutcome` | `subscriptionId` and `outcome` set to `succeeded` or `failed`; consumes that choice once at the next renewal invoice. |
 
 HTTP routes and operations use the same account state, but they prove different boundaries. Arrange
 the catalog through operations, make customer or subscription calls through the application's SDK

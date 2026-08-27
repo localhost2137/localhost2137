@@ -78,7 +78,7 @@ scalar. Authenticate with `Authorization: Bearer <bot token>` or a `token` field
 | Method | Supported inputs and behavior |
 | --- | --- |
 | `auth.test` | Returns the configured workspace and installed bot identity. |
-| `users.list` | Returns the bot and local users in creation order; accepts `limit` and `cursor`. |
+| `users.list` | Returns the bot and local users in ascending stored-ID order; accepts `limit` and `cursor`. Explicit seeded IDs therefore affect both order and cursor boundaries. |
 | `conversations.list` | Returns public channels, membership, and member counts; accepts `types=public_channel`, `exclude_archived`, `limit`, and `cursor`. All local channels are unarchived. |
 | `conversations.members` | Requires an exact channel ID; returns member IDs with `limit` and `cursor`. |
 | `conversations.history` | Requires an exact channel ID and bot membership; returns newest-first messages. Supports `oldest`, `latest`, `inclusive`, `limit`, and `cursor`. |
@@ -107,7 +107,7 @@ world. Use the Web API through the application for behavior the application itse
 | Operation | Input and effect |
 | --- | --- |
 | `createUser` | `name`, optional `admin`; returns the allocated user. Names are case-sensitive, trimmed, and limited to 80 characters. |
-| `createChannel` | `name`; normalizes it to lowercase, creates one public channel, and joins the bot. Valid names contain 1–80 letters, numbers, `_`, or `-`. |
+| `createChannel` | `name`; normalizes it to lowercase, creates one public channel, and joins the bot. The first character must be an ASCII lowercase letter or digit. Remaining characters may be ASCII lowercase letters, digits, `_`, or `-`; total length is 1–80. |
 | `addUserToChannel` | `channel` and `user`, each an ID or exact name; returns `added: false` when membership already exists. |
 | `sendMessage` | `channel`, `from`, `text`, optional `threadTs`; requires membership and returns the persisted message plus `eventId`, which is `null` when delivery is disabled. |
 | `listMessages` | `channel`, optional `limit` from 1 through 999; returns newest-first persisted messages without delivery metadata. |
