@@ -1,65 +1,203 @@
 ---
 title: Using plugins
-description: Evaluate an installed plugin's compatible API, control operations, connection values, and limits.
+description: Evaluate, mount, introspect, test, and upgrade an installed plugin without overstating what the runtime proves.
 ---
 
-localhost2137 is a plugin runtime. Installing the runtime does not imply that a particular service
-emulator exists or supports a particular provider feature. Treat the installed plugin package and
-its runtime description as the authority.
+localhost2137 is a plugin runtime. Installing the runtime does not install a service emulator, and
+installing a plugin package does not activate it. A project activates a plugin only by importing its
+factory and placing the returned descriptor under a service key in `localhost.config.ts`.
 
-## Inspect before wiring
+There is no plugin registry or automatic package discovery. The project config is the complete
+inventory of configured services.
 
-For an installed plugin, check:
+## Trust the package before importing it
 
-1. package exports and TypeScript declarations;
-2. configuration and connection fields;
-3. supported HTTP or SDK compatibility;
-4. control operations and their input/output schemas;
-5. persistence, callback, retry, and virtual-time behavior;
-6. deliberate omissions that affect the scenario.
+Plugins are trusted local code, not sandboxed extensions. Importing the config imports every plugin
+it references into the runtime process. A plugin can use the same Node.js and operating-system
+permissions as that process.
 
-With the daemon running, use live introspection:
+Before mounting a package, check its source and provenance, the exact installed version, its declared
+runtime version range, and the network destinations its config can contact. Read its lifecycle and
+migration notes before pointing it at persistent worlds. A support matrix is useful; executable
+compatibility tests are stronger evidence.
+
+`context.storage.path()` gives a cooperating plugin the supported isolated storage location. It is
+not an operating-system sandbox around arbitrary package code.
+Temporary test storage limits what world state survives the test; it does not reduce the privileges
+of trusted code. Do not evaluate an untrusted plugin by assuming a temporary runtime makes it safe.
+
+## Translate the application path into requirements
+
+Evaluate one application behavior, not a provider logo. Write down the path the application needs:
+
+| Question | Evidence to look for |
+| --- | --- |
+| Which SDK method, HTTP endpoint, or protocol does the application use? | A versioned support matrix and an executable test through that exact client or encoding. |
+| Which endpoint and credentials can the application configure? | Package types and documented connection values. |
+| What state must a test arrange, trigger, or inspect? | Documented operations and their live schemas. |
+| Does the path emit callbacks or delayed work? | Signature, timeout, retry, persistence, `idle()`, and virtual-time rules. |
+| Which data survives restart or changes across a package upgrade? | Persistence and migration tests using real historical state. |
+| What is intentionally absent? | Specific unsupported endpoints or semantics, not “partial support.” |
+
+Read documentation for the version actually installed in the project. A current website can describe
+a newer package. “SDK compatible” without a tested SDK version, method, and request path is not enough
+to choose an integration strategy.
+
+[Provider compatibility](/compatibility) breaks a broad compatibility claim into routing,
+transport, data, state, delivery, client, and version claims. [Choose the right test boundary](/test-boundaries)
+helps decide whether the missing evidence belongs in this emulator at all.
+
+## Mount it explicitly
+
+Follow the plugin package's own factory and config types. The value below one service key must be the
+descriptor returned by that factory; the runtime does not infer a package from the key.
+
+The chosen key becomes the route segment, storage namespace, CLI selector, and typed instance
+property for that mount. It does not have to equal the plugin ID. Renaming the key creates a new
+mount rather than moving the old state.
+
+Before starting a long-lived daemon, validate the resulting project config and storage view:
+
+```sh
+pnpm exec localhost doctor --json
+```
+
+This command still imports the executable config, which is why the trust decision comes first. It
+can report config schema paths, connection environment collisions, stored service identity
+conflicts, and other project issues without mutating storage. It does not run the plugin lifecycle
+or prove the provider API.
+
+For a first behavioral evaluation, prefer a focused test runtime with `storage: "temporary"` and
+`port: 0`. That keeps experimental world state out of the project's persistent `dev` instance and
+gives the test one cleanup owner. It is still a process-level trust boundary, not a sandbox.
+[Start one typed in-process world](/testing#start-one-typed-in-process-world) shows the owner pattern.
+
+## Inspect the live control contract
+
+After starting the daemon, inspect the definition it actually loaded. Replace the value below with a
+key from `localhost.config.ts`:
 
 ```sh
 localhost_service_key="replace-with-configured-service-key"
-localhost_operation_key="replace-with-discovered-operation-key"
+pnpm exec localhost describe --json
 pnpm exec localhost describe "$localhost_service_key" --json
 pnpm exec localhost exec "$localhost_service_key" --help
+```
+
+The service description reports the configured key, plugin ID, state version, running status, and
+operation inventory. For each operation it includes a description, input and output schema metadata,
+and whether the generated CLI can use flags or requires JSON input. Operation-specific help turns
+that metadata into the invocation accepted by this installed version:
+
+```sh
+localhost_operation_key="replace-with-discovered-operation-key"
 pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
 ```
 
-The service key comes from your config. Do not infer one plugin's fields or commands from another.
+Live description is deliberately narrower than plugin documentation:
+
+| It establishes | It does not establish |
+| --- | --- |
+| Which plugin and state format are mounted under the selected key. | Which provider routes, SDK versions, callbacks, or semantic edge cases are supported. |
+| Which operations exist and which JSON shapes their adapters validate. | That an operation models provider behavior correctly. |
+| Whether the selected service is currently running. | That the application can authenticate, encode a request, or handle a response. |
+
+`describe` does not enumerate provider routes or connection values. It is control-surface discovery,
+not a compatibility manifest. The daemon holds the definition loaded at startup, so restart it after
+changing the config or installed package before treating live description as current.
 
 ## Preserve the application interface
 
-Pass `instance.<service>.connection` into the application's existing provider adapter. Prefer the
-official SDK when the plugin documents compatibility with it. A plugin-supplied adapter is
-appropriate only when the SDK hardcodes behavior that prevents a path-scoped local endpoint.
+Use the plugin's connection values at the application's existing provider boundary. In a typed test,
+read them from `instance[serviceKey].connection`. For a daemon-managed application process, inspect
+the actual exported environment for the selected instance:
 
-Operations are privileged controls for local worlds, not production application dependencies. They
-may arrange, trigger, or inspect a scenario, but should not replace the provider-facing interaction
-that the test claims to verify. [Operations and emulated APIs](/operations-and-apis) explains the
-boundary with Slack and Stripe examples.
+```sh
+pnpm exec localhost env --format json
+```
+
+Environment output can include plugin-owned local credentials, so do not paste it into issue reports
+or logs without redaction. The `localhost dev` ready message is safer for routine inspection: it
+prints public service URLs and environment variable names, not connection values.
+
+Prefer the application's normal SDK or HTTP client when the plugin documents that interface. Use a
+plugin-supplied adapter only for a documented transport problem such as an SDK that fixes its origin
+while the local service is path-scoped. Do not add a general `if (localhost)` branch that changes
+business behavior.
+
+Operations remain outside production application code. They can arrange a local account, trigger an
+external actor or callback, and inspect state. They should not replace the provider-shaped request
+the test claims the application can make. [Operations and emulated APIs](/operations-and-apis)
+shows how those interfaces share one world without proving the same thing.
+
+## Prove the behavior, not the installation
+
+A package import, healthy daemon, and valid operation call prove that the basic runtime contract
+works. They do not prove the application integration. The acceptance test should cross every
+application boundary named by the behavior:
+
+1. Create an isolated world owned by the test.
+2. Arrange only the surrounding state through documented operations or seed data.
+3. Exercise the application through its normal SDK, HTTP client, callback handler, or public input.
+4. Await plugin work with `instance.idle()` and advance time only when the documented policy requires
+   it.
+5. Assert application behavior first, then inspect emulator state when the claim includes it.
+6. Destroy the test-owned world and close its runtime in guaranteed cleanup.
+
+When persistence matters, add a restart test. When isolation matters, run two simultaneous instances
+and make their expected states differ. When callbacks matter, test the exact signature, response
+classification, duplicate identity, and retry boundary the plugin claims. A happy operation result
+cannot stand in for any of those checks.
 
 ## Mounting and environment values
 
-The configured service key defines the public prefix `/{instance}/{service}`. Mounting the same
-plugin twice under different keys creates separate service state inside every instance.
+Two service keys can mount the same plugin factory with different config. Every instance then owns
+separate durable state for each key. This is useful for two accounts or regions, but application
+wiring must remain explicit.
 
-Plugins choose connection value and environment names. If two mounts export the same environment
-name, config resolution fails. Set `exportEnv: false` and pass typed connection values explicitly;
-do not rename variables after generation and imply that automatic multi-mount wiring exists.
+Plugins choose their environment variable names. If two mounts export the same name, config
+resolution fails rather than silently choosing one value. Set `exportEnv: false` on one or both
+mounts and pass typed connection values manually. This changes only the merged environment; routes,
+operations, and `instance[serviceKey].connection` remain available.
 
-## Evaluate a compatibility claim
+Do not infer callback isolation from separate storage. Callback destinations are ordinary mount
+config, and several instances of one mount still share them. Read
+[Parallel receivers require a routing rule](/callbacks#parallel-receivers-require-a-routing-rule)
+before running callback scenarios concurrently.
 
-A useful plugin states the endpoints and behaviors it supports, the SDK or request encodings it has
-actually exercised, and material differences from the external service. “Compatible” without a
-surface and executable test does not tell you whether an integration will work.
-[Provider compatibility](/compatibility) separates routing, transport, data, state, delivery, client,
-and version claims so this checklist can be applied to one application path.
+## Upgrade without confusing storage and compatibility
 
-When behavior is missing, report the precise gap. Do not add test-only responses around the plugin
-that make the application pass without exercising the intended service behavior.
+Changing the installed package does nothing to an already running daemon. On restart, every
+persistent world is reconciled against the new config before readiness. An increased `stateVersion`
+invokes the plugin's migration for older stored data; a failed migration can be corrected and
+retried from the recorded old version. A downgrade below stored state is rejected.
 
-When no installed plugin owns the behavior you need, [build your first plugin](/plugins/first-plugin)
-to learn the public authoring contract before choosing a package structure.
+`stateVersion` describes durable storage only. The same value says nothing about route, operation,
+connection, callback, or SDK compatibility. Re-run the application-facing acceptance test after an
+upgrade even when no migration runs.
+
+Test an upgrade against temporary or otherwise disposable state before applying it to a persistent
+world that matters. Do not use reset as a rollback: reset replaces service data. If startup reports
+a plugin ID or future-version conflict, restore compatible code or config and diagnose it before
+choosing to discard the world. [What changes do to existing worlds](/configuration#what-changes-do-to-existing-worlds)
+lists the exact restart effects.
+
+## Report a precise gap
+
+When the scenario fails, separate four possible gaps:
+
+- **Wiring:** the application used the wrong instance URL, mount key, credential, or callback
+  destination.
+- **Control:** the plugin lacks an operation or seed field needed to create a useful local world.
+- **Compatibility:** a provider route, encoding, response, SDK behavior, callback, or retry rule is
+  absent or inaccurate.
+- **Runtime:** generic mounting, isolation, lifecycle, operation adaptation, tracked work, or control
+  behavior fails independently of one provider rule.
+
+Report the installed package version, service key, instance ID, documented claim, redacted request
+or operation, observed result, and relevant correlation ID. Do not add an invented provider route or
+test-only response around the plugin to make the application pass. A narrow unsupported result is a
+useful product decision; a hidden compatibility patch is not.
+
+Use [Diagnose failures by boundary](/diagnosing) to gather the runtime evidence, or
+[build your first plugin](/plugins/first-plugin) when no installed plugin owns the behavior you need.

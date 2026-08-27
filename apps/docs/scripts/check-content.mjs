@@ -189,6 +189,12 @@ assert(
 	),
 );
 assert(pluginAuthoring?.includes("A state-version-1 plugin has no honest predecessor"));
+const pluginUsing = content.get("plugins/using.mdx");
+assert(pluginUsing?.includes("There is no plugin registry or automatic package discovery"));
+assert(pluginUsing?.includes("Temporary test storage limits what world state survives the test"));
+assert(pluginUsing?.includes("`describe` does not enumerate provider routes or connection values"));
+assert(pluginUsing?.includes("`stateVersion` describes durable storage only"));
+assert(pluginUsing?.includes("Do not use reset as a rollback"));
 for (const [file, source] of content) {
 	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(
