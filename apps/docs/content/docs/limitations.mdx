@@ -19,7 +19,7 @@ instances, but those instances are worlds created from the same template.
 | Plugin state, storage, clock, logs, and tracked work | Instance | Parallel scenarios can use different instance IDs without sharing these values. |
 | Plugin configuration and callback destinations | Runtime | Instances do not create different credentials, feature settings, or receiver URLs. Use separate runtimes when those must differ. |
 | Host, port, control token, and storage lock | Runtime | One daemon owns the storage root and endpoint. Many instances do not imply many servers. |
-| Service key | Config and stored world | Renaming a key changes durable identity. Treat it as a data migration, not a display-name edit. |
+| Service key | Config and stored world | Changing a key removes one mount and adds another. The new key gets new state while the removed key's data remains stored; the runtime does not migrate it. |
 
 An instance is isolation for emulator state, not a process, user, or security boundary. Code in every
 installed plugin runs in the runtime process. [Instances and isolation](/instances) covers the exact
@@ -99,6 +99,10 @@ copies state boundaries, not config boundaries.
 Configuration is executable code, not inert data. Importing it can run its module and dependencies.
 Keep imports free of unrelated side effects, and treat every imported plugin as trusted development
 code. [Configuration](/configuration) defines discovery, validation, and path resolution.
+
+A service-key change is not itself a migration. If old state must survive under a new key, undertake
+a deliberate migration supported by that plugin; otherwise leave the old data in place until its
+ownership and cleanup are clear.
 
 ## Time is explicit, but plugin scheduling is not universal
 

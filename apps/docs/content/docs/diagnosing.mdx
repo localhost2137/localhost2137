@@ -37,18 +37,22 @@ have recorded the diagnostic.
 
 Config import errors report one of two boundaries. `CONFIG_DEFAULT_EXPORT_MISSING` means the selected
 module loaded but did not default-export a config. `CONFIG_IMPORT_FAILED` means evaluating that module
-or one of its imports threw; inspect the original process output and the selected path rather than
-changing module format speculatively. TypeScript, ESM, CommonJS, and local imports are supported.
+or one of its imports threw. Its serialized diagnostic identifies the selected config path but
+deliberately omits the retained cause, so do not expect the CLI or JSON output to print a private
+import detail. Inspect that module and its imports directly rather than changing module format
+speculatively. TypeScript, ESM, CommonJS, and local imports are supported.
 
 ## Recover a storage lock safely
 
-One daemon owns a storage root. `LOCKED` names a process that is still alive; use that daemon, stop it
-normally, or choose another storage root. Do not remove its lock.
+One daemon owns a storage root. If startup says the root is already locked by a process that is still
+alive, use that daemon, stop it normally, or choose another storage root. Do not remove its lock.
 
-`LOCK_STALE` names a stopped owner. `LOCK_CORRUPT` means the lock has incomplete or invalid owner
-metadata. Both errors print the exact lock path. First confirm no runtime uses that storage root,
-including another terminal or test process. Then remove that exact lock path and retry. Never turn
-the printed path into a wildcard or replace it with the project directory.
+Startup can instead say the lock belongs to a stopped process, or that the exact lock path is
+incomplete or damaged. Damaged means the runtime could not establish one valid owner—for example,
+because it found an obsolete layout or a missing, multiple, malformed, or mismatched owner record.
+First confirm no runtime uses that storage root, including another terminal or test process. Then
+remove the exact lock path printed by the error and retry. Never turn that path into a wildcard or
+replace it with the project directory.
 
 If another runtime may be starting, retry before treating a damaged-looking lock as abandoned.
 

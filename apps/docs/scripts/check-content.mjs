@@ -110,6 +110,10 @@ const security = content.get("security.mdx");
 assert(security?.includes("title: Local security model"));
 assert(security?.includes("The runtime bearer token does not protect provider-shaped routes"));
 assert(/There is no process, filesystem, or\s+network sandbox/.test(security ?? ""));
+assert(security?.includes('{ "data": { "status": "ok", "version": "v1" } }'));
+assert(security?.includes("Ordinary string values and the log"));
+assert(security?.includes("message pass through unchanged"));
+assert(runtimeBoundaries?.includes("A service-key change is not itself a migration"));
 
 const commandProgram = await readFile(
 	join(repositoryRoot, "packages/localhost2137/src/cli/command-program.ts"),
@@ -134,6 +138,8 @@ const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));
 
 const diagnosing = content.get("diagnosing.mdx");
+assert(diagnosing?.includes("serialized diagnostic identifies the selected config path"));
+assert(!/\bLOCK(?:ED|_STALE|_CORRUPT)\b/.test(diagnosing ?? ""));
 assert(diagnosing?.includes("Correlation IDs are scoped to one boundary"));
 assert(diagnosing?.includes("`request`, `operation`, `delivery`, and `plugin` entries"));
 assert(!diagnosing?.includes("`task`, `lifecycle`"));

@@ -16,7 +16,7 @@ access from another machine, this security model is the wrong boundary.
 | --- | --- | --- | --- |
 | Provider-shaped routes at `/{instance}/{service}/*` | The application and provider SDK | Whatever authentication the installed plugin documents | Read or mutate the selected emulated service world. |
 | Control routes below `/_/v1/*` | The CLI, test harness, or explicitly trusted automation | Daemon bearer token; browser-origin requests rejected | Create, reset, seed, inspect, advance, or destroy worlds and invoke operations. |
-| Unauthenticated health route | Local discovery | Loopback binding only | Report `{ "status": "ok", "version": "v1" }`. |
+| Unauthenticated health route | Local discovery | Loopback binding only | Report `{ "data": { "status": "ok", "version": "v1" } }`. |
 | Files below `storage.dir` | The runtime and trusted local tools | Local operating-system account and file permissions | Hold discovery metadata, local credentials, manifests, and plugin state. |
 
 Loopback is a network boundary, not authorization between local processes. Another process running
@@ -106,10 +106,14 @@ Use synthetic data even when testing realistic flows. Do not put personal data o
 bodies into a world and rely on later cleanup as the privacy control. Persistent development worlds
 survive daemon restarts, and test cleanup can fail while preserving a path for diagnosis.
 
-Structured logs use a bounded in-memory ring, omit body-like attributes, and redact known sensitive
-keys and values. That reduces routine leakage; it is not a proof that arbitrary plugin messages are
-safe to share. Review `localhost logs --json`, `localhost doctor --json`, test failure output, and
-retained storage paths before posting them.
+Structured logs use a bounded in-memory ring. In attributes, fields named `body`, `payload`,
+`requestBody`, or `responseBody` are omitted, and values below keys that look sensitive—such as
+`authorization`, `password`, `secret`, or `token`—are redacted. Ordinary string values and the log
+message pass through unchanged. A plugin message or an attribute such as `note: "token is ..."` can
+therefore expose exactly what its author supplied.
+
+Do not emit secrets in messages or ordinary attributes. Review `localhost logs --json`, `localhost
+doctor --json`, test failure output, and retained storage paths before posting them.
 
 If test data is exposed, stop the runtime and identify the affected storage root and instances.
 Destroy only explicitly owned worlds or remove an explicitly owned temporary directory after the
