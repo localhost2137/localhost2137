@@ -125,6 +125,14 @@ assert(configuration?.includes("The runtime's `received` diagnostic records the 
 assert(configuration?.includes("`.env` below `storage.dir`"));
 assert(configuration?.includes("Removing or renaming a service while it still owes"));
 assert(!configuration?.includes("in-process tests require port `0`"));
+const testing = content.get("testing.mdx");
+assert(testing?.includes("Reuse the runtime, not the world"));
+assert(testing?.includes("It does not discover or attach to `localhost dev`"));
+assert(testing?.includes("private bearer token for crossing a process boundary"));
+assert(testing?.includes("`TestRuntimeCleanupError`"));
+assert(testing?.includes("Clock advancement is a stronger transition"));
+assert(testing?.includes("The remote client is intentionally untyped"));
+assert(!testing?.includes("one instance per test worker process, all on different ports"));
 const virtualTime = content.get("virtual-time.mdx");
 assert(virtualTime?.includes("Task tracking is a separate concern"));
 assert(virtualTime?.includes("`01s`"));

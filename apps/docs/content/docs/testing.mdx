@@ -1,15 +1,31 @@
 ---
 title: Integration testing
-description: Own temporary runtimes and isolated instances in-process, from a daemon, or across workers.
+description: Design owned test harnesses with typed in-process worlds or isolated remote workers.
 ---
 
-Tests own resources explicitly: one scope creates and closes the runtime, and each test or worker
-creates and destroys its instances. A failing assertion must not leak an instance, port, or temporary
-storage directory.
+Tests should own every localhost2137 resource they create. One scope starts and closes the runtime;
+each scenario or worker creates and destroys its own instance. A failed assertion must not leave a
+server, instance, control credential, or temporary storage directory behind.
 
-## In-process typed tests
+This page assumes the installed plugin covers the behavior the test needs. [Choose the right test
+boundary](/test-boundaries) explains when a stateful emulator is useful at all.
 
-Use `localhost2137/testing` when config and tests run in the same process. This compact version of
+## Choose the harness boundary
+
+| Test shape | Runtime owner | Instance owner | Client surface |
+| --- | --- | --- | --- |
+| One test or one test file in a process | The test or file fixture | Each scenario | Typed `localhost2137/testing` handle |
+| Several test worker processes | Global setup | Each worker or worker scenario | Untyped `localhost2137/client` connection |
+| A script targeting `localhost dev` | The developer or calling process | The script | Untyped `localhost2137/client` connection |
+
+Prefer the in-process API when the config and test live in the same process. It preserves operation
+and connection types and owns the server and temporary storage directly. Use the remote client only
+across a real process boundary or when a separately owned daemon is intentional. It cannot infer a
+plugin's TypeScript contracts from a URL and token.
+
+## Start one typed in-process world
+
+Use `createTestRuntime` from `localhost2137/testing`. This compact version of
 `examples/stripe-sdk/test/subscription.test.ts` arranges catalog state with operations, calls the
 application's official-SDK adapter, and inspects the result through the runtime:
 
@@ -74,21 +90,69 @@ it("creates and renews a subscription", async () => {
 });
 ```
 
-`createLocalStripe` is the example application's small adapter around the official `stripe` package
-and `createStripeSdkFetch`. Product and price setup stays in the control plane; customer and
-subscription creation go through normal SDK calls. Clock advancement and `listInvoices` then inspect
-the resulting emulator state without reaching into its database.
+`createLocalStripe` is the example application's adapter around the official `stripe` package and
+`createStripeSdkFetch`. Product and price setup stays in the control plane; customer and
+subscription creation go through normal SDK calls. Clock advancement and `listInvoices` inspect the
+resulting emulator state without reaching into its database.
 
-The runtime binds one OS-assigned loopback port and creates temporary storage. The instance handle is
-inferred from `config.services`; each service exposes typed operations and `connection`, while
-`clock`, `env`, `idle`, `seed`, `reset`, and `destroy` live at the instance root.
+The nested `try` blocks express ownership, not ceremony. Once `createTestRuntime` resolves, the
+caller owns `runtime.close()`, even if instance creation fails. Once `createInstance` resolves, the
+caller owns `instance.destroy()`, even if application setup or an assertion fails. Destroy the
+instance before closing its runtime.
 
-`createInstance()` and `reset()` default to empty state. Pass `{ seed: true }` only when the scenario
-depends on configured seed data.
-[Seed test worlds](/seeding) explains when a shared baseline clarifies a test and when it hides the
-application behavior being proved.
+## Know what the test runtime owns
 
-## Test the application boundary
+The creation options are deliberately exact: a supplied config, `port: 0`, and
+`storage: "temporary"`. The runtime binds `127.0.0.1` on an OS-assigned port, creates a private
+temporary storage root, and removes that root after a successful close.
+It does not discover or attach to `localhost dev`.
+
+`runtime.createInstance()` creates an empty ephemeral instance with a generated unique ID. All
+instances use the runtime's one server port, while their public URLs and storage remain path-isolated.
+The returned handle is inferred from `config.services`:
+
+| Handle member | Purpose |
+| --- | --- |
+| `instance.<service>.<operation>(input)` | Typed arrange, trigger, and inspection operations |
+| `instance.<service>.connection` | Typed values for the application's provider adapter |
+| `instance.env` | Frozen app-facing environment projection |
+| `instance.clock.status()` / `advance(duration)` | Inspect or move that instance's clock |
+| `instance.idle()` | Wait for tracked plugin work on that instance |
+| `instance.seed()` / `reset({ seed })` | Explicit baseline and replacement transitions |
+| `instance.destroy()` | End ownership of that world |
+
+The runtime also exposes `connection` and `control`. `connection` is the loopback control URL and
+private bearer token for crossing a process boundary. `control` is the deliberately untyped control
+client bound to the runtime's lifetime. Neither belongs in application configuration; application
+code receives only plugin connection values or `instance.env`.
+
+After close begins, the runtime rejects new instances and control calls, and existing typed handles
+are no longer usable. If server shutdown succeeds but temporary-directory removal fails,
+`runtime.close()` throws `TestRuntimeCleanupError` and retains the directory named by
+`retainedStoragePath`. Treat that as a cleanup failure and useful local evidence, not as a directory
+to ignore in CI.
+
+## Reuse the runtime, not the world
+
+Starting a fresh runtime in every test is the simplest ownership model. A file may instead start one
+runtime in `beforeAll` and close it in `afterAll` when every test uses the same config. Each test
+should still create a new instance and destroy it in `finally`.
+
+Do not share one resettable instance between unrelated tests. Reset is a real lifecycle transition,
+and a failed test can prevent it from running or leave pending work that obscures the next failure.
+Separate instances make state, clock, seed status, and plugin storage independent without requiring
+another server port.
+
+Use `reset()` inside one scenario when replacing the same world is part of the behavior being tested.
+It returns the world to empty, unseeded state and keeps the handle usable. Use
+`reset({ seed: true })` for a freshly seeded replacement. `createInstance({ seed: true })` and
+`instance.seed()` are also explicit; no testing API applies configured seed by default.
+
+Await lifecycle calls. Overlapping seed, reset, clock advancement, or destruction has ambiguous test
+intent and is rejected as a busy or lifecycle conflict rather than serialized silently. [Instances
+and isolation](/instances) and [Seed test worlds](/seeding) define the underlying transitions.
+
+## Exercise the application boundary
 
 Operations can arrange, trigger, and inspect the emulator world. When a test claims to verify the
 application's provider integration, exercise that part through the application's normal SDK, HTTP
@@ -101,51 +165,101 @@ arrange via operation
   -> observe app output or inspect via operation
 ```
 
-The claim determines which boundary supplies evidence. [Operations and emulated APIs](/operations-and-apis)
-shows why a trigger or observation operation can be valid without substituting for the application
-interaction under test. Do not read the plugin database from application tests.
+The claim determines which boundary supplies evidence. Creating a customer through an operation is
+valid setup for a test about how the application reads existing customers. It does not prove the
+application can create a customer through the provider SDK. [Operations and emulated
+APIs](/operations-and-apis) develops this distinction for requests, callbacks, and observations.
 
-Call `await instance.idle()` after a plugin schedules callbacks or other tracked outbound work. An
-idle wait includes nested tasks spawned by completing tasks and surfaces failed tracked work.
+Do not read plugin files or databases from an application test. That couples the suite to an
+implementation detail while bypassing the public behavior the plugin promises.
 
-## One owner, multiple workers
+## Wait for the work the scenario caused
 
-When test workers are separate processes, a global setup process owns `createTestRuntime()` and gives
-workers only the frozen `{ url, token }` connection. Workers use the intentionally untyped remote
-client:
+Awaiting an operation proves that operation returned. It does not necessarily mean every callback
+or other tracked outbound task it scheduled has completed. Call `await instance.idle()` before
+asserting on application state affected by that work.
+
+An idle wait includes nested tasks registered by completing tasks and rejects when tracked work
+fails. It is not a general detector for arbitrary promises: a plugin that starts untracked
+fire-and-forget work has violated the authoring contract, and `idle()` cannot recover that ownership.
+
+Clock advancement is a stronger transition. `await instance.clock.advance(duration)` returns only
+after every configured service has reconciled the committed window and its tracked work. Do not add
+sleeps around virtual-time assertions. [Virtual time and asynchronous work](/virtual-time) explains
+committed-window failures and [Callbacks and outbound delivery](/callbacks) defines tracked delivery.
+
+## Share one runtime across worker processes
+
+A runtime can serve several test workers, but it still has exactly one owner. In Vitest, global setup
+starts `createTestRuntime()`, provides only the frozen `{ url, token }` connection, and returns global
+teardown that closes the runtime. Each worker connects through `localhost2137/client`, creates a
+unique ephemeral instance, and destroys only that instance:
 
 ```ts
 import { randomUUID } from "node:crypto";
 import { connectRuntime } from "localhost2137/client";
 
-const client = connectRuntime({ url, token });
-const instanceId = `worker-${randomUUID()}`;
+interface WorkerRuntimeConnection {
+  readonly token: string;
+  readonly url: string;
+}
 
-await client.createInstance({
-  id: instanceId,
-  persistence: "ephemeral",
-});
+export async function runWorkerScenario(connection: WorkerRuntimeConnection) {
+  const runtime = connectRuntime(connection);
+  const instanceId = `worker-${randomUUID()}`;
+  let created = false;
 
-try {
-  await client.executeOperation(instanceId, "counter", "increment", { by: 1 });
-  await client.idle(instanceId);
-} finally {
-  await client.destroyInstance(instanceId);
+  try {
+    await runtime.createInstance({
+      id: instanceId,
+      persistence: "ephemeral",
+    });
+    created = true;
+
+    await runtime.executeOperation(instanceId, "counter", "increment", { by: 1 });
+    await runtime.idle(instanceId);
+  } finally {
+    if (created) await runtime.destroyInstance(instanceId);
+  }
 }
 ```
 
-This uses the counter plugin from the repository's `examples/testing-parallel` package, which
-contains the complete Vitest owner/worker pattern. For other plugins, discover the actual inventory
-before writing worker calls.
+The remote client is intentionally untyped. The worker must use operation keys and JSON inputs from
+the installed plugin's actual inventory; it must not guess them from this counter example. Abortable
+request options are available for harness-level cancellation, but cancelling a client request does
+not transfer ownership of the instance or runtime.
 
-Instances isolate plugin state and storage. They do not isolate shared plugin configuration or the
-application callback URL. Before running event or webhook tests concurrently, define how one shared
-receiver associates an inbound callback with its instance, or give each worker a separately
-configured runtime.
+The control token is a test-run secret. Pass it through the framework's private in-memory context;
+never log it, snapshot it, inject it into the application, or write it to an artifact. The complete
+Vitest owner/worker pattern lives in `examples/testing-parallel`, including setup-failure cleanup and
+four workers proving isolated state on one port.
 
-## Running against the developer daemon
+Instances isolate plugin state, storage, seed status, and clocks. They do not isolate shared plugin
+configuration or one configured application callback URL. Before callback tests run concurrently,
+define how the receiver associates inbound work with its instance, or give workers separately
+configured runtimes. Instance isolation cannot invent callback routing the application lacks.
 
-Use `connectRuntime({ url, token })` for scripts that intentionally target an already-running daemon.
-The URL and token come from trusted runtime discovery or explicit local configuration. Persistent
-`dev` state is convenient for exploration but a poor test fixture: automated tests should create
-their own ephemeral instances and destroy only what they own.
+## Connect to a separately owned daemon deliberately
+
+Use `connectRuntime({ url, token })` for a script that intentionally targets an already-running
+loopback runtime. The script does not own that daemon and must not try to close it. It should create a
+unique ephemeral instance, keep the ID, and destroy only that world in `finally`.
+
+Persistent `dev` is useful for exploration but a poor automated fixture: its state may predate the
+test, and a test failure may affect later manual work. Do not point automation at `dev`, reset someone
+else's instance, or pass the control token to the application process. [CLI workflow and
+reference](/cli#plain-http-control) covers trusted local access to an existing daemon.
+
+## Review the harness as part of the test
+
+Before accepting an integration test, check that:
+
+- the assertion needs the plugin boundary and stays within its documented compatibility surface;
+- exactly one scope owns runtime close, while each scenario or worker owns its instance;
+- application traffic uses plugin connection values, not the control URL or token;
+- operations arrange or observe rather than replace the application behavior under test;
+- seed and clock changes are explicit, and tracked asynchronous work is awaited;
+- cleanup runs after partial setup and failed assertions without targeting shared state.
+
+These are test semantics, not housekeeping. A suite that leaks ownership or bypasses its claimed
+boundary can pass consistently while proving the wrong thing.
