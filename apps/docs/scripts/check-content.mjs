@@ -161,14 +161,28 @@ assert(virtualTime?.includes("safe integer of milliseconds"));
 assert(virtualTime?.includes("In real mode, they add 60 days"));
 assert(virtualTime?.includes("does not expose the underlying cause"));
 assert(!virtualTime?.includes("Fix the reported plugin"));
+const callbacks = content.get("callbacks.mdx");
+assert(callbacks?.includes("timeout and retry behavior"));
+assert(callbacks?.includes("Those details are part of the plugin's compatibility surface"));
 const pluginAuthoring = content.get("plugins/authoring.mdx");
 assert(
 	pluginAuthoring?.includes("Importing the plugin, or a config that mounts it, must be inert"),
 );
+assert(pluginAuthoring?.includes("a small, working public authoring shape"));
+assert(!pluginAuthoring?.includes("complete public authoring surface"));
 assert(pluginAuthoring?.includes("A failed `start` does not earn a later `stop`"));
 assert(pluginAuthoring?.includes("`update` may receive any older stored version"));
 assert(pluginAuthoring?.includes("The `State` returned by `start` is live process state"));
 assert(pluginAuthoring?.includes("It is tracked automatically"));
+assert(
+	pluginAuthoring?.includes("Delivery attempt timeouts and retry policy belong to the plugin"),
+);
+assert(
+	pluginAuthoring?.includes(
+		"runtime and control operations can impose separate wall-clock safety limits",
+	),
+);
+assert(!pluginAuthoring?.includes("the runtime still owns those"));
 assert(
 	pluginAuthoring?.includes(
 		"The generic contract proves runtime integration, not provider fidelity",

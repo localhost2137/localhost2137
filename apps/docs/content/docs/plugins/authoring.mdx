@@ -67,9 +67,9 @@ contract question, not a reason to couple a plugin to runtime internals.
 
 ## Minimal authoring shape
 
-This file-backed counter shows the complete public authoring surface. Direct file I/O keeps the
-example small; a database-backed plugin would open its database in `start` and return it as live
-state.
+This file-backed counter shows a small, working public authoring shape, not the entire authoring API.
+Direct file I/O keeps the example small; a database-backed plugin would open its database in `start`
+and return it as live state.
 
 ```ts
 import { readFile, writeFile } from "node:fs/promises";
@@ -214,8 +214,13 @@ isolated root.
 ## Own time and asynchronous work
 
 All lifecycle, route, and operation code receives the instance clock through `context.clock.now()`.
-Using `new Date()` for domain timestamps creates a second time source and breaks pinned-clock tests.
-Wall-clock deadlines for network and process safety are different; the runtime still owns those.
+Use it for domain timestamps, due dates, and retry schedules. Using `new Date()` for those values
+creates a second time source and breaks pinned-clock tests.
+
+Delivery attempt timeouts and retry policy belong to the plugin. A wall-clock timeout can keep one
+network attempt from hanging; it is an operational limit and does not advance with the instance
+clock. The runtime and control operations can impose separate wall-clock safety limits around their
+own work, but those limits do not define the plugin's provider-facing callback behavior.
 
 The base context used by `create`, `update`, and `start` deliberately has no live state, fetch, or task
 tracker. The running context used by routes, operations, `seed`, `onStarted`, `onTimeAdvanced`, and
