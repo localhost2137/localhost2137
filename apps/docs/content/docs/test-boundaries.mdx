@@ -1,116 +1,180 @@
 ---
 title: Choose the right test boundary
-description: Decide when a mock, fake, HTTP stub, local emulator, real service, or provider sandbox gives the evidence a test needs.
+description: Compare the evidence from a scripted HTTP response, a stateful local world, and provider-owned behavior.
 ---
 
-localhost2137 is not the right default for every test. The useful question is not “How realistic can
-this test be?” but “What is the smallest boundary that could expose the defect this test cares
-about?”
+Use the smallest boundary that can expose the defect in the claim. localhost2137 is not the default
+for pure application logic or one fixed response.
 
-A pure calculation usually needs no service process. A provider integration may need to prove SDK
-serialization, state transitions, callbacks, or time-derived work. A focused double can model some
-of those claims; others require the protocol or service boundary the double leaves out.
+## Run the same app at two boundaries
 
-## An evidence ladder, not a quality ladder
+The crash-course application calls Slack-shaped `users.list`. This first test owns a one-response
+HTTP stub:
 
-Each approach is strong at a different claim:
+```ts title="test/read-workspace-stub.test.ts"
+import { execFile } from "node:child_process";
+import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
+
+it("reads one scripted Slack-shaped response without service state", async () => {
+	const requests: Array<Readonly<{ authorization: string | undefined; url: string }>> = [];
+	const server = createServer((request, response) => {
+		requests.push({
+			authorization: request.headers.authorization,
+			url: request.url ?? "",
+		});
+		response.writeHead(200, { "content-type": "application/json" });
+		response.end(
+			JSON.stringify({
+				members: [{ id: "U_STUB", name: "Scripted Ada" }],
+				ok: true,
+			}),
+		);
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen({ host: "127.0.0.1", port: 0 }, resolve);
+	});
+
+	try {
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Expected a TCP address.");
+		const appPath = fileURLToPath(new URL("../src/read-workspace.ts", import.meta.url));
+		const { stderr, stdout } = await execFileAsync(process.execPath, [appPath], {
+			env: {
+				...process.env,
+				SLACK_API_URL: `http://127.0.0.1:${address.port}/api/`,
+				SLACK_BOT_TOKEN: "xoxb-scripted",
+			},
+		});
+
+		expect(stderr).toBe("");
+		expect(JSON.parse(stdout)).toEqual([{ id: "U_STUB", name: "Scripted Ada" }]);
+		expect(requests).toEqual([
+			{ authorization: "Bearer xoxb-scripted", url: "/api/users.list" },
+		]);
+	} finally {
+		await new Promise<void>((resolve, reject) => {
+			server.close((cause) => (cause ? reject(cause) : resolve()));
+		});
+	}
+});
+```
+
+The second test runs the unchanged application against a seeded emulator world:
+
+```ts title="test/read-workspace.test.ts"
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
+
+const execFileAsync = promisify(execFile);
+
+it("reads one seeded world through the provider-shaped HTTP API", async () => {
+	const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+
+	try {
+		const instance = await runtime.createInstance({ seed: true });
+		try {
+			const appPath = fileURLToPath(new URL("../src/read-workspace.ts", import.meta.url));
+			const { stderr, stdout } = await execFileAsync(process.execPath, [appPath], {
+				env: { ...process.env, ...instance.env },
+			});
+
+			expect(stderr).toBe("");
+			expect(JSON.parse(stdout)).toEqual([
+				{ id: "U000000", name: "localhost2137-bot" },
+				{ id: "U_ADA", name: "Ada" },
+			]);
+		} finally {
+			await instance.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
+});
+```
+
+```sh
+pnpm exec vitest run test/read-workspace-stub.test.ts test/read-workspace.test.ts
+```
+
+Both tests prove that the application builds the expected URL and authorization header and parses a
+successful response. Their additional evidence differs:
+
+| Test | Additional evidence | Still not established |
+| --- | --- | --- |
+| Scripted HTTP response | The app handles exactly the response and request shape written in the test. | Coherent users, credentials, pagination, state transitions, or any omitted response. |
+| localhost2137 world | The installed plugin accepts the request against seeded state and returns its documented provider-shaped result. | Slack behavior outside that plugin surface, hosted configuration, or provider infrastructure. |
+
+The stub is the better test when one request/response contract is the whole claim. The emulator earns
+its runtime when the defect needs service-owned state or behavior the stub would have to reimplement.
+
+## Read the evidence ladder horizontally
 
 | Boundary | Useful evidence | What it does not establish |
 | --- | --- | --- |
-| Interaction mock | Your code chooses the expected branch and calls a dependency with expected values. | Behavior behind the call, coherent provider state, or transport behavior. |
-| In-process fake | Your code works against simplified behavior, including coherent state and transitions when the fake models them. | Provider SDK serialization, HTTP or callback transport, or behavior the fake omits. |
-| HTTP stub or recorded response | The application sends a particular request and handles a known response. | Coherent state across calls or provider-initiated work unless every transition is scripted. |
-| localhost2137 plugin | The application speaks a documented provider-shaped API against a local world with isolated plugin state. | Provider behavior outside the plugin's explicit compatibility surface or real production infrastructure. |
-| Real service in a local container | The application interoperates with that runnable service build. | Hosted-only provider behavior, managed configuration, or features absent from the selected build. |
-| Provider sandbox or test mode | The application reaches provider-owned behavior and account configuration. | Offline determinism or exact production equivalence. Isolation, cost, and privileged state controls vary by provider. |
+| Interaction mock | The application chooses a branch and calls a dependency with expected values. | Behavior behind the call, transport, or coherent provider state. |
+| In-process fake | The application works against the state and transitions that fake implements. | SDK serialization, HTTP/callback transport, or omitted behavior. |
+| HTTP stub or recorded response | One real request encoding and one known response path. | Coherent state across calls or provider-initiated work unless scripted explicitly. |
+| localhost2137 plugin | A documented provider-shaped local API over isolated plugin state, plus explicit local control. | Undocumented provider behavior or external infrastructure. |
+| Real service in a local container | Interoperation with that selected runnable service build. | Hosted-only behavior or managed provider configuration. |
+| Provider sandbox or test mode | Provider-owned behavior and account configuration for the exercised path. | Offline repeatability, cheap isolation, or production equivalence. |
 
-The rows are not successive levels of engineering maturity. Replacing every unit mock with a local
-service makes a suite slower and harder to understand without improving a pure logic claim. Replacing
-every provider check with an interaction mock makes the suite fast while leaving the real integration
-boundary untested.
+This is an evidence ladder, not a quality ladder. Replacing every unit test with a local service can
+make a suite slower without improving a pure logic claim. Replacing every provider boundary with a
+mock can make it fast while leaving serialization, state, callbacks, and SDK behavior untested.
 
-## Where a stateful emulator earns its cost
+## Keep the application interaction named by the claim
 
-A localhost2137 test becomes a candidate only when a smaller boundary cannot expose the relevant
-failure. Signals include:
+Use operations to arrange prerequisites or represent actors outside the application. Exercise the
+application through its normal SDK, HTTP client, or callback handler when that integration is the
+subject. Observe application behavior through an application effect; inspect emulator state through
+a documented operation when that is useful evidence.
 
-- the relevant SDK or HTTP mistake depends on coherent state created by earlier requests;
-- a local actor or clock change should cause an event, callback, or webhook;
-- the test needs to arrange or inspect state that a production API should not expose;
-- several tests need independent service worlds without separate provider accounts.
+For example, arranging an existing product through an operation is honest setup for a test about how
+the application reads products. Creating a subscription through an operation does not prove that the
+application can create it through its provider SDK. [Operations and emulated
+APIs](/operations-and-apis) shows those roles in one callback scenario.
 
-These are signals, not checkboxes. An in-process fake can model coherent state, and an HTTP stub can
-inspect a request. If either can falsify the claim without bypassing the behavior under test, prefer
-that smaller boundary.
+## Add a stateful emulator only when it changes the evidence
 
-The installed plugin must still implement the behavior. A stateful runtime cannot turn a missing
-endpoint, event type, retry rule, or SDK encoding into a valid compatibility claim. Inspect the
-plugin's supported surface before choosing the test boundary.
+A plugin is a candidate when the claim needs at least one of these and a smaller boundary cannot
+falsify it:
 
-## Keep the application path real
+- coherent state across provider-shaped requests;
+- a local actor causing a signed callback or webhook;
+- a controlled time transition or documented retry;
+- privileged arrangement or inspection that the provider API should not expose;
+- isolated service worlds without separate provider accounts.
 
-The emulator adds a privileged control interface alongside the provider-shaped interface. That
-split is useful only when the test keeps their jobs distinct:
+The installed plugin must implement the required route, event, encoding, error, and sequence. A
+stateful runtime cannot turn an omitted capability into compatibility.
 
-```text
-operation ── arrange or trigger ──> local service state
-application ── SDK or HTTP ───────> the same local service state
-operation ── inspect ─────────────> the resulting local service state
-```
+## Keep external checks for external claims
 
-If a test creates a subscription through an operation while claiming to verify that the application
-can create one through its provider SDK, the test has skipped its own subject. If the claim is about
-how the application reacts to an existing subscription, arranging that prerequisite through an
-operation is appropriate.
+No local emulator establishes real credentials, account permissions, dashboards, DNS, TLS, internet
+routing, regional behavior, production rate limits, scale, latency, or availability. A provider
+sandbox may cover some of these, but only for the scenario and account it actually exercises.
 
-The claim, not a blanket rule, decides the route. [Operations and emulated APIs](/operations-and-apis)
-works through this distinction for outgoing requests, inbound callbacks, and time-derived behavior.
+A useful suite often has three different jobs:
 
-## What a local emulator cannot prove
+1. Function-level tests cover business rules and edge cases without a service process.
+2. Focused localhost2137 tests cover supported protocol, state, callbacks, and controllable time.
+3. A smaller provider-facing suite checks external credentials, configuration, and critical drift.
 
-Even a well-tested plugin is a compatibility subset. A local test does not establish:
+Duplicate a scenario at another layer only when the second boundary answers a different question.
+For instance, a unit test can prove an invoice-state rule, a local plugin test can prove that an SDK
+read and renewal callback apply that rule, and a provider check can prove deployed webhook wiring.
 
-- behavior the plugin does not document and exercise;
-- real account permissions, provider configuration, DNS, TLS, or internet routing;
-- production rate limits, regional behavior, scale, latency, or availability;
-- compatibility with an SDK version the plugin has not tested;
-- that secrets, webhooks, or dashboards are configured correctly in an external account.
-
-Those are reasons to retain a small provider-facing contract or end-to-end suite where the risk
-justifies its cost. They are not reasons to move every application scenario into an external
-sandbox.
-
-## Layer boundaries around the defect
-
-Depending on its risks, a suite may combine these scopes:
-
-1. Function-level tests cover business rules and edge cases without a service runtime.
-2. Focused localhost2137 tests can cover the provider protocol, state transitions, callbacks, and
-   controllable time that the installed plugin actually supports.
-3. A smaller provider-facing suite checks external credentials, account configuration, and a few
-   critical compatibility paths.
-
-Not every integration needs all three. Keep an individual behavior at the lowest layer that can
-falsify it. Duplicate a scenario at another layer only when the second boundary answers a different
-question.
-
-For example, a unit test can prove which invoice state should suspend an account. A local emulator
-test can prove that the application reads a provider-shaped invoice through its SDK and applies that
-rule after a renewal callback. A provider sandbox check can prove that the deployed credentials and
-webhook configuration receive the external event. These are related tests, not three increasingly
-impressive versions of the same test.
-
-## When to stop before adding localhost2137
-
-Do not add a plugin merely because the application imports an external SDK. Stop when:
-
-- the behavior under test is completely inside your own code;
-- an HTTP stub already exposes the only request or response mistake that matters;
-- the required provider behavior is outside the plugin's supported surface;
-- a real, lightweight local service already supplies the exact implementation you need;
-- the goal is load, security, resilience, or production-network testing.
-
-When a plugin does fit, start with its documented compatibility boundary, not its package name or a
-promise of general provider parity. [Using plugins](/plugins/using) gives the evaluation checklist.
-Then use [Getting started](/getting-started) for a complete local loop or
-[Run an existing application](/existing-application) to connect an existing project.
+Stop before adding localhost2137 when behavior is wholly inside the application, one stub exposes the
+relevant mistake, the needed provider behavior is unsupported, an exact lightweight service already
+exists, or the goal is load/security/resilience testing. [Using plugins](/plugins/using) gives the
+compatibility checklist; [Getting started](/getting-started) gives the complete local loop.

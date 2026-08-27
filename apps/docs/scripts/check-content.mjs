@@ -182,6 +182,20 @@ assert(runtimeInterfacesSkill.includes("primary failure first and as `cause`"));
 const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));
 
+const testBoundaries = content.get("test-boundaries.mdx");
+for (const [title, path] of [
+	["test/read-workspace-stub.test.ts", "examples/getting-started/test/read-workspace-stub.test.ts"],
+	["test/read-workspace.test.ts", "examples/getting-started/test/read-workspace.test.ts"],
+]) {
+	const example = await readFile(join(repositoryRoot, path), "utf8");
+	assert(
+		testBoundaries?.includes(titledCodeBlock("ts", title, example)),
+		`Test-boundary contrast must match ${path}.`,
+	);
+}
+assert(testBoundaries?.includes("This is an evidence ladder, not a quality ladder"));
+assert(testBoundaries?.includes("Keep external checks for external claims"));
+
 const gettingStarted = content.get("getting-started.mdx");
 assert(gettingStarted, "Getting started content is missing.");
 const crashCourseConfig = await readFile(
