@@ -11,7 +11,7 @@ unless their owner requests the baseline.
 This complete config uses both seed layers. The plugin seed creates Ada and `general`; the top-level
 scenario seed then calls a typed operation that depends on both:
 
-```ts title="localhost.config.ts"
+```ts title="test/fixtures/seeding-config.ts"
 import { slack } from "@localhost2137/slack";
 import { defineConfig } from "localhost2137";
 
@@ -131,28 +131,43 @@ required bot identity; empty means configured seed did not run, not that plugin 
 
 ## Run the same transitions from the CLI
 
-This shell owns one named world and destroys it at the end:
+Start a daemon from the same checked config the test imports:
 
 ```sh
-pnpm exec localhost instance create seed-guide
+# Terminal 1
+pnpm exec localhost --config test/fixtures/seeding-config.ts dev
+```
+
+From another terminal, select that config on every command. This shell owns one named world and
+destroys it at the end:
+
+```sh
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  instance create seed-guide
 
 # Apply the configured baseline to this unseeded world exactly once
-pnpm exec localhost seed --instance seed-guide
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  seed --instance seed-guide
 
 # Replace it with an empty world
-pnpm exec localhost instance reset seed-guide
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  instance reset seed-guide
 
 # Replace it again and apply the configured baseline
-pnpm exec localhost instance reset seed-guide --seed
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  instance reset seed-guide --seed
 
-pnpm exec localhost instance destroy seed-guide
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  instance destroy seed-guide
 ```
 
 For a new world that should begin seeded, combine creation and seed:
 
 ```sh
-pnpm exec localhost instance create review --seed
-pnpm exec localhost instance destroy review
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  instance create review --seed
+pnpm exec localhost --config test/fixtures/seeding-config.ts \
+  instance destroy review
 ```
 
 `localhost seed` without `--instance` targets persistent `dev`. Run it only for a currently unseeded

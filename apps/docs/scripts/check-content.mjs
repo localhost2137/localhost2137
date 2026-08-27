@@ -282,7 +282,7 @@ const seedLifecycleTest = await readFile(
 	"utf8",
 );
 assert(
-	seeding?.includes(titledCodeBlock("ts", "localhost.config.ts", seedingConfig)),
+	seeding?.includes(titledCodeBlock("ts", "test/fixtures/seeding-config.ts", seedingConfig)),
 	"Seeding config must match the executable example.",
 );
 assert(
@@ -290,14 +290,20 @@ assert(
 	"Seeding lifecycle test must match the executable example.",
 );
 for (const command of [
-	"pnpm exec localhost instance create seed-guide",
-	"pnpm exec localhost seed --instance seed-guide",
-	"pnpm exec localhost instance reset seed-guide",
-	"pnpm exec localhost instance reset seed-guide --seed",
-	"pnpm exec localhost instance destroy seed-guide",
+	"pnpm exec localhost --config test/fixtures/seeding-config.ts dev",
+	"instance create seed-guide",
+	"seed --instance seed-guide",
+	"instance reset seed-guide",
+	"instance reset seed-guide --seed",
+	"instance destroy seed-guide",
 ]) {
 	assert(seeding?.includes(command), `Seeding guide is missing the owned CLI step: ${command}`);
 }
+assert.equal(
+	seeding?.match(/pnpm exec localhost --config test\/fixtures\/seeding-config\.ts/g)?.length,
+	8,
+	"Every seeding daemon and CLI command must select the checked config explicitly.",
+);
 assert(seeding?.includes("Another in-place seed is refused"));
 assert(seeding?.includes("no partially seeded new instance becomes addressable"));
 assert(seeding?.includes("restores the prior world when it can"));
