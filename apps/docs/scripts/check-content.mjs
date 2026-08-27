@@ -386,6 +386,20 @@ assert(cli?.includes("guidance omits the original correlation ID"));
 assert(cli?.includes("does not expose structured error details"));
 assert(cli?.includes("localhost_control_token="));
 assert(!cli?.includes("export LOCALHOST_CONTROL_TOKEN"));
+for (const command of [
+	"pnpm exec localhost describe slack --instance dev --json",
+	"pnpm exec localhost exec slack create-user --instance dev --name Grace --json",
+	'--input-json \'{"channel":"general","from":"Ada","text":"ready"}\' --json',
+	"pnpm exec localhost instance create review --seed",
+	"pnpm exec localhost run --instance dev -- pnpm test",
+	"pnpm exec localhost clock advance 2h --instance dev --json",
+]) {
+	assert(cli?.includes(command), `CLI reference is missing the concrete command: ${command}`);
+}
+assert(!cli?.includes("replace-with-"));
+assert(cli?.includes("owner-approved documentation-first contracts awaiting implementation"));
+assert(cli?.includes("Only `/_/v1/health` is unauthenticated"));
+assert(cli?.includes("This Bash example"));
 const configuration = content.get("configuration.mdx");
 assert(
 	configuration?.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),

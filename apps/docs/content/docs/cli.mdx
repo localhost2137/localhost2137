@@ -1,45 +1,10 @@
 ---
 title: CLI workflow and reference
-description: Select a project and world, run the daemon, discover operations, manage state, inspect evidence, and automate stable output.
+description: Copy concrete localhost commands and look up selection, lifecycle, operation, output, and exit behavior.
 ---
 
-The `localhost` CLI is a renderer and authenticated client for one running project runtime. It does
-not bypass lifecycle rules or contain plugin business logic. Use `pnpm exec localhost` so the
-project's installed package supplies the binary.
-
-## Select the project and world
-
-Commands that inspect or act on a project attempt to locate its config. Actions that require a
-resolved config stop when loading fails; `doctor` instead records the config-loading issue and
-continues its read-only inspection. Help-only invocations do not load config. Without an override,
-discovery walks upward from the current working directory. `--config` accepts one explicit path and
-can appear before or after a command:
-
-```sh
-pnpm exec localhost --config ./localhost.config.ts doctor --json
-pnpm exec localhost instance list --config ./localhost.config.ts --json
-```
-
-Control commands load that config, discover the daemon through its `storage.dir`, and compare the
-running config fingerprint with the current resolved config. A mismatch stops the command before it
-mutates anything. Restart `localhost dev` after editing config.
-
-Commands that act on one world target `dev` unless told otherwise. `LOCALHOST_INSTANCE` changes the
-process default; an explicit `--instance` wins:
-
-```sh
-LOCALHOST_INSTANCE="pr-184" pnpm exec localhost logs --tail 20 --json
-pnpm exec localhost logs --instance dev --tail 20 --json
-```
-
-Instance creation, reset, and destruction always require their target ID as an argument. The default
-does not make those destructive targets implicit. [Configuration](/configuration#discovery-and-path-resolution)
-defines config filenames and path semantics; [Instances and isolation](/instances) defines world
-ownership.
-
-## Run the daily loop in two terminals
-
-The daemon occupies its terminal until shutdown.
+The commands below use the checked [getting-started config](/configuration), its `slack` service,
+seeded `dev` world, `Ada` user, and `general` channel.
 
 Terminal one:
 
@@ -50,197 +15,205 @@ pnpm exec localhost dev
 Terminal two:
 
 ```sh
-localhost_service_key="replace-with-configured-service-key"
-localhost_operation_key="replace-with-discovered-operation-key"
-pnpm exec localhost describe "$localhost_service_key" --json
-pnpm exec localhost exec "$localhost_service_key" --help
-pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --json
-pnpm exec localhost logs "$localhost_service_key" --tail 50 --json
+pnpm exec localhost seed
+pnpm exec localhost describe slack --instance dev --json
+pnpm exec localhost exec slack --help
+pnpm exec localhost exec slack create-user --instance dev --name Grace --json
+pnpm exec localhost exec slack send-message --instance dev \
+  --input-json '{"channel":"general","from":"Ada","text":"ready"}' --json
+pnpm exec localhost logs slack --instance dev --tail 50 --json
 ```
 
-`dev` binds only a loopback host, acquires the configured storage lock, starts persistent worlds, and
-creates an empty persistent `dev` world when it does not exist. It writes the `dev` connection
-environment to `.env` below `storage.dir`. Readiness is written to stderr and includes public service
-URLs, the environment-file path, and exported variable names—not their values.
+Use `pnpm exec localhost` so the project's installed package supplies the binary. `dev` stays in the
+foreground, binds only loopback, acquires the storage lock, and creates an empty persistent `dev`
+world if none exists. The second terminal uses authenticated control commands; application traffic
+continues through plugin connection values and provider-shaped routes.
 
-Use `--host` or `--port` to override the configured endpoint for one invocation. A second daemon
-cannot own the same storage concurrently. Ctrl-C or SIGTERM closes the server and retained runtime
-work before releasing the lock; persistent worlds remain for the next start. There is no config hot
-reload.
-
-## Discover and invoke plugin operations
-
-Operation commands come from live plugin metadata, not a static CLI list. `describe` without a
-service lists configured services for the selected world. With a service, it returns that plugin's
-description plus input/output metadata for each operation. `exec <service> --help` renders the same
-inventory as commands.
-
-Operation keys such as `createCustomer` become kebab-case commands such as `create-customer`. For a
-flat Zod object made of strings, finite numbers, safe integers, booleans, or repeatable arrays of the
-non-boolean scalar types, the CLI generates long flags. Help marks required flags and shows
-descriptions, allowed values, defaults, and examples supplied by the schema.
-
-For example, with the first-party Stripe plugin mounted as `stripe`:
+## Select the project and world
 
 ```sh
-pnpm exec localhost exec stripe create-customer --name Ada --json
+pnpm exec localhost --config ./localhost.config.ts doctor --json
+pnpm exec localhost instance list --config ./localhost.config.ts --json
+
+LOCALHOST_INSTANCE=review pnpm exec localhost describe slack --json
+pnpm exec localhost describe slack --instance dev --json
 ```
 
-Boolean flags accept an omitted value as `true` or an explicit value such as `--admin=false`.
-Repeated array values repeat the same flag. Schema defaults remain owned by operation validation;
-the CLI sends only explicitly supplied fields.
-
-Nested, union, referenced, or dynamic input—and any field that collides with a runtime option—uses
-one complete JSON object instead. Help states why JSON is required:
-
-```sh
-localhost_service_key="replace-with-configured-service-key"
-localhost_operation_key="replace-with-discovered-operation-key"
-localhost_operation_input='{"nested":{"value":"example"}}'
-pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" \
-  --input-json "$localhost_operation_input" --json
-```
-
-`--input-json` cannot be combined with generated input flags. Invalid JSON, a non-object JSON value,
-an unknown flag, or a schema validation failure exits as a usage/input failure; the CLI never guesses
-another operation. Operations are local controls for arranging or inspecting a world; application
-code should continue through the provider-shaped API described in
-[Operations and emulated APIs](/operations-and-apis).
-
-## Manage world state explicitly
-
-| Command | State transition |
+| Selector | Rule |
 | --- | --- |
-| `localhost instance create <id> [--seed]` | Create a persistent empty world, optionally running configured seed before it becomes ready. |
-| `localhost instance list [--json]` | List known worlds with persistence, lifecycle, seed, service, and clock summaries. |
-| `localhost instance reset <id> [--seed]` | Replace the named world's state and clock; leave it empty unless seed is requested. |
-| `localhost instance destroy <id>` | Remove the named world. The ID is mandatory. |
-| `localhost seed [--instance id]` | Seed an existing unseeded world once. |
+| No `--config` | Walk upward from the working directory; use the first supported config. |
+| `--config ./localhost.config.ts` | Resolve that path from the working directory; skip discovery. It may appear before or after the command. |
+| No instance selector | Target `dev`. |
+| `LOCALHOST_INSTANCE=review` | Change the process default. |
+| `--instance dev` | Override both defaults for that command. |
 
-Create, reset, destroy, and seed print short acknowledgements on success. They have no `--json`
-variant. Reset is replacement, not an in-place clear followed by automatic reseed. Destroy is not an
-archive operation. Neither command asks for interactive confirmation, so resolve the target ID
-before running automation.
+Help-only invocations do not load config. Commands that need a project stop when config loading
+fails; `doctor` records that issue and continues read-only inspection. Control commands compare the
+running fingerprint with the resolved config and stop before mutation on mismatch. Restart `dev`
+after editing config.
 
-[Seed test worlds](/seeding) covers seed ordering and failure recovery. [Instances and
-isolation](/instances#create-reset-and-destroy-mean-different-things) covers durable replacement and
-cleanup semantics.
+Create, reset, and destroy always require an explicit ID argument. `LOCALHOST_INSTANCE` does not
+make destructive targets implicit.
 
-## Render or inject application connection values
+## Discover and invoke operations
 
-`env` computes the selected instance's current plugin-owned environment projection. Dotenv is the
-default; JSON is selected through `--format`, not `--json`:
+```text
+localhost describe [service] [--instance id] [--json]
+localhost exec <service> --help
+localhost exec <service> <operation> [generated flags | --input-json object] [--instance id] [--json]
+```
+
+Operation commands come from the selected running plugin's metadata. `describe` lists services or
+one service's operation schemas. `exec slack --help` converts keys such as `createUser` to
+`create-user` and displays the input accepted by the installed plugin version.
+
+```sh
+pnpm exec localhost exec slack create-user --name Grace --admin=false --json
+pnpm exec localhost exec slack send-message \
+  --channel general --from Ada --text ready --json
+pnpm exec localhost exec slack send-message \
+  --input-json '{"channel":"general","from":"Ada","text":"ready"}' --json
+```
+
+| Input shape | CLI form |
+| --- | --- |
+| Flat strings, finite numbers, safe integers, booleans, or repeatable non-boolean scalar arrays | Generated long flags |
+| Nested, union, referenced, dynamic, repeated boolean, or runtime-option collision | One complete object through `--input-json` |
+
+Boolean flags accept an omitted value as `true` or an explicit `--admin=false`. Repeated arrays
+repeat the same flag. `--input-json` works as a complete object and cannot be combined with generated
+input flags. Invalid JSON, a non-object value, an unknown flag, or schema failure exits as input
+failure; the CLI does not guess another operation.
+
+Operations are privileged local controls. They arrange or inspect a world; they do not replace the
+application's provider-shaped request boundary. See [Operations and emulated APIs](/operations-and-apis).
+
+## Manage instances and seed
+
+```sh
+pnpm exec localhost instance create review --seed
+pnpm exec localhost instance list --json
+pnpm exec localhost seed --instance dev
+pnpm exec localhost instance reset review
+pnpm exec localhost instance reset review --seed
+pnpm exec localhost instance destroy review
+```
+
+| Grammar | Transition |
+| --- | --- |
+| `instance create <id> [--seed]` | Create a persistent empty world; seed before readiness only when requested. |
+| `instance list [--json]` | Read lifecycle, persistence, seed, service, and clock summaries. |
+| `seed [--instance id]` | Seed an existing eligible world once. |
+| `instance reset <id> [--seed]` | Replace the named world; empty unless seed is requested. |
+| `instance destroy <id>` | Remove the named world. |
+
+Mutations print short acknowledgements and have no `--json` variant. They do not prompt. Resolve the
+ID before automation. Reset is replacement, not automatic reseeding; destroy is not an archive.
+
+## Render or inject application environment
 
 ```sh
 pnpm exec localhost env --instance dev --format dotenv
 pnpm exec localhost env --instance dev --format json
-```
-
-`run` starts exactly one child with the connection projection overlaid on its inherited environment:
-
-```sh
 pnpm exec localhost run --instance dev -- pnpm test
 ```
 
-The `--` delimiter keeps every following token—including child flags named `--config` or
-`--instance`—in the child argument vector. The CLI spawns the command directly without a shell,
-inherits stdio, forwards SIGHUP, SIGINT, and SIGTERM while it owns the child, and returns the child's
-exit code. It does not restart or supervise the process. Exported connection names override inherited
-values with the same names.
+`env` prints the plugin-owned application projection. Dotenv is the default; JSON uses `--format
+json`, not `--json`. `run` overlays that projection on one directly spawned child, inherits stdio,
+forwards SIGHUP/SIGINT/SIGTERM while it owns the child, and returns the child's exit code. Everything
+after `--`, including child flags named `--config` or `--instance`, belongs to the child.
 
-Only app-facing values are injected. Runtime discovery metadata and the control token are not.
-[Add localhost2137 to an existing application](/existing-application#run-one-persistent-world)
-shows the corresponding application workflow.
+Connection names override inherited values. Runtime discovery metadata and the control token are
+never injected.
 
-## Inspect clocks, logs, and project health
+## Inspect clocks, logs, and health
+
+```sh
+pnpm exec localhost clock status --instance dev --json
+pnpm exec localhost clock advance 2h --instance dev --json
+pnpm exec localhost logs slack --instance dev --tail 50 --json
+pnpm exec localhost doctor --json
+```
 
 | Command | Result |
 | --- | --- |
-| `localhost clock status [--instance id] [--json]` | Current instance clock mode and RFC 3339 time. |
-| `localhost clock advance <duration> [--instance id] [--json]` | One durable time window after configured services reconcile it. |
-| `localhost logs [service] [--instance id] [--tail n] [--json]` | A bounded view of request, operation, delivery, and plugin logs. |
-| `localhost doctor [--json]` | A read-only report over config, runtime discovery, stored manifests, service versions, and pending trash. |
+| `clock status` | Current mode and RFC 3339 instance time. |
+| `clock advance <duration>` | One durable time window after configured services reconcile it. |
+| `logs [service]` | Bounded request, operation, delivery, and plugin logs. |
+| `doctor` | Read-only config, runtime-discovery, stored-manifest, service-version, and pending-trash report. |
 
-`logs` defaults to the latest 50 entries and accepts a tail from 0 through 1000. An optional service
-argument filters the selected instance's ring. The result includes `droppedEntries`; a non-zero value
-means older or oversized evidence is absent. Correlation IDs group one boundary, not an entire
-scenario. [Diagnose a failing scenario](/diagnosing#trace-each-boundary-through-logs) explains how to
-pivot between boundaries without inventing an end-to-end trace.
+`logs` defaults to 50 entries; `--tail` accepts `0` through `1000`. Its `droppedEntries` field tells
+you whether older or oversized evidence is absent. Correlation IDs identify one boundary, not a
+whole scenario.
 
-`doctor` does not create directories, start a daemon, repair manifests, or remove trash. A normal
-report with `status: "issues"` still exits successfully; automation must inspect `status` and
-`issues`, not only the process code. An absent runtime is also expected before `dev` starts.
-
-[Virtual time and asynchronous work](/virtual-time) defines clock durations, completion, and
-committed recovery.
+`doctor` does not create directories, start a daemon, repair manifests, or remove trash. A report
+with `status: "issues"` still exits successfully; automation must inspect `status` and `issues`. An
+absent runtime is expected before `dev` starts.
 
 ## Command inventory
 
-| Command | Effect |
+The first two entries are owner-approved documentation-first contracts awaiting implementation
+review; the remaining entries are source-verified in the current CLI.
+
+| Grammar | Effect |
 | --- | --- |
 | `localhost init` | Create a minimal config and ignore local runtime state. |
 | `localhost demo clone <name> [directory]` | Copy and install a named standalone demo without overwriting files. |
-| `localhost dev [--host host] [--port port]` | Start the foreground loopback project runtime. |
-| `localhost describe [service] [--instance id] [--json]` | Read configured service and operation metadata. |
-| `localhost exec <service> [operation] ...` | Discover and invoke one plugin control operation. |
+| `localhost dev [--host host] [--port port]` | Start the foreground loopback runtime. |
+| `localhost describe [service] [--instance id] [--json]` | Read service and operation metadata. |
+| `localhost exec <service> [operation] ...` | Discover or invoke one plugin operation. |
 | `localhost instance create <id> [--seed]` | Create a persistent isolated world. |
-| `localhost instance list [--json]` | List worlds known to the daemon. |
-| `localhost instance reset <id> [--seed]` | Replace a world's state, empty by default. |
+| `localhost instance list [--json]` | List known worlds. |
+| `localhost instance reset <id> [--seed]` | Replace a world, empty by default. |
 | `localhost instance destroy <id>` | Destroy the named world. |
-| `localhost seed [--instance id]` | Apply configured plugin and scenario seed once. |
-| `localhost env [--instance id] [--format dotenv\|json]` | Render app-facing connection variables. |
-| `localhost run [--instance id] -- <command...>` | Run a child with connection variables and forwarded signals. |
-| `localhost logs [service] [--instance id] [--tail n] [--json]` | Read bounded request, operation, delivery, and plugin logs. |
-| `localhost clock status [--instance id] [--json]` | Read virtual clock mode and time. |
-| `localhost clock advance <duration> [--instance id] [--json]` | Move time forward and reconcile time-derived plugin work. |
-| `localhost doctor [--json]` | Inspect config, daemon discovery, and stored manifests without repairing them. |
+| `localhost seed [--instance id]` | Apply configured seed once. |
+| `localhost env [--instance id] [--format dotenv\|json]` | Render application connection values. |
+| `localhost run [--instance id] -- <command...>` | Run one child with connection values. |
+| `localhost logs [service] [--instance id] [--tail n] [--json]` | Read bounded logs. |
+| `localhost clock status [--instance id] [--json]` | Read instance time. |
+| `localhost clock advance <duration> [--instance id] [--json]` | Advance and reconcile instance time. |
+| `localhost doctor [--json]` | Inspect project and stored runtime state without repair. |
 
 ## Stable output and exit status
 
-On success, commands with `--json` write exactly one valid JSON value and a trailing newline to
-stdout, without banners or explanatory suffixes. Diagnostics and `dev` readiness go to stderr. A
-failed JSON command leaves stdout empty. Without `--json`, data-returning commands render strings
-directly and other values as indented JSON. Operation results come from the control response; the CLI
-does not parse plugin process output to obtain them.
+With `--json`, success writes exactly one valid JSON value plus a newline to stdout. Diagnostics and
+`dev` readiness use stderr. A failed JSON command leaves stdout empty. Without `--json`, strings are
+written directly and other values as indented JSON. Operation output is the validated control
+response, not parsed plugin process output.
 
-| Exit | CLI meaning |
+| Exit | Meaning |
 | ---: | --- |
-| `2` | CLI usage or validated request input failure |
-| `3` | Configuration, discovery, transport, protocol, or control authentication failure |
+| `2` | CLI usage or validated input failure |
+| `3` | Config, discovery, transport, protocol, or control-authentication failure |
 | `4` | Missing instance, service, or operation |
 | `5` | Lifecycle conflict, committed mutation failure, or idle timeout |
 | `10` | Other plugin, runtime, lifecycle, or unexpected failure |
 | `130` | CLI interruption |
 
-Direct control failures are written as `error: <message>` on stderr. When the runtime supplied a
-correlation ID, the CLI appends it to that boundary's message. A missing target instance is
-intentionally different: the CLI replaces `INSTANCE_NOT_FOUND` with a target-specific message that
-lists existing instance IDs and the exact `localhost instance create <id>` hint. That CLI-owned
-guidance omits the original correlation ID. The CLI does not expose structured error details; use
-`ControlApiError` from the programmatic client when recovery depends on fields such as a committed
-clock window.
+Direct control failures render `error: <message>` on stderr and append a boundary correlation ID
+when supplied. A missing instance instead gets target-specific existing IDs and an exact
+`localhost instance create <id>` hint; that CLI-owned guidance omits the original correlation ID.
+The CLI does not expose structured error details. Use `ControlApiError` from the programmatic client
+when recovery needs fields such as a committed clock window.
 
-`localhost run` is the exception to the table: after a child starts, the command passes through that
-child's exit code, including signal-derived codes such as 129, 130, or 143.
+After a `run` child starts, its exit code is passed through, including signal-derived `129`, `130`,
+or `143`.
 
 ## Plain HTTP control
 
-The control API is versioned below `/_/v1`. Health is unauthenticated; every other endpoint requires
-the current daemon bearer token. With the default storage directory, trusted local automation can
-read it without exporting it to child processes:
+The control API lives below `/_/v1`. Only `/_/v1/health` is unauthenticated; every other endpoint
+requires the current daemon token. This Bash example keeps it in one shell variable and clears it:
 
-```sh
+```bash
 localhost_control_token="$(< .localhost2137/control-token)"
-curl -s http://127.0.0.1:2137/_/v1/instances \
-  -H "authorization: Bearer $localhost_control_token"
+curl --silent http://127.0.0.1:2137/_/v1/instances \
+  --header "authorization: Bearer $localhost_control_token"
 unset localhost_control_token
 ```
 
-Successful responses use `{ "data": ... }`. Failures use an `error` object with `code`, `message`,
-`correlationId`, and sometimes structured `details`. JSON mutations also require a JSON content type
-and an exact request shape. `connectRuntime` from `localhost2137/client` owns those protocol details
-when shell access is not required.
+Success uses `{ "data": ... }`. Failure uses an `error` object with `code`, `message`,
+`correlationId`, and sometimes `details`. JSON mutations also require a JSON content type and exact
+shape. Prefer `connectRuntime` from `localhost2137/client` outside shell automation.
 
-Read the token again after a daemon restart; do not cache it. Never expose it to browser code, an
-application process, logs, traces, or build artifacts. Application code needs only the connection
-values returned by its configured plugins.
+Read the token again after daemon restart. Never expose it to browser code, application processes,
+logs, traces, or build artifacts. [Local security model](/security) defines the trust boundary.
