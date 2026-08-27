@@ -464,9 +464,21 @@ assert(!("account_id" in wrangler), "Wrangler config must not contain account-sp
 const packageManifest = JSON.parse(await readFile(join(docsRoot, "package.json"), "utf8"));
 assert(!packageManifest.dependencies?.next && !packageManifest.devDependencies?.next);
 assert.equal(packageManifest.scripts.build, "react-router build");
+assert.equal(
+	packageManifest.scripts.check,
+	"pnpm check:content && pnpm build && pnpm check:routes",
+);
 assert.equal(packageManifest.scripts["check:routes"], "node scripts/check-built-routes.mjs");
 assert.equal(packageManifest.scripts.dev, "react-router dev");
 assert.equal(packageManifest.scripts.deploy, "pnpm build && wrangler deploy");
+
+const repositoryManifest = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8"));
+assert.equal(repositoryManifest.scripts["docs:check"], "pnpm --filter @localhost2137/docs check");
+assert(repositoryManifest.scripts.check.includes("pnpm docs:check"));
+assert.equal(
+	repositoryManifest.scripts["pack:check"],
+	"pnpm clean && tsc -b && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
+);
 
 const workspaceConfig = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
 assert(/^autoInstallPeers: false$/m.test(workspaceConfig));

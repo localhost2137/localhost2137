@@ -8,6 +8,7 @@
 	},
 	"scripts": {
 		"build": "react-router build",
+		"check": "pnpm check:content && pnpm build && pnpm check:routes",
 		"check:content": "node scripts/check-content.mjs",
 		"check:routes": "node scripts/check-built-routes.mjs",
 		"deploy": "pnpm build && wrangler deploy",
