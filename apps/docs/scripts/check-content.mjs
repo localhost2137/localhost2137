@@ -272,6 +272,36 @@ assert(!existingApplication?.includes("replace-with-"));
 assert(!existingApplication?.includes("list-messages"));
 assert(existingApplication?.includes("only for the crash-course config's first unseeded dev world"));
 
+const seeding = content.get("seeding.mdx");
+const seedingConfig = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/fixtures/seeding-config.ts"),
+	"utf8",
+);
+const seedLifecycleTest = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/seed-lifecycle.test.ts"),
+	"utf8",
+);
+assert(
+	seeding?.includes(titledCodeBlock("ts", "localhost.config.ts", seedingConfig)),
+	"Seeding config must match the executable example.",
+);
+assert(
+	seeding?.includes(titledCodeBlock("ts", "test/seed-lifecycle.test.ts", seedLifecycleTest)),
+	"Seeding lifecycle test must match the executable example.",
+);
+for (const command of [
+	"pnpm exec localhost instance create seed-guide",
+	"pnpm exec localhost seed --instance seed-guide",
+	"pnpm exec localhost instance reset seed-guide",
+	"pnpm exec localhost instance reset seed-guide --seed",
+	"pnpm exec localhost instance destroy seed-guide",
+]) {
+	assert(seeding?.includes(command), `Seeding guide is missing the owned CLI step: ${command}`);
+}
+assert(seeding?.includes("Another in-place seed is refused"));
+assert(seeding?.includes("no partially seeded new instance becomes addressable"));
+assert(seeding?.includes("restores the prior world when it can"));
+
 const diagnosing = content.get("diagnosing.mdx");
 assert(diagnosing?.includes("serialized diagnostic identifies the selected config path"));
 assert(!/\bLOCK(?:ED|_STALE|_CORRUPT)\b/.test(diagnosing ?? ""));

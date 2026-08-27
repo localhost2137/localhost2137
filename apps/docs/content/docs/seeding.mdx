@@ -1,160 +1,192 @@
 ---
 title: Seed test worlds
-description: Choose between configured seed data, cross-service scenario seed, operations, and application-facing APIs without hiding the behavior a test must prove.
+description: Define a reusable baseline, request it explicitly, and recover according to the mutation that ran it.
 ---
 
-Seed data is a reusable starting point, not an automatic fixture. New instances and resets are empty
-by default even when the config contains seed data. The owner must request seeding explicitly.
+Configured seed is a reusable starting point, not an automatic fixture. Creation and reset stay empty
+unless their owner requests the baseline.
 
-“Empty” means no configured seed has run. A plugin may still create identities or records required
-for its own valid service state.
+## Define the baseline in config
 
-## Choose the smallest arrangement mechanism
-
-Use the mechanism that makes the test's starting assumptions clear without replacing the behavior
-under test:
-
-| Mechanism | Best fit | Important boundary |
-| --- | --- | --- |
-| Plugin seed | Stable service-local baseline shared by many scenarios, such as a catalog or workspace identities. | Runs through the plugin lifecycle, not its provider-shaped HTTP API. |
-| Top-level scenario seed | A reusable baseline that composes typed operations across configured services. | Uses privileged operations and has no per-instance parameters. |
-| Operations after creation | Data or failures specific to one test. | Keep setup near the scenario and use only documented operation inputs. |
-| Application SDK or HTTP | Creating the state is itself part of the application behavior being tested. | This is application traffic, not privileged setup. |
-
-Seed is not better than operations because it runs earlier, and operations are not better because
-they are more explicit. A small common baseline belongs in config. Case-specific variation usually
-belongs beside the test. If the claim says the application creates a record through its provider
-client, neither seed nor an operation should create that record for it.
-
-## Define one reusable baseline
-
-A plugin that supports seed data publishes a seed schema. The runtime validates the configured value
-when it resolves the config. This complete example defines a local workspace baseline, then uses the
-top-level scenario seed to add one message through the plugin's typed operation:
+This complete config uses both seed layers. The plugin seed creates Ada and `general`; the top-level
+scenario seed then calls a typed operation that depends on both:
 
 ```ts title="localhost.config.ts"
 import { slack } from "@localhost2137/slack";
 import { defineConfig } from "localhost2137";
 
 export default defineConfig({
-  services: {
-    team: slack({
-      config: {
-        workspaceName: "Seed example",
-        botToken: "xoxb-local-seed",
-        signingSecret: "local-seed-secret",
-        eventsUrl: null,
-      },
-      seed: {
-        users: [{ id: "U_ADA", name: "Ada" }],
-        channels: [
-          { id: "C_GENERAL", name: "general", members: ["U_ADA"] },
-        ],
-      },
-    }),
-  },
-  async seed(world) {
-    await world.team.sendMessage({
-      channel: "C_GENERAL",
-      from: "U_ADA",
-      text: "ready",
-    });
-  },
+	clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+	services: {
+		slack: slack({
+			config: {
+				botToken: "xoxb-local-seeding-guide",
+				eventsUrl: null,
+				signingSecret: "local-seeding-guide-signing-secret",
+				workspaceName: "Seeded workspace",
+			},
+			seed: {
+				users: [{ id: "U_ADA", name: "Ada" }],
+				channels: [{ id: "C_GENERAL", name: "general", members: ["U_ADA"] }],
+			},
+		}),
+	},
+	seed: async (world) => {
+		await world.slack.sendMessage({
+			channel: "general",
+			from: "Ada",
+			text: "baseline ready",
+		});
+	},
 });
 ```
 
-The `team` key determines `world.team`; another configured service contributes another typed entry.
-The scenario facade exposes each service's connection values and operations. It does not expose
-instance lifecycle methods such as reset or destroy.
+Each installed plugin defines its own seed schema. Plugin seeds run sequentially in service order;
+the top-level `seed` runs only after every plugin seed succeeds. Its facade contains typed service
+connections and operations, not lifecycle methods. Keep this scenario small enough that the config
+still explains the resulting world.
 
-Plugin seeds run sequentially in configuration order. The top-level scenario runs after every
-plugin seed succeeds, so it can refer to identities created by those plugin seeds.
+## Prove the lifecycle in one owned test
 
-Do not use the scenario seed as a hidden test suite. Keep it short enough that a reader can explain
-the resulting baseline from the config. Put alternatives, edge cases, and expected failures in the
-tests that need them.
+The checked test starts empty, applies seed in place, proves a second in-place seed is refused,
+resets to empty, then resets with seed:
 
-## Request seed explicitly
+```ts title="test/seed-lifecycle.test.ts"
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "./fixtures/seeding-config.js";
 
-The persistent `dev` world is created empty the first time `localhost dev` starts. Seed it once:
+it("applies plugin seed before scenario seed and keeps reset explicit", async () => {
+	const runtime = await startRuntime();
 
-```sh
-pnpm exec localhost seed
+	try {
+		const instance = await runtime.createInstance();
+		try {
+			await expect(readUserNames(instance.slack.connection)).resolves.toEqual([
+				"localhost2137-bot",
+			]);
+			await expect(instance.slack.listMessages({ channel: "general" })).rejects.toMatchObject({
+				code: "SLACK_CHANNEL_NOT_FOUND",
+			});
+
+			await instance.seed();
+			await expectSeededBaseline(instance);
+			await expect(instance.seed()).rejects.toMatchObject({ code: "LIFECYCLE_CONFLICT" });
+
+			await instance.reset();
+			await expect(readUserNames(instance.slack.connection)).resolves.toEqual([
+				"localhost2137-bot",
+			]);
+
+			await instance.reset({ seed: true });
+			await expectSeededBaseline(instance);
+		} finally {
+			await instance.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
+});
+
+function startRuntime() {
+	return createTestRuntime({ config, port: 0, storage: "temporary" });
+}
+
+type SeedingRuntime = Awaited<ReturnType<typeof startRuntime>>;
+type SeedingInstance = Awaited<ReturnType<SeedingRuntime["createInstance"]>>;
+
+async function expectSeededBaseline(instance: SeedingInstance): Promise<void> {
+	await expect(readUserNames(instance.slack.connection)).resolves.toEqual([
+		"localhost2137-bot",
+		"Ada",
+	]);
+	await expect(instance.slack.listMessages({ channel: "general" })).resolves.toMatchObject([
+		{ text: "baseline ready", userId: "U_ADA" },
+	]);
+}
+
+async function readUserNames(
+	connection: Readonly<{ apiUrl: string; botToken: string }>,
+): Promise<string[]> {
+	const response = await fetch(new URL("users.list", connection.apiUrl), {
+		headers: { authorization: `Bearer ${connection.botToken}` },
+	});
+	const payload = (await response.json()) as {
+		members: Array<{ name: string }>;
+		ok: true;
+	};
+	expect(response.status).toBe(200);
+	expect(payload.ok).toBe(true);
+	return payload.members.map(({ name }) => name);
+}
 ```
 
-Most CLI commands target `dev`; use `--instance <id>` for another existing world. To create or reset
-a named world with the configured baseline in one mutation:
+```sh
+pnpm exec vitest run test/seed-lifecycle.test.ts
+```
+
+The message assertion proves ordering: scenario seed could not post as Ada to `general` before the
+plugin seed created that user, channel, and membership. The empty world still contains the plugin's
+required bot identity; empty means configured seed did not run, not that plugin storage has no rows.
+
+## Run the same transitions from the CLI
+
+This shell owns one named world and destroys it at the end:
+
+```sh
+pnpm exec localhost instance create seed-guide
+
+# Apply the configured baseline to this unseeded world exactly once
+pnpm exec localhost seed --instance seed-guide
+
+# Replace it with an empty world
+pnpm exec localhost instance reset seed-guide
+
+# Replace it again and apply the configured baseline
+pnpm exec localhost instance reset seed-guide --seed
+
+pnpm exec localhost instance destroy seed-guide
+```
+
+For a new world that should begin seeded, combine creation and seed:
 
 ```sh
 pnpm exec localhost instance create review --seed
-pnpm exec localhost instance reset review --seed
+pnpm exec localhost instance destroy review
 ```
 
-Typed tests make the same choice in code:
+`localhost seed` without `--instance` targets persistent `dev`. Run it only for a currently unseeded
+world; successful seed status survives daemon restarts. Do not reset a persistent development world
+merely to make a copied seed command rerunnable.
 
-```ts
-const instance = await runtime.createInstance({ seed: true });
+## Choose what creates each record
 
-await instance.reset(); // empty replacement
-await instance.reset({ seed: true }); // configured baseline again
-```
+| Mechanism | Use it when | It does not prove |
+| --- | --- | --- |
+| Plugin seed | Many scenarios share one service-local baseline. | The application can create those records. |
+| Top-level scenario seed | One reusable baseline composes operations across mounted services. | Provider-facing application behavior. |
+| Operations after creation | Setup or failure state belongs to one scenario. | The application can perform that operation. |
+| Application SDK, HTTP, or callback | Creating the state is the behavior under test. | Nothing beyond the plugin's documented compatibility surface. |
 
-`instance.seed()` applies the baseline to an existing unseeded world. A successful seed can run only
-once for that world until reset. Its status persists across runtime restarts, so restart does not
-silently reapply it.
-
-## Reset means replace, not seed again
-
-A reset replaces the service state and returns the instance clock to its configured starting mode.
-It keeps the instance ID, route, and persistence policy. Without `{ seed: true }` or `--seed`, the
-replacement stays empty.
-
-That default prevents a test from inheriting data merely because seed was added to config later. It
-also keeps reset from becoming a hidden source of records. When a test requires the baseline, say so
-at the reset or creation call.
-
-Independent tests should usually create independent instances rather than reset one shared world.
-Reset is appropriate when one owner deliberately reuses a named development world. It is not a
-synchronization mechanism for concurrent tests.
-
-[Instances and isolation](/instances#create-reset-and-destroy-mean-different-things) describes the
-full instance lifecycle and ownership rules.
+Prefer case-specific operations beside the test over turning config seed into a hidden suite. Stable
+IDs help only when that plugin's seed schema accepts them; do not transfer seed fields or ID rules
+between plugins.
 
 ## Recover according to the outer mutation
 
-Service seeds are not one transaction across plugins. A later plugin seed can fail after an earlier
-one changed storage. What remains visible depends on the action that requested seed:
+Service seed is not one transaction across plugins. A later plugin or the top-level scenario can
+fail after earlier state changed. Recovery depends on the mutation that requested seed:
 
-| Action | Result when seed fails | Recovery |
+| Action | Failed result | Recovery |
 | --- | --- | --- |
-| `localhost seed` or `instance.seed()` | The existing world remains addressable with `seed_failed` status and may contain partial changes. Another in-place seed is refused. | Inspect the failure, fix its cause, then reset the instance. Request seed on the reset only when the baseline is ready to run from empty state. |
-| Create with `--seed` or `{ seed: true }` | Creation fails and no partially seeded new instance becomes addressable. | Fix the cause, then create the instance again. There is no failed new instance to reset. |
-| Reset with `--seed` or `{ seed: true }` | The replacement fails. The runtime restores the prior world when it can instead of making the partial replacement active. | Do not assume reset succeeded. Fix the cause and retry the reset. If restoration also failed, inspect that reported failure before using the instance. |
+| `localhost seed` or `instance.seed()` | The existing world remains addressable with `seed_failed` status and can contain partial changes. Another in-place seed is refused. | Inspect the failure, fix it, then reset. Add seed to that reset only when the baseline can run again from empty state. |
+| Create with `--seed` or `{ seed: true }` | Creation fails; no partially seeded new instance becomes addressable. | Fix the cause, then create again. There is no failed new instance to reset. |
+| Reset with `--seed` or `{ seed: true }` | The replacement fails. The runtime restores the prior world when it can instead of activating the partial replacement. | Do not assume reset succeeded. Fix and retry. If restoration also failed, resolve that reported failure before using the instance. |
 
-Restart the runtime before recovery when its loaded config or plugin code changed.
+Restart the runtime before recovery when loaded config or plugin code changed. The top-level scenario
+belongs to the same outer mutation as plugin seed and follows the same row.
 
-The top-level scenario runs inside the same create, reset, or in-place seed action as the plugin
-seeds. If it fails after changing service state, the surrounding action follows the corresponding
-row above.
-
-## Keep setup from becoming the subject
-
-Before adding data to seed, finish this sentence:
-
-```text
-Given this reusable baseline, the test proves that the application ...
-```
-
-If the missing words describe creating the baseline itself, exercise that action through the
-application's normal provider-facing interface. If they describe behavior after the baseline exists,
-seed or operations can be honest setup.
-
-Prefer explicit IDs only when the plugin seed schema supports them and the scenario benefits from
-stable references. Do not infer that every plugin accepts IDs, that generated IDs are repeatable, or
-that one plugin's seed fields exist in another.
-
-[Configuration](/configuration#seed-only-when-requested) defines the config fields,
-[Integration testing](/testing#start-one-typed-in-process-world) shows isolated test ownership and
-the explicit seed option, and
-[Operations and emulated APIs](/operations-and-apis#start-with-the-claim) helps keep arrangement
-separate from the application interaction being proved.
+[Configuration](/configuration#seed-only-when-requested) defines seed fields,
+[Instances and isolation](/instances#create-reset-and-destroy-mean-different-things) defines
+lifecycle ownership, and [Operations and emulated APIs](/operations-and-apis#start-with-the-claim)
+keeps setup separate from application evidence.
