@@ -54,9 +54,7 @@ it("reads one scripted Slack-shaped response without service state", async () =>
 
 		expect(stderr).toBe("");
 		expect(JSON.parse(stdout)).toEqual([{ id: "U_STUB", name: "Scripted Ada" }]);
-		expect(requests).toEqual([
-			{ authorization: "Bearer xoxb-scripted", url: "/api/users.list" },
-		]);
+		expect(requests).toEqual([{ authorization: "Bearer xoxb-scripted", url: "/api/users.list" }]);
 	} finally {
 		await new Promise<void>((resolve, reject) => {
 			server.close((cause) => (cause ? reject(cause) : resolve()));
