@@ -1,4 +1,4 @@
-import { copyFile, lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +11,6 @@ const files = Object.freeze([
 	[".gitignore", "gitignore.template"],
 	["README.md", "README.md"],
 	["localhost.config.ts", "localhost.config.ts"],
-	["package.demo.json", "package.json"],
 	["pnpm-workspace.yaml", "pnpm-workspace.yaml"],
 	["src/bot.ts", "src/bot.ts"],
 	["src/main.ts", "src/main.ts"],
@@ -19,6 +18,13 @@ const files = Object.freeze([
 	["tsconfig.json", "tsconfig.json"],
 	["vitest.config.ts", "vitest.config.ts"],
 ]);
+const packageTargetName = "package.json";
+const workspacePackages = Object.freeze(
+	new Map([
+		["@localhost2137/slack", join(repositoryRoot, "plugins/slack/package.json")],
+		["localhost2137", join(repositoryRoot, "packages/localhost2137/package.json")],
+	]),
+);
 
 const [argument] = process.argv.slice(2);
 if (argument === "--write") {
@@ -30,6 +36,7 @@ if (argument === "--write") {
 		await mkdir(dirname(target), { recursive: true });
 		await copyFile(source, target);
 	}
+	await writeFile(join(targetRoot, packageTargetName), await standalonePackageJson());
 	process.stdout.write("Synchronized embedded demo assets.\n");
 } else if (argument === undefined) {
 	await checkAssets();
@@ -39,7 +46,7 @@ if (argument === "--write") {
 }
 
 async function checkAssets() {
-	const expectedNames = files.map(([, targetName]) => targetName).sort();
+	const expectedNames = [...files.map(([, targetName]) => targetName), packageTargetName].sort();
 	const actualNames = await listRegularFiles(targetRoot);
 	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
 		throw new Error(
@@ -55,6 +62,84 @@ async function checkAssets() {
 			throw new Error(`Embedded demo ${targetName} is stale. Run pnpm demo-assets:sync.`);
 		}
 	}
+	const expectedPackageJson = await standalonePackageJson();
+	const targetPackageJson = await readFile(join(targetRoot, packageTargetName));
+	if (!expectedPackageJson.equals(targetPackageJson)) {
+		throw new Error("Embedded demo package.json is stale. Run pnpm demo-assets:sync.");
+	}
+}
+
+async function standalonePackageJson() {
+	const sourcePath = join(sourceRoot, "package.json");
+	const manifest = await readJsonObject(sourcePath, "Demo package.json");
+	const resolvedVersions = new Map();
+	for (const [packageName, manifestPath] of workspacePackages) {
+		const dependencyManifest = await readJsonObject(manifestPath, `${packageName} package.json`);
+		if (typeof dependencyManifest.version !== "string" || dependencyManifest.version === "") {
+			throw new Error(`${packageName} package.json must declare a version.`);
+		}
+		resolvedVersions.set(packageName, dependencyManifest.version);
+	}
+
+	const replaced = new Set();
+	for (const sectionName of [
+		"dependencies",
+		"devDependencies",
+		"optionalDependencies",
+		"peerDependencies",
+	]) {
+		const section = manifest[sectionName];
+		if (section === undefined) continue;
+		if (!isJsonObject(section)) throw new Error(`Demo ${sectionName} must be an object.`);
+		for (const [dependencyName, specifier] of Object.entries(section)) {
+			if (typeof specifier !== "string" || !specifier.startsWith("workspace:")) continue;
+			const version = resolvedVersions.get(dependencyName);
+			if (specifier !== "workspace:*" || version === undefined) {
+				throw new Error(
+					`Unexpected workspace specifier ${dependencyName}@${specifier} in demo package.json.`,
+				);
+			}
+			section[dependencyName] = version;
+			replaced.add(dependencyName);
+		}
+	}
+	for (const dependencyName of workspacePackages.keys()) {
+		if (!replaced.has(dependencyName)) {
+			throw new Error(`Demo package.json must declare ${dependencyName} as workspace:*.`);
+		}
+	}
+	assertNoWorkspaceSpecifiers(manifest, "package.json");
+	return Buffer.from(`${JSON.stringify(manifest, null, "\t")}\n`);
+}
+
+async function readJsonObject(path, label) {
+	let value;
+	try {
+		value = JSON.parse(await readFile(path, "utf8"));
+	} catch (cause) {
+		throw new Error(`${label} must contain valid JSON.`, { cause });
+	}
+	if (!isJsonObject(value)) throw new Error(`${label} must contain a JSON object.`);
+	return value;
+}
+
+function assertNoWorkspaceSpecifiers(value, path) {
+	if (typeof value === "string" && value.startsWith("workspace:")) {
+		throw new Error(`Unexpected workspace specifier at ${path}: ${value}`);
+	}
+	if (Array.isArray(value)) {
+		for (const [index, item] of value.entries()) {
+			assertNoWorkspaceSpecifiers(item, `${path}[${index}]`);
+		}
+	} else if (isJsonObject(value)) {
+		for (const [key, item] of Object.entries(value)) {
+			assertNoWorkspaceSpecifiers(item, `${path}.${key}`);
+		}
+	}
+}
+
+function isJsonObject(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function listRegularFiles(root) {

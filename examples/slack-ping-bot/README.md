@@ -1,7 +1,8 @@
 # Slack ping bot
 
 This bot receives a signed local Slack event and replies through the normal Slack Bolt client. It
-needs no Slack workspace, OAuth flow, API key, or internet connection.
+needs no Slack workspace, OAuth flow, or API key. Installing its dependencies may require registry
+access; running the demo does not contact Slack.
 
 Start the emulator:
 
@@ -29,8 +30,8 @@ pnpm exec localhost exec slack send-message \
 pnpm exec localhost exec slack list-messages --channel general --json
 ```
 
-The second command returns both `ping` and the bot's `pong`. The checked integration test runs the
-same callback boundary in one process:
+After callback delivery completes, the second command shows both `ping` and the bot's `pong`. The
+checked integration test waits for that boundary explicitly:
 
 ```sh
 pnpm test
