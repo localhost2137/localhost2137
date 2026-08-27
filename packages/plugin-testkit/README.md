@@ -1,7 +1,12 @@
 # `@localhost2137/plugin-testkit`
 
-Register the contract cases with the project's test runner. This is the complete checked
-registration used by the Slack plugin:
+```sh
+pnpm add -D @localhost2137/plugin-testkit
+```
+
+The package declares `localhost2137` as a peer dependency; install it in the plugin project too.
+Supply a plugin-specific fixture that satisfies the exported `PluginContractFixture` type, then
+register the cases with the project's test runner:
 
 ```ts title="test/slack-contract.test.ts"
 import { describe, it } from "vitest";
@@ -14,6 +19,9 @@ describe("Slack plugin contract", () => {
 	}
 });
 ```
+
+Read the canonical [plugin authoring and fixture guidance](https://localhost2137.dev/plugins/authoring#contract-and-semantic-tests)
+before implementing the fixture.
 
 `createPluginContractCases(fixture)` returns 18 core cases. It appends one case when the fixture
 declares time-advance recovery and one when it declares startup recovery. Use

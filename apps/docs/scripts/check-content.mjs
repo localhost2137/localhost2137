@@ -1008,6 +1008,18 @@ const pluginTestkitReadme = await readFile(
 	join(repositoryRoot, "packages/plugin-testkit/README.md"),
 	"utf8",
 );
+assert.equal(
+	pluginTestkitReadme.match(/```[^\n]*\n/)?.[0],
+	"```sh\n",
+	"Plugin-testkit README must lead with its install command.",
+);
+assert(pluginTestkitReadme.includes("pnpm add -D @localhost2137/plugin-testkit"));
+assert(pluginTestkitReadme.includes("exported `PluginContractFixture` type"));
+assert(
+	pluginTestkitReadme.includes(
+		"https://localhost2137.dev/plugins/authoring#contract-and-semantic-tests",
+	),
+);
 assert(
 	pluginTestkitReadme.includes(
 		titledCodeBlock("ts", "test/slack-contract.test.ts", checkedContractRegistration),
