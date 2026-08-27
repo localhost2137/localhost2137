@@ -67,59 +67,87 @@ contract question, not a reason to couple a plugin to runtime internals.
 
 ## Minimal authoring shape
 
-This file-backed counter shows a small, working public authoring shape, not the entire authoring API.
-Direct file I/O keeps the example small; a database-backed plugin would open its database in `start`
-and return it as live state.
+This checked file-backed service is a small, working public authoring shape, not the entire
+authoring API. It puts durable state below both a Hono route and typed operations:
 
-```ts
+```ts title="examples/status-plugin/src/status-plugin.ts"
 import { readFile, writeFile } from "node:fs/promises";
 import { Hono } from "hono";
 import { defineOperation, definePlugin, type PluginEnv } from "localhost2137";
 import { z } from "zod";
 
-type Config = Readonly<Record<string, never>>;
-type State = Readonly<{ valuePath: string }>;
+const statusSchema = z.object({
+	message: z.string().nullable(),
+	state: z.enum(["operational", "degraded", "outage"]),
+});
+const setStatusInput = z.object({
+	message: z.string().optional(),
+	state: statusSchema.shape.state,
+});
 
-const operation = defineOperation<"counter", State, Config>();
-const read = operation({
-  description: "Read this instance's counter",
-  input: z.object({}),
-  output: z.object({ value: z.int() }),
-  run: async (context) => ({
-    value: Number(await readFile(context.state.valuePath, "utf8")),
-  }),
+type Config = Readonly<Record<string, never>>;
+type State = Readonly<{ statusPath: string }>;
+type Status = z.output<typeof statusSchema>;
+
+const initialStatus: Status = { message: null, state: "operational" };
+const operation = defineOperation<"status", State, Config>();
+
+const readStatus = operation({
+	description: "Read the current status",
+	input: z.object({}),
+	output: statusSchema,
+	run: (context) => loadStatus(context.state.statusPath),
+});
+
+const setStatus = operation({
+	description: "Set the status exposed to the application",
+	input: setStatusInput,
+	output: statusSchema,
+	run: async (context, input) => {
+		const status: Status = {
+			message: input.message ?? null,
+			state: input.state,
+		};
+		await saveStatus(context.state.statusPath, status);
+		return status;
+	},
 });
 
 const api = new Hono<PluginEnv<State, Config>>();
-api.get("/value", async (context) => {
-  const { state } = context.get("lh");
-  return context.json({
-    value: Number(await readFile(state.valuePath, "utf8")),
-  });
+api.get("/v1/status", async (context) => {
+	const { state } = context.get("lh");
+	return context.json(await loadStatus(state.statusPath));
 });
 
-export const counter = definePlugin({
-  id: "counter",
-  description: "Stateful counter emulator",
-  stateVersion: 1,
-  configSchema: z.object({}),
-  api,
-  operations: { read },
-  lifecycle: {
-    create: (context) =>
-      writeFile(context.storage.path("value"), "0", "utf8"),
-    start: (context): State => ({
-      valuePath: context.storage.path("value"),
-    }),
-  },
-  connection: ({ baseUrl, instanceId, serviceKey }) => {
-    const apiUrl = `${baseUrl}/${instanceId}/${serviceKey}`;
-    return {
-      values: { apiUrl },
-      env: { COUNTER_API_URL: apiUrl },
-    };
-  },
+export const statusPlugin = definePlugin({
+	api,
+	configSchema: z.object({}),
+	connection: ({ baseUrl, instanceId, serviceKey }) => {
+		const apiUrl = `${baseUrl}/${instanceId}/${serviceKey}`;
+		return {
+			env: { STATUS_API_URL: apiUrl },
+			values: { apiUrl },
+		};
+	},
+	description: "Local status service",
+	id: "status",
+	lifecycle: {
+		create: (context) => saveStatus(context.storage.path("status.json"), initialStatus),
+		start: (context): State => ({
+			statusPath: context.storage.path("status.json"),
+		}),
+	},
+	operations: { readStatus, setStatus },
+	stateVersion: 1,
 });
+
+async function loadStatus(path: string): Promise<Status> {
+	return statusSchema.parse(JSON.parse(await readFile(path, "utf8")));
+}
+
+async function saveStatus(path: string, status: Status): Promise<void> {
+	await writeFile(path, `${JSON.stringify(status)}\n`, "utf8");
+}
 ```
 
 Bind `defineOperation` once for one literal plugin ID, state type, and config type. The runtime
@@ -166,6 +194,96 @@ Lifecycle hooks are ownership boundaries, not convenient startup callbacks:
 | `seed` | Apply schema-validated baseline state only when seeding is explicitly requested. |
 | `onTimeAdvanced` | Reconcile one already committed time window idempotently by `advanceId`, `from`, and `to`. |
 | `stop` | Close resources belonging to one successful `start`, including during cleanup after a later startup hook fails. |
+
+A production lifecycle can keep each ownership rule visible in one place. This checked example opens
+and closes a database, migrates stopped storage, seeds transactionally, and reconciles durable work
+at startup and after committed clock advancement:
+
+```ts title="plugins/stripe/src/lifecycle.ts"
+import type { Lifecycle, RunningPluginContext } from "localhost2137";
+import type { StripeConfig, StripeSeed } from "./config.js";
+import { createStripeServices, seedStripeServices } from "./domain/stripe-services.js";
+import { StripeDatabase } from "./persistence/database.js";
+import { assertCurrentDatabaseVersion, migrateDatabase } from "./persistence/migrations.js";
+import type { StripePluginDependencies } from "./plugin-dependencies.js";
+import type { StripeState } from "./state.js";
+import { StripeWebhookDispatcher } from "./webhooks/webhook-dispatcher.js";
+
+type StripeLifecycle = Lifecycle<StripeState, StripeConfig> & {
+	readonly seed: (
+		context: RunningPluginContext<StripeState, StripeConfig>,
+		seed: StripeSeed,
+	) => Promise<void> | void;
+};
+
+export function createStripeLifecycle(dependencies: StripePluginDependencies): StripeLifecycle {
+	return {
+		create(context) {
+			dependencies.recordLifecycle?.("create");
+			dependencies.beforeCreate?.(context);
+			withDatabase(context.storage.path("stripe.sqlite"), (database) => {
+				migrateDatabase(database.raw());
+			});
+		},
+		async onTimeAdvanced(context, advance) {
+			const eventIds = context.state.services.billing.reconcileTimeAdvance(advance);
+			await dependencies.afterTimeReconciled?.(context, advance);
+			await context.state.webhooks.reconcile(context, eventIds);
+		},
+		async onStarted(context) {
+			await context.state.webhooks.reconcile(
+				context,
+				context.state.services.billing.pendingWebhookEventIds(),
+			);
+		},
+		seed(context, seed) {
+			dependencies.recordLifecycle?.("seed");
+			context.state.database.transaction(() => {
+				seedStripeServices(context.state.services, seed, context.clock.now());
+			});
+		},
+		start(context) {
+			dependencies.recordLifecycle?.("start");
+			const database = new StripeDatabase(context.storage.path("stripe.sqlite"));
+			try {
+				assertCurrentDatabaseVersion(database.raw());
+				return Object.freeze({
+					database,
+					services: createStripeServices(database, context.config),
+					webhooks: new StripeWebhookDispatcher(database, context.config, {
+						...(dependencies.webhookDeliveryTimeoutMs === undefined
+							? {}
+							: { timeoutMs: dependencies.webhookDeliveryTimeoutMs }),
+					}),
+				});
+			} catch (cause) {
+				database.close();
+				throw cause;
+			}
+		},
+		stop(context) {
+			dependencies.recordLifecycle?.("stop");
+			dependencies.beforeStop?.(context);
+			context.state.database.close();
+		},
+		update(context, version) {
+			dependencies.recordLifecycle?.(`update:${version.from}:${version.to}`);
+			withDatabase(context.storage.path("stripe.sqlite"), (database) => {
+				migrateDatabase(database.raw());
+			});
+		},
+	};
+}
+
+function withDatabase(path: string, work: (database: StripeDatabase) => void): void {
+	const database = new StripeDatabase(path);
+	try {
+		work(database);
+	} finally {
+		database.close();
+	}
+}
+```
 
 Only `create` and `start` are required. A failed `start` does not earn a later `stop`, because the
 service never reached running state. Use `try`/`catch` inside `start` to close a database, listener,
@@ -271,6 +389,35 @@ Translate expected domain failures at the adapter boundary:
 - an operation throws `LocalhostError` with a stable upper-snake-case code, safe message, HTTP
   status, and only useful JSON details.
 
+```ts title="plugins/slack/src/operations.ts (source excerpt)"
+function runSlackOperation<Value>(
+	dependencies: SlackPluginDependencies,
+	operation: string,
+	context: RunningPluginContext<SlackState, SlackConfig>,
+	run: () => Value,
+): Value {
+	dependencies.beforeOperation?.(operation, context);
+	try {
+		return dependencies.transformOperationResult
+			? dependencies.transformOperationResult(operation, run())
+			: run();
+	} catch (cause) {
+		if (!(cause instanceof SlackError)) throw cause;
+		throw new LocalhostError(`SLACK_${cause.code.toUpperCase()}`, cause.message, {
+			cause,
+			details: { slackError: cause.code },
+			status: slackOperationStatus(cause),
+		});
+	}
+}
+
+function slackOperationStatus(error: SlackError): number {
+	if (error.code === "channel_not_found" || error.code === "user_not_found") return 404;
+	if (error.code === "name_taken" || error.code === "not_in_channel") return 409;
+	return 400;
+}
+```
+
 Keep the original error as `cause` for internal diagnosis, but do not expose secrets in the safe
 message or details. Unexpected operation errors become the generic `PLUGIN_EXECUTION_FAILED`
 boundary. Do not make public routes return control-plane error shapes merely because operations use
@@ -285,15 +432,15 @@ convenient; it does not prove provider compatibility.
 `@localhost2137/plugin-testkit` supplies shared runtime-integration cases. Register them with the
 test runner so each behavior remains visible:
 
-```ts
-import { createPluginContractCases } from "@localhost2137/plugin-testkit";
+```ts title="plugins/slack/test/slack-contract.test.ts"
 import { describe, it } from "vitest";
-import { pluginContractFixture } from "./plugin-contract-fixture.js";
+import { createPluginContractCases } from "@localhost2137/plugin-testkit";
+import { slackContractFixture } from "./contract/slack-contract-harness.js";
 
-describe("plugin contract", () => {
-  for (const contractCase of createPluginContractCases(pluginContractFixture)) {
-    it(contractCase.name, () => contractCase.run(), 30_000);
-  }
+describe("Slack plugin contract", () => {
+	for (const contractCase of createPluginContractCases(slackContractFixture)) {
+		it(contractCase.name, contractCase.run, 30_000);
+	}
 });
 ```
 

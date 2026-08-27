@@ -240,8 +240,30 @@ const pluginContractSkill = await readFile(
 	join(repositoryRoot, "skills/build-localhost2137-plugin/references/public-contract.md"),
 	"utf8",
 );
+const skillStatusPlugin = await readFile(
+	join(repositoryRoot, "examples/status-plugin/src/status-plugin.ts"),
+	"utf8",
+);
+assert(
+	pluginContractSkill.includes(titledCodeBlock("ts", "src/status-plugin.ts", skillStatusPlugin)),
+	"Plugin-authoring skill must match the executable public contract.",
+);
 assert(pluginContractSkill.includes("It may run again after an interrupted attempt"));
 assert(!pluginContractSkill.includes("Initialize empty service storage once"));
+const contractTestingSkill = await readFile(
+	join(repositoryRoot, "skills/build-localhost2137-plugin/references/contract-testing.md"),
+	"utf8",
+);
+const skillContractRegistration = await readFile(
+	join(repositoryRoot, "plugins/slack/test/slack-contract.test.ts"),
+	"utf8",
+);
+assert(
+	contractTestingSkill.includes(
+		titledCodeBlock("ts", "test/slack-contract.test.ts", skillContractRegistration),
+	),
+	"Plugin-authoring skill must match the checked testkit registration.",
+);
 const runtimeInterfacesSkill = await readFile(
 	join(repositoryRoot, "skills/use-localhost2137/references/runtime-interfaces.md"),
 	"utf8",
@@ -743,6 +765,55 @@ assert(compatibility?.includes("With Stripe Node `22.5.0`, this checked path est
 assert(compatibility?.includes("It does not claim that the"));
 assert(compatibility?.includes("application-facing Stripe API created those two resources"));
 const pluginAuthoring = content.get("plugins/authoring.mdx");
+const checkedStatusPlugin = await readFile(
+	join(repositoryRoot, "examples/status-plugin/src/status-plugin.ts"),
+	"utf8",
+);
+const checkedProductionLifecycle = await readFile(
+	join(repositoryRoot, "plugins/stripe/src/lifecycle.ts"),
+	"utf8",
+);
+const checkedContractRegistration = await readFile(
+	join(repositoryRoot, "plugins/slack/test/slack-contract.test.ts"),
+	"utf8",
+);
+const slackOperations = await readFile(
+	join(repositoryRoot, "plugins/slack/src/operations.ts"),
+	"utf8",
+);
+const operationErrorAdapter = `${sourceSliceBefore(
+	slackOperations,
+	"function runSlackOperation<Value>(",
+	"\n\nfunction slackOperationStatus",
+)}\n\n${sourceSliceBefore(slackOperations, "function slackOperationStatus", "\n}")}\n}`;
+assert(
+	pluginAuthoring?.includes(
+		titledCodeBlock("ts", "examples/status-plugin/src/status-plugin.ts", checkedStatusPlugin),
+	),
+	"Plugin authoring guide must match the executable public authoring shape.",
+);
+assert(
+	pluginAuthoring?.includes(
+		titledCodeBlock("ts", "plugins/stripe/src/lifecycle.ts", checkedProductionLifecycle),
+	),
+	"Plugin authoring guide must match the checked production lifecycle.",
+);
+assert(
+	pluginAuthoring?.includes(
+		titledCodeBlock(
+			"ts",
+			"plugins/slack/src/operations.ts (source excerpt)",
+			operationErrorAdapter,
+		),
+	),
+	"Plugin authoring guide must match the checked operation error adapter.",
+);
+assert(
+	pluginAuthoring?.includes(
+		titledCodeBlock("ts", "plugins/slack/test/slack-contract.test.ts", checkedContractRegistration),
+	),
+	"Plugin authoring guide must match the checked contract registration.",
+);
 assert(
 	pluginAuthoring?.includes("Importing the plugin, or a config that mounts it, must be inert"),
 );
@@ -880,6 +951,19 @@ for (const [readmePath, installCommand, clientCommand] of [
 }
 const slackReadme = await readFile(join(repositoryRoot, "plugins/slack/README.md"), "utf8");
 assert(!/upgrades relocate|v0\.1|preserved-/.test(slackReadme));
+const pluginTestkitReadme = await readFile(
+	join(repositoryRoot, "packages/plugin-testkit/README.md"),
+	"utf8",
+);
+assert(
+	pluginTestkitReadme.includes(
+		titledCodeBlock("ts", "test/slack-contract.test.ts", checkedContractRegistration),
+	),
+	"Plugin-testkit README must match the checked contract registration.",
+);
+assert(pluginTestkitReadme.includes("returns 18 core cases"));
+assert(pluginTestkitReadme.includes("It appends one case"));
+assert(!pluginTestkitReadme.includes("returned 18 named cases"));
 const workspacePolicy = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
 assert(workspacePolicy.includes(nativeBuildPermission));
 const packageSmoke = await readFile(join(repositoryRoot, "scripts/package-smoke.mjs"), "utf8");

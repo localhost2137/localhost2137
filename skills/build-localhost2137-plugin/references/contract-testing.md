@@ -6,15 +6,18 @@ The current fixture requires positive versions ordered `old < current < future`.
 
 ## Register the cases
 
-```ts
-import { createPluginContractCases } from "@localhost2137/plugin-testkit";
-import { describe, it } from "vitest";
-import { pluginContractFixture } from "./plugin-contract-fixture.js";
+This is a complete checked registration file. Its fixture lives separately because fixture design is
+the plugin-specific part of the contract:
 
-describe("plugin contract", () => {
-  for (const contractCase of createPluginContractCases(pluginContractFixture)) {
-    it(contractCase.name, () => contractCase.run(), 30_000);
-  }
+```ts title="test/slack-contract.test.ts"
+import { describe, it } from "vitest";
+import { createPluginContractCases } from "@localhost2137/plugin-testkit";
+import { slackContractFixture } from "./contract/slack-contract-harness.js";
+
+describe("Slack plugin contract", () => {
+	for (const contractCase of createPluginContractCases(slackContractFixture)) {
+		it(contractCase.name, contractCase.run, 30_000);
+	}
 });
 ```
 
