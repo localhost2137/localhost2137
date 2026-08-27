@@ -69,9 +69,11 @@ replaces one world; `localhost instance destroy <id>` removes the explicitly nam
 Use runtime discovery rather than a README remembered from another version:
 
 ```sh
-localhost describe <service> --json
-localhost exec <service> --help
-localhost exec <service> <operation> --help
+localhost_service_key="replace-with-configured-service-key"
+localhost_operation_key="replace-with-discovered-operation-key"
+pnpm exec localhost describe "$localhost_service_key" --json
+pnpm exec localhost exec "$localhost_service_key" --help
+pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
 ```
 
 An unknown instance error lists existing IDs and the exact create hint. JSON-only operation inputs

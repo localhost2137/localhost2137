@@ -21,9 +21,11 @@ For an installed plugin, check:
 With the daemon running, use live introspection:
 
 ```sh
-localhost describe <service> --json
-localhost exec <service> --help
-localhost exec <service> <operation> --help
+localhost_service_key="replace-with-configured-service-key"
+localhost_operation_key="replace-with-discovered-operation-key"
+pnpm exec localhost describe "$localhost_service_key" --json
+pnpm exec localhost exec "$localhost_service_key" --help
+pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
 ```
 
 The service key comes from your config. Do not infer one plugin's fields or commands from another.

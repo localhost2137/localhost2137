@@ -109,6 +109,12 @@ assert(!diagnosing?.includes("`task`, `lifecycle`"));
 const cli = content.get("cli.mdx");
 assert(cli?.includes("request, operation, delivery, and plugin logs"));
 assert(!cli?.includes("request, operation, lifecycle"));
+assert(cli?.includes("Terminal one:"));
+assert(cli?.includes("Terminal two:"));
+assert(cli?.includes('`status: "issues"` still exits successfully'));
+assert(cli?.includes("It does not expose structured error"));
+assert(cli?.includes("localhost_control_token="));
+assert(!cli?.includes("export LOCALHOST_CONTROL_TOKEN"));
 const configuration = content.get("configuration.mdx");
 assert(configuration?.includes("The `port: 0` used by `createTestRuntime"));
 assert(configuration?.includes("Renaming a key is therefore not a migration"));
@@ -123,8 +129,8 @@ assert(virtualTime?.includes("safe integer of milliseconds"));
 assert(virtualTime?.includes("In real mode, they add 60 days"));
 assert(virtualTime?.includes("does not expose the underlying cause"));
 assert(!virtualTime?.includes("Fix the reported plugin"));
-for (const file of ["cli.mdx", "diagnosing.mdx", "plugins/first-plugin.mdx", "virtual-time.mdx"]) {
-	for (const fence of content.get(file)?.matchAll(/```sh\n([\s\S]*?)```/g) ?? []) {
+for (const [file, source] of content) {
+	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(
 			!/<[^>\n]+>/.test(fence[1]),
 			`${file} contains an angle-bracket shell placeholder in an sh fence.`,
