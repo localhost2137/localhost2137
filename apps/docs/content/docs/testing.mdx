@@ -351,12 +351,16 @@ export function defineWorkerContract(label: string, increment: number): void {
 				await expect(runtime.executeOperation(instanceId, "counter", "read", {})).resolves.toEqual({
 					value: increment,
 				});
-				await runtime.idle(instanceId);
 			});
 		});
 	});
 }
 ```
+
+The counter operations finish synchronously, so this worker has no tracked work to await. The
+callback-driven test in `examples/slack-ping-bot/test/ping-pong.test.ts` calls `instance.idle()`
+before asserting delivery; [What `idle()` establishes](/callbacks#what-idle-establishes) defines
+that boundary.
 
 A create `ControlApiError` is an authoritative server rejection. The helper rethrows it without running the scenario or destroying that ID;
 an `INSTANCE_CONFLICT` can name a world the worker does not own. A transport or protocol failure leaves the outcome uncertain: creation may have committed

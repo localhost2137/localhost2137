@@ -27,7 +27,6 @@ export function defineWorkerContract(label: string, increment: number): void {
 				await expect(runtime.executeOperation(instanceId, "counter", "read", {})).resolves.toEqual({
 					value: increment,
 				});
-				await runtime.idle(instanceId);
 			});
 		});
 	});
