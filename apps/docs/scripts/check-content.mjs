@@ -196,6 +196,25 @@ for (const [title, path] of [
 assert(testBoundaries?.includes("This is an evidence ladder, not a quality ladder"));
 assert(testBoundaries?.includes("Keep external checks for external claims"));
 
+const operationsAndApis = content.get("operations-and-apis.mdx");
+const operationBoundaryTest = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/owned-runtime.test.ts"),
+	"utf8",
+);
+assert(
+	operationsAndApis?.includes(
+		titledCodeBlock("ts", "test/owned-runtime.test.ts", operationBoundaryTest),
+	),
+	"Operations concept must match the checked control-write/provider-read test.",
+);
+assert.equal(
+	operationsAndApis.match(/```[a-z]+[^\n]*\n/)?.[0],
+	'```ts title="test/owned-runtime.test.ts"\n',
+	"Operations concept must lead with the checked boundary test.",
+);
+assert(operationsAndApis?.includes('fetch(new URL("users.list"'));
+assert(operationsAndApis?.includes('instance.slack.createUser({ name: "Grace" })'));
+
 const gettingStarted = content.get("getting-started.mdx");
 assert(gettingStarted, "Getting started content is missing.");
 const crashCourseConfig = await readFile(
@@ -405,6 +424,18 @@ assert(virtualTime?.includes("In real mode, they add 60 days"));
 assert(virtualTime?.includes("does not expose the underlying cause"));
 assert(!virtualTime?.includes("Fix the reported plugin"));
 const callbacks = content.get("callbacks.mdx");
+for (const [title, path] of [
+	["src/bot.ts", "examples/slack-ping-bot/src/bot.ts"],
+	["test/ping-pong.test.ts", "examples/slack-ping-bot/test/ping-pong.test.ts"],
+]) {
+	const example = await readFile(join(repositoryRoot, path), "utf8");
+	assert(
+		callbacks?.includes(titledCodeBlock("ts", title, example)),
+		`Callback concept must match the checked example ${path}.`,
+	);
+}
+assert(callbacks?.indexOf("await bot.start()") < callbacks?.indexOf("await instance.slack.sendMessage"));
+assert(callbacks?.includes('expect(messages.map(({ text }) => text)).toEqual(["pong", "ping"])'));
 assert(callbacks?.includes("timeout and retry behavior"));
 assert(callbacks?.includes("Those details are part of the plugin's compatibility surface"));
 assert(callbacks?.includes("Separate instance storage never proves callback routing"));

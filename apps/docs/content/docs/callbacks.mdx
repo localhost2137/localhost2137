@@ -1,154 +1,233 @@
 ---
 title: Callbacks and webhooks
-description: Understand how provider-shaped events travel from a plugin to an application, what delivery guarantees belong to plugins, and what idle waits establish.
+description: Follow a checked operation through signed HTTP delivery, an application handler, an SDK reply, tracked completion, and state inspection.
 ---
 
-Pointing an SDK at a local API covers only one direction of an integration. Providers also initiate
-requests: event callbacks, webhooks, delivery receipts, and similar notifications enter the
-application without an application request immediately preceding them.
-
-localhost2137 does not turn those requests into function calls. A plugin that supports callbacks
-sends a provider-shaped HTTP request to the application's configured receiver. For that supported
-surface, the application can keep its normal routing, body parsing, signature validation, and
-handler code.
+Provider integrations run in both directions. A callback-capable plugin sends provider-shaped HTTP
+to the application's normal receiver; localhost2137 does not replace the handler with a function
+call.
 
 ## One scenario crosses both directions
 
-Consider a bot that replies to a message:
+The example application is an ordinary Slack Bolt receiver. Its handler replies through Bolt's
+normal Web API client:
 
-```text
-test or agent ── trigger operation ──> plugin state
-                                           │
-                                           └── signed event ──> application handler
-                                                                    │
-plugin API <──────────── provider SDK request ───────────────────────┘
+```ts title="src/bot.ts"
+import { App, LogLevel } from "@slack/bolt";
+
+export interface PingPongBotOptions {
+	readonly apiUrl: string;
+	readonly botToken: string;
+	readonly port: number;
+	readonly signingSecret: string;
+}
+
+export interface PingPongBot {
+	start(): Promise<void>;
+	stop(): Promise<void>;
+}
+
+/** Builds an ordinary Bolt app wired only through localhost2137 connection metadata. */
+export function buildPingPongBot(options: PingPongBotOptions): PingPongBot {
+	const app = new App({
+		clientOptions: { slackApiUrl: options.apiUrl },
+		endpoints: "/slack/events",
+		logLevel: LogLevel.ERROR,
+		signingSecret: options.signingSecret,
+		token: options.botToken,
+	});
+	app.message(/^ping$/, async ({ say }) => {
+		await say("pong");
+	});
+	let phase: "new" | "running" | "stopped" = "new";
+	return Object.freeze({
+		async start() {
+			if (phase !== "new") throw new Error("Ping-pong bot may be started exactly once.");
+			await app.start({ host: "127.0.0.1", port: options.port });
+			phase = "running";
+		},
+		async stop() {
+			if (phase === "stopped") return;
+			if (phase === "running") await app.stop();
+			phase = "stopped";
+		},
+	});
+}
 ```
 
-The trigger operation represents an actor outside the application. The callback then exercises the
-application's inbound provider boundary, while the SDK request exercises its outbound provider
-boundary. All three interactions act on one plugin-owned world, but they are not interchangeable.
+The checked test starts that receiver before the trigger, sends `ping` as an external user, waits for
+tracked delivery, then observes the SDK-written `pong` in the same world:
 
-Calling the handler directly would test application logic without HTTP parsing or signature
-validation. Writing the reply through another operation would skip the application's SDK request.
-Either can be correct for a narrower claim; neither proves the complete loop shown above.
+```ts title="test/ping-pong.test.ts"
+import { createServer } from "node:net";
+import { slack } from "@localhost2137/slack";
+import { defineConfig } from "localhost2137";
+import { createTestRuntime } from "localhost2137/testing";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildPingPongBot, type PingPongBot } from "../src/bot.js";
 
-[Operations and emulated APIs](/operations-and-apis) develops this distinction for arrangement,
-triggers, application traffic, and observation.
+const runtimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
+const bots: PingPongBot[] = [];
+
+afterEach(async () => {
+	await Promise.all(bots.splice(0).map((bot) => bot.stop()));
+	await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
+});
+
+describe("official Slack Bolt ping-pong bot", () => {
+	it("receives ping and posts pong without Slack credentials or a workspace", async () => {
+		const botPort = await availablePort();
+		const config = defineConfig({
+			services: {
+				slack: slack({
+					config: {
+						botToken: "xoxb-local-ping-pong",
+						eventsUrl: `http://127.0.0.1:${botPort}/slack/events`,
+						signingSecret: "local-ping-pong-signing-secret",
+						workspaceName: "Ping Pong Local",
+					},
+				}),
+			},
+		});
+		const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+		runtimes.push(runtime);
+		const instance = await runtime.createInstance();
+		try {
+			const ada = await instance.slack.createUser({ name: "Ada" });
+			const channel = await instance.slack.createChannel({ name: "general" });
+			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
+			const bot = buildPingPongBot({
+				apiUrl: instance.slack.connection.apiUrl,
+				botToken: instance.slack.connection.botToken,
+				port: botPort,
+				signingSecret: instance.slack.connection.signingSecret,
+			});
+			bots.push(bot);
+			await bot.start();
+
+			await instance.slack.sendMessage({ channel: channel.id, from: ada.id, text: "ping" });
+			await instance.idle();
+
+			const messages = await instance.slack.listMessages({ channel: channel.id });
+			expect(messages.map(({ text }) => text)).toEqual(["pong", "ping"]);
+			expect(messages[0]).toMatchObject({ userId: "U000000" });
+			expect(messages[0]).not.toHaveProperty("eventId");
+		} finally {
+			await instance.destroy();
+		}
+	});
+});
+
+async function availablePort(): Promise<number> {
+	const server = createServer();
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen({ host: "127.0.0.1", port: 0 }, resolve);
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") {
+		server.close();
+		throw new Error("Bot port reservation did not return an address.");
+	}
+	await new Promise<void>((resolve, reject) =>
+		server.close((cause) => (cause ? reject(cause) : resolve())),
+	);
+	return address.port;
+}
+```
+
+```sh
+pnpm --filter @localhost2137/example-slack-ping-bot test
+```
+
+The observable sequence is fixed by the code:
+
+1. Operations create the user, channel, and membership.
+2. `bot.start()` makes the configured receiver ready before delivery is triggered.
+3. `sendMessage` represents Ada, persists `ping`, and schedules a signed Events API request.
+4. Bolt verifies and parses the HTTP request; the handler calls `say("pong")` through the Web API.
+5. `instance.idle()` waits for tracked plugin delivery to settle.
+6. `listMessages` proves the same workspace contains the user message and SDK reply.
+
+Calling the handler directly would skip HTTP parsing and signature validation. Writing `pong` with
+an operation would skip the application's outbound SDK request. Either can serve a narrower test;
+neither establishes this complete claim.
 
 ## The plugin chooses how to configure the receiver
 
-The runtime does not define a universal callback destination or environment variable. Each plugin
-chooses how its receiver is configured. The first-party Slack plugin uses an `eventsUrl` config
-field; the Stripe plugin uses `webhookUrl`. Both default to `null`, so installing either plugin does
-not send callbacks until its receiver is configured.
+There is no universal callback URL. The Slack plugin uses `eventsUrl`; Stripe uses `webhookUrl`.
+Both default to `null`, so installing them does not send callbacks. The receiver must be listening
+before the action that schedules delivery, as `await bot.start()` shows above.
 
-For a destination defined in plugin config, the value belongs to the runtime template rather than an
-instance. Creating another instance therefore creates independent plugin state but not another
-callback URL. The runtime does not add an instance header, rewrite the configured destination, or
-teach a shared receiver how to correlate events; a plugin may supply provider-shaped correlation
-data as part of its documented event.
+Config-based destinations belong to the runtime template, not an instance. A second instance gets
+different plugin state, clock, logs, routes, and connection values, but the same configured callback
+URL. Changing that URL requires a daemon restart.
 
-This is separate from an instance's connection values. The application receives a provider-shaped
-API URL and local credentials for requests it initiates. The plugin receives the callback URL and
-signing configuration it needs for requests it initiates. The runtime control token belongs to
-neither application path.
-
-The receiver must be listening before a scenario triggers delivery. Changing a config-based
-destination requires a runtime restart because the current runtime loads configuration once; it is
-not hot reloaded.
+App-facing connection values configure requests the application sends. Plugin mount config chooses
+where plugin-initiated requests go. The runtime control token belongs to neither path.
 
 ## The plugin owns delivery semantics
 
-The runtime supplies tracked outbound fetch and a task tracker. It does not define a universal event
-envelope or delivery policy. Each plugin owns:
+The runtime supplies tracked outbound fetch and task ownership, not a universal event protocol.
+Each plugin defines:
 
-- which state transitions create an event;
-- the request body, headers, signature, event identity, and timestamp;
-- which response counts as success;
-- timeout and retry behavior;
+- which transitions emit an event;
+- request body, headers, signature, identity, and timestamp;
+- success responses, timeout and retry behavior;
 - persistence, recovery, ordering, and duplicate-delivery rules;
-- the operations that expose enough control and inspection to test those rules.
+- operations needed to trigger and inspect those rules.
 
-Those details are part of the plugin's compatibility surface. One plugin may document no retries;
-another may provide bounded retries or at-least-once delivery. localhost2137 itself does not promise
-exactly-once delivery, and a test should not infer it from `idle()`.
-
-The two first-party plugins illustrate the difference. Slack sends signed Events API bodies and
-persists bounded attempts whose later deadlines are driven by positive clock advancement. Stripe
-commits invoice events and webhook outbox rows together; after an interrupted delivery, recovery may
-send the same stable event ID and body again. These are plugin guarantees backed by their own tests,
-not behavior the runtime silently applies to every plugin.
+Those details are part of the plugin's compatibility surface. localhost2137 does not promise
+exactly-once delivery. Slack documents bounded attempts and later virtual-time deadlines; Stripe
+documents transactional event/outbox creation and stable redelivery identity. Neither policy is a
+runtime default for other plugins.
 
 ## What `idle()` establishes
 
-`await instance.idle()` waits until the instance has no registered plugin work after a microtask
-turn. It includes nested work registered by work that is completing, and it surfaces a tracked
-failure instead of turning that failure into a timeout or arbitrary sleep.
+`await instance.idle()` waits until currently registered plugin work and nested work registered by
+it settles after a microtask turn. A tracked failure rejects instead of becoming an arbitrary sleep.
 
-Its scope matters:
-
-| Question | Does `idle()` answer it? |
+| Question | Answer from `idle()` |
 | --- | --- |
-| Did the plugin's currently tracked delivery attempt settle? | Yes. |
-| Did nested work registered by that attempt settle? | Yes. |
-| Did a retry scheduled for a later virtual instant run? | No; advance time according to the plugin's documented policy. |
-| Did the application finish unrelated background jobs after returning its HTTP response? | No; the application needs its own completion boundary. |
-| Will a provider or external network behave the same way? | No. |
+| Did the currently tracked delivery attempt settle? | Yes. |
+| Did tracked nested work settle? | Yes. |
+| Did a retry scheduled for later virtual time run? | No; advance according to the plugin's documented policy. |
+| Did application work continue after its HTTP response? | Unknown; use the application's completion boundary. |
+| Will an external provider/network behave identically? | No. |
 
-An HTTP response can acknowledge a callback before the application finishes all resulting work.
-After `idle()` establishes plugin-side settlement, wait on the application's public effect, queue,
-or test hook when the claim includes that later work. Do not make one broad sleep stand in for both
-sides.
-
-[Virtual time and asynchronous work](/virtual-time) defines pinned and real clocks, durable
-advancement, tracked tasks, and later retry deadlines.
+An HTTP receiver can acknowledge before its own queue, transaction, or job finishes. First establish
+plugin-side settlement with `idle()`, then wait for the application's public effect when the claim
+includes later work. [Virtual time and asynchronous work](/virtual-time) separates current tracked
+work from later deadlines.
 
 ## Delivery may be repeated
 
-Applications consuming a documented at-least-once event stream should normally treat event identity
-as the deduplication boundary: a sender can lose confirmation after the receiver has already
-committed its effect. A local plugin can reproduce that condition only if its documented delivery
-model includes stable event identity and redelivery.
-
-A repeated request is useful evidence when the test claims that the application applies one effect
-for one event. It is noise when the plugin invents duplicates the provider does not produce. Inspect
-the plugin's event and retry contract before writing the scenario; the runtime cannot decide the
-provider rule on its behalf.
+At-least-once delivery can repeat a stable event after the receiver committed but its response was
+lost. Test deduplication only when the installed plugin documents that identity and redelivery rule.
+Inventing duplicate requests for a provider that does not promise them produces unrelated evidence.
 
 ## Parallel receivers require a routing rule
 
-Separate instance storage never proves callback routing. Some plugins define one callback
-destination in mount config. When an installed plugin does, every instance of that mount uses the
-same configured destination even though its service state remains isolated. Other plugins may define
-different destination or correlation behavior; inspect the installed plugin contract before running
-parallel deliveries.
+Separate instance storage never proves callback routing. When an installed plugin does define one
+callback destination in mount config, all instances of that mount deliver to it. The runtime does
+not add an instance header, rewrite the URL, or teach a shared application database how to associate
+an event with a world.
 
-When several instances deliver to one receiver, database, or queue, parallel tests need one of three
-deliberate designs:
+Parallel callback scenarios therefore need one deliberate design:
 
-- correlate callbacks using provider-shaped event data the plugin actually supplies;
+- correlate with provider-shaped data the plugin actually supplies;
 - serialize scenarios that cannot be correlated safely;
-- run separately configured runtimes and receivers.
+- use separately configured runtimes and receivers.
 
-Do not rely on an undocumented instance header or URL rewrite. Do not pass the runtime control token
-to the receiver as a workaround. [Instances and isolation](/instances#where-the-boundary-stops)
-explains why configuration is outside instance state, and
-[Integration testing](/testing#share-one-runtime-across-worker-processes) shows the worker ownership
-model.
+Do not pass the runtime control token to the receiver as a routing workaround. [Instances and
+isolation](/instances#where-the-boundary-stops) defines the shared-config boundary.
 
 ## Read the result narrowly
 
-A successful local callback test can establish that the installed plugin produced its documented
-request, the application accepted it through its normal HTTP handler, and the observed application
-effect followed. If the application then uses its normal SDK against the emulated API, the scenario
-can also exercise the response path.
+The checked loop establishes the installed plugin's documented signed request, the application's
+normal HTTP handler, its normal SDK reply, and the observed local effect. It does not establish
+external DNS, TLS, dashboard configuration, account permissions, or omitted Slack behavior.
 
-It does not establish external DNS, TLS, dashboard configuration, provider account permissions, or
-behavior outside the plugin's support matrix. Keep provider-facing checks for those claims. Read the
-installed plugin reference for exact signatures, retry rules, and deliberate differences before
-treating a local event as evidence of provider compatibility.
-
-The [Slack plugin](/first-party/slack#events-and-retries) and
-[Stripe plugin](/first-party/stripe#webhook-delivery-and-recovery) document the current first-party
-surfaces. [Runtime boundaries](/limitations) identifies the external properties that a successful
-local delivery still cannot establish.
+Read [Slack events and retries](/first-party/slack#events-and-retries) or [Stripe webhook delivery and
+recovery](/first-party/stripe#webhook-delivery-and-recovery) before turning a local delivery into a
+provider claim. [Runtime boundaries](/limitations) lists the external properties that remain.

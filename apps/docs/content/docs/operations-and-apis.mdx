@@ -1,132 +1,132 @@
 ---
 title: Operations and emulated APIs
-description: How to choose the boundary that arranges, triggers, exercises, and observes a local service world.
+description: Use privileged controls to arrange or inspect one world without replacing the provider-shaped application interaction under test.
 ---
 
-Every emulator plugin has two interfaces over the same local state.
-
-- The emulated API is the provider-shaped boundary used by the application.
-- Operations are privileged controls used by tests, scripts, developers, and coding agents.
-
-Neither interface is more real than the other. They have different jobs. A useful test chooses
-between them according to the claim it needs to prove.
-
-```text
-                                                              ┌───────────────────┐
-application ── SDK / HTTP ───────────────────────────────────> │ emulated API      │
-application <── callbacks / webhooks ───────────────────────── │ plugin behavior   │
-test or agent ── operation / CLI / control HTTP ─────────────> │ operations        │
-                                                              └───────────────────┘
-                                                                one service world
-```
+Every plugin exposes provider-shaped routes for the application and privileged operations for local
+control. Both reach one service world, but they provide different evidence.
 
 ## Start with the claim
 
-Suppose a test claims that a bot receives a Slack message and replies through Slack's Web API. That
-claim crosses two application boundaries: the signed callback entering the bot and the SDK request
-leaving it. Calling a `sendMessage` operation can trigger the callback, but it cannot stand in for
-the bot's outbound SDK request.
+This checked test arranges Grace through an operation, then proves the application-facing
+`users.list` route sees that exact state:
 
-A different test might claim only that a plugin creates one message and persists it. An operation
-can be the interface under test in that case. The boundary follows the claim, not a rule that
-operations are suitable only for setup.
+```ts title="test/owned-runtime.test.ts"
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
 
-| Role in a scenario | Usually appropriate boundary |
-| --- | --- |
-| Arrange users, catalog entries, accounts, or other world state | Operation |
-| Trigger an external actor, callback, failure, or clock event | Operation or runtime capability |
-| Exercise application integration with a provider | The application's normal SDK, HTTP client, or callback handler |
-| Observe emulator state | Inspection operation or supported provider API |
-| Observe application behavior | The application's public output or effect |
+it("arranges a user with an operation and reads it through Slack-shaped HTTP", async () => {
+	const runtime = await createTestRuntime({
+		config,
+		port: 0,
+		storage: "temporary",
+	});
 
-Operations are valid for arranging, triggering, and observing. They weaken the evidence only when
-they replace the application-facing interaction named by the claim.
+	try {
+		const instance = await runtime.createInstance({ seed: true });
+		try {
+			const grace = await instance.slack.createUser({ name: "Grace" });
+			const response = await fetch(new URL("users.list", instance.slack.connection.apiUrl), {
+				headers: {
+					authorization: `Bearer ${instance.slack.connection.botToken}`,
+				},
+			});
 
-## One Slack scenario, several boundaries
-
-The repository's Slack Bolt example uses operations to construct and act on a local workspace:
-
-```ts
-const ada = await instance.slack.createUser({ name: "Ada" });
-const channel = await instance.slack.createChannel({ name: "general" });
-await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
-
-await instance.slack.sendMessage({
-  channel: channel.id,
-  from: ada.id,
-  text: "ping",
+			expect(response.status).toBe(200);
+			await expect(response.json()).resolves.toMatchObject({
+				members: [
+					{ id: "U000000", name: "localhost2137-bot" },
+					{ id: grace.id, name: "Grace" },
+					{ id: "U_ADA", name: "Ada" },
+				],
+				ok: true,
+			});
+		} finally {
+			await instance.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
 });
-await instance.idle();
-
-const messages = await instance.slack.listMessages({ channel: channel.id });
-expect(messages.map(({ text }) => text)).toEqual(["pong", "ping"]);
 ```
 
-Each call has a distinct role:
-
-1. `createUser`, `createChannel`, and `addUserToChannel` arrange the world.
-2. `sendMessage` represents an external user and triggers a signed Events API callback.
-3. The Bolt application receives that callback through its normal handler.
-4. The application calls `chat.postMessage` through Bolt's normal Web API client.
-5. `listMessages` observes the shared workspace after tracked work becomes idle.
-
-The trigger is an operation because the external user is outside the application under test. The
-inbound callback and outbound Web API request use Slack-shaped interfaces because those are the bot
-integrations the example claims to exercise.
-
-Replacing the bot's `chat.postMessage` call with a message-writing operation could still produce
-`pong`. It would no longer prove that the application can post through its Slack client.
-
-## Operations control what provider APIs should not
-
-Provider APIs are designed for provider customers. They often cannot create the surrounding world
-a local test needs: an arbitrary user, a payment outcome, a delivery failure, or the passage of 30
-days. Adding fake provider endpoints for those actions would make the emulated API less compatible
-and couple test setup to invented application-facing behavior.
-
-Operations expose that control explicitly. Their Zod schemas also let the runtime validate the same
-call through a typed instance handle, generated CLI, or control HTTP. The plugin still owns the
-meaning of the operation; the runtime only supplies the adapters and execution boundary.
-
-An operation succeeding says nothing by itself about provider compatibility. That requires tests
-through the provider-shaped route, request encoding, callback, or target SDK. Conversely, an SDK
-request says little about whether the plugin offers enough control to arrange useful worlds. A
-plugin needs evidence for both interfaces.
-
-## The Stripe boundary moves with the claim
-
-The Stripe SDK example arranges a product and price through operations, then creates a customer and
-subscription through the official SDK. After the instance clock advances by 30 days, it lists
-invoices through the SDK.
-
-That final SDK read matters because the example claims the application's Stripe client can observe
-the renewal. If the claim were instead about the plugin's durable renewal rule, an operation could
-inspect invoices without weakening it. Kernel and plugin tests can then concentrate on committed
-clock movement, idempotent reconciliation, and recovery rather than SDK behavior.
-
-The same action can therefore be a valid observation in one test and the wrong boundary in another.
-State does not determine the evidence; the claim does.
-
-## A plugin has one domain, not two implementations
-
-Sharing state is not enough if routes and operations implement separate business rules. A plugin
-should keep provider routes and control operations as adapters over the same domain behavior:
-
-```text
-provider route ─┐
-                ├── domain behavior ── plugin persistence
-operation ──────┘
+```sh
+pnpm exec vitest run test/owned-runtime.test.ts
 ```
 
-This keeps provider response mapping out of operations and CLI concerns out of service logic. It
-also lets tests compare both interfaces against the same resulting state. Plugin-specific rules,
-including retries and errors, remain inside the plugin rather than leaking into the runtime.
+The operation is honest setup because the claim is about reading an existing user through the
+Slack-shaped route. Replacing `fetch(...users.list)` with a `listUsers` control operation would no
+longer prove request routing, bearer authentication, response shape, or the application adapter.
 
-The separation has a cost: a plugin author must design both an honest compatibility surface and a
-useful control surface. A broad operation inventory can also make weak tests easy to write when the
-claim is left implicit. Naming the claim and its application boundary is the guardrail.
+Change the claim and the right boundary can change. A plugin semantic test may intentionally claim
+that `createUser` validates and persists one user; there, the operation itself is the subject.
 
-Continue with [Integration testing](/testing) to apply the boundary in a test, [Using plugins](/plugins/using)
-to evaluate an installed plugin, or [Building and testing plugins](/plugins/authoring) to implement
-both interfaces. The [Slack](/first-party/slack) and [Stripe](/first-party/stripe) references state
-the exact first-party surfaces.
+## Assign one job to each interaction
+
+| Scenario job | Usual boundary | Evidence produced |
+| --- | --- | --- |
+| Arrange users, catalog entries, accounts, or failures | Typed operation or generated CLI | The plugin accepted privileged setup into this world. |
+| Trigger an external actor, event, or time transition | Operation or runtime clock | The local actor or runtime capability ran. |
+| Exercise application integration | Application SDK, HTTP client, or callback handler | The application crossed the documented provider-shaped surface. |
+| Inspect emulator state | Inspection operation or supported provider read | The selected world reached the observed state. |
+| Observe application behavior | Application output, database, queue, or public effect | The application produced its claimed result. |
+
+Operations weaken evidence only when they replace the application interaction named by the claim.
+They are valid for setup, triggers, inspection, and direct operation-contract tests.
+
+## Triggering a callback is not handling it
+
+The Slack ping-pong example assigns four boundaries deliberately:
+
+| Code in the checked example | Role |
+| --- | --- |
+| `instance.slack.createUser`, `createChannel`, `addUserToChannel` | Arrange a workspace through control operations. |
+| `instance.slack.sendMessage({ text: "ping" })` | Represent an external member and trigger the plugin's signed event. |
+| Bolt `app.message(/^ping$/, ...)` and `say("pong")` | Receive provider-shaped HTTP and reply through the application's normal SDK. |
+| `instance.slack.listMessages(...)` | Inspect the shared workspace after tracked delivery settles. |
+
+Calling the Bolt handler directly could be a valid handler unit test, but would skip HTTP parsing and
+signature validation. Writing `pong` through another operation would skip the outbound SDK request.
+[Callbacks and webhooks](/callbacks) contains the complete checked loop.
+
+## Keep privileged controls out of the provider API
+
+Provider APIs often cannot create arbitrary surrounding state, force a payment outcome, or move 30
+days forward. Adding invented provider routes for those jobs makes application traffic less
+compatible. Operations expose local-only control explicitly through one plugin-owned Zod schema.
+
+The same operation is available through:
+
+```sh
+pnpm exec localhost describe slack --instance dev --json
+pnpm exec localhost exec slack create-user --instance dev --name Grace --json
+```
+
+Typed tests call `instance.slack.createUser({ name: "Grace" })`; the CLI generates flags from the same
+installed schema. Operation success proves that control surface, not provider compatibility.
+
+## Let one domain behavior own the state
+
+Provider routes and operations should be adapters over the plugin's same domain behavior and
+persistence. Separate implementations can accept different rules while appearing to share a
+database. Provider response mapping belongs at the route boundary; CLI and control error mapping
+belong at the operation boundary.
+
+That separation lets semantic tests compare the resulting state without pretending the interfaces
+are interchangeable. The plugin still needs distinct evidence for:
+
+- provider request encoding, authentication, response and error shapes;
+- operation schemas, privileged outcomes, and useful inspection;
+- state invariants shared by both paths.
+
+## Move the boundary when the claim moves
+
+The recurring-billing example creates a product and price through operations, then creates a
+customer and subscription and lists invoices through the official Stripe SDK. That proves the SDK
+path the application uses. A lower-level plugin test about renewal transactions can inspect invoices
+through an operation without weakening its different claim.
+
+State does not decide the evidence; the falsifiable claim does. Continue with [Integration
+testing](/testing) for ownership, [Using plugins](/plugins/using) for the installed control inventory,
+or [Provider compatibility](/compatibility) for what provider-shaped success actually establishes.
