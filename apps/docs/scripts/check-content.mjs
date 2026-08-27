@@ -444,13 +444,33 @@ assert(!cli?.includes("export LOCALHOST_CONTROL_TOKEN"));
 for (const command of [
 	"pnpm exec localhost describe slack --instance dev --json",
 	"pnpm exec localhost exec slack create-user --instance dev --name Grace --json",
+	"LOCALHOST_INSTANCE=dev pnpm exec localhost describe slack --json",
+	"pnpm exec localhost exec slack create-user --name Lin --admin=false --json",
 	'--input-json \'{"channel":"general","from":"Ada","text":"ready"}\' --json',
-	"pnpm exec localhost instance create review --seed",
+	"pnpm exec localhost instance create review",
 	"pnpm exec localhost run --instance dev -- pnpm test",
 	"pnpm exec localhost clock advance 2h --instance dev --json",
 ]) {
 	assert(cli?.includes(command), `CLI reference is missing the concrete command: ${command}`);
 }
+assert(!cli?.includes("LOCALHOST_INSTANCE=review pnpm"));
+let previousCliLifecycleStep = -1;
+for (const step of [
+	"pnpm exec localhost instance create review\n",
+	"pnpm exec localhost instance list --json",
+	"pnpm exec localhost seed --instance review",
+	"pnpm exec localhost instance reset review\n",
+	"pnpm exec localhost instance reset review --seed",
+	"pnpm exec localhost instance destroy review",
+]) {
+	const position = cli?.indexOf(step) ?? -1;
+	assert(
+		position > previousCliLifecycleStep,
+		`CLI lifecycle step is missing or out of order: ${step}`,
+	);
+	previousCliLifecycleStep = position;
+}
+assert(!cli?.includes("pnpm exec localhost seed --instance dev"));
 assert(!cli?.includes("replace-with-"));
 assert(cli?.includes("owner-approved documentation-first contracts awaiting implementation"));
 assert(cli?.includes("Only `/_/v1/health` is unauthenticated"));
@@ -460,6 +480,12 @@ assert(
 	configuration?.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),
 	"Configuration reference must lead from the checked complete crash-course config.",
 );
+for (const terminal of [
+	"Terminal 1:\n\n```sh\npnpm exec localhost dev\n```",
+	"Terminal 2:\n\n```sh\npnpm exec localhost seed\npnpm exec localhost env --instance dev --format json\n```",
+]) {
+	assert(configuration?.includes(terminal), `Configuration is missing runnable split: ${terminal}`);
+}
 assert.equal(
 	configuration?.match(/```[a-z]+[^\n]*\n/)?.[0],
 	'```ts title="localhost.config.ts"\n',

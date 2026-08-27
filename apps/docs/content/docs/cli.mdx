@@ -35,7 +35,7 @@ continues through plugin connection values and provider-shaped routes.
 pnpm exec localhost --config ./localhost.config.ts doctor --json
 pnpm exec localhost instance list --config ./localhost.config.ts --json
 
-LOCALHOST_INSTANCE=review pnpm exec localhost describe slack --json
+LOCALHOST_INSTANCE=dev pnpm exec localhost describe slack --json
 pnpm exec localhost describe slack --instance dev --json
 ```
 
@@ -68,7 +68,7 @@ one service's operation schemas. `exec slack --help` converts keys such as `crea
 `create-user` and displays the input accepted by the installed plugin version.
 
 ```sh
-pnpm exec localhost exec slack create-user --name Grace --admin=false --json
+pnpm exec localhost exec slack create-user --name Lin --admin=false --json
 pnpm exec localhost exec slack send-message \
   --channel general --from Ada --text ready --json
 pnpm exec localhost exec slack send-message \
@@ -91,9 +91,9 @@ application's provider-shaped request boundary. See [Operations and emulated API
 ## Manage instances and seed
 
 ```sh
-pnpm exec localhost instance create review --seed
+pnpm exec localhost instance create review
 pnpm exec localhost instance list --json
-pnpm exec localhost seed --instance dev
+pnpm exec localhost seed --instance review
 pnpm exec localhost instance reset review
 pnpm exec localhost instance reset review --seed
 pnpm exec localhost instance destroy review

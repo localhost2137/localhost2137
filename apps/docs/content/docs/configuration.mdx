@@ -32,8 +32,15 @@ export default defineConfig({
 `defineConfig()` preserves service and operation types. Runtime validation still runs before storage
 opens or the server binds.
 
+Terminal 1:
+
 ```sh
 pnpm exec localhost dev
+```
+
+Terminal 2:
+
+```sh
 pnpm exec localhost seed
 pnpm exec localhost env --instance dev --format json
 ```
