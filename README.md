@@ -12,9 +12,10 @@ OAuth flow, or provider credential is involved.
 <summary>Text version of the demo</summary>
 
 1. `localhost demo clone` copies and installs the shipped Slack ping bot.
-2. Its `localhost.config.ts` configures a local Slack service and seeds Ada in `#general`.
-3. `localhost dev` starts the emulator; `localhost run -- pnpm start` gives the Bolt bot its local
-   connection values.
+2. Its `localhost.config.ts` configures a local Slack service and declares Ada and `#general` as
+   seed data.
+3. `localhost dev` starts the emulator. `localhost seed` applies that data, then
+   `localhost run -- pnpm start` gives the Bolt bot its local connection values.
 4. Ada sends `ping`. The newest-first channel history shows the bot's `pong` above Ada's earlier
    message.
 
