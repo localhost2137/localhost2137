@@ -17,7 +17,11 @@ export class CliDemoNotFoundError extends Error {
 
 	constructor(demoName: string, available: readonly string[]) {
 		super(
-			`Unknown demo ${JSON.stringify(demoName)}. Available demos: ${available.length === 0 ? "none" : available.join(", ")}.`,
+			`Unknown demo ${JSON.stringify(demoName)}. Available commands: ${
+				available.length === 0
+					? "none"
+					: available.map((name) => `localhost demo clone ${name}`).join(", ")
+			}.`,
 		);
 		this.name = "CliDemoNotFoundError";
 		this.demoName = demoName;

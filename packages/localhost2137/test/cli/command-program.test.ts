@@ -233,7 +233,7 @@ describe("CLI command program", () => {
 			}),
 		).toBe(4);
 		expect(missing.stdout).toBe("");
-		expect(missing.stderr).toContain("Available demos: slack-ping-bot");
+		expect(missing.stderr).toContain("localhost demo clone slack-ping-bot");
 	});
 
 	it("passes run argv directly and returns the child exit code", async () => {

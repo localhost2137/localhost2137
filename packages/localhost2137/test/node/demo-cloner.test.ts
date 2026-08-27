@@ -3,6 +3,7 @@ import {
 	mkdir,
 	readFile,
 	readdir,
+	realpath,
 	rename,
 	rm,
 	stat,
@@ -12,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CliDemoNotFoundError, CliUsageError } from "../../src/cli/cli-errors.js";
+import {
+	CliDemoNotFoundError,
+	CliUsageError,
+	classifyCliFailure,
+} from "../../src/cli/cli-errors.js";
 import { cloneDemoProject } from "../../src/node/demo-cloner.js";
 import type { EmbeddedDemo } from "../../src/node/demo-registry.js";
 
@@ -66,10 +71,12 @@ describe("demo cloner", () => {
 		);
 	});
 
-	it("installs in the private stage by default and publishes installed output only on success", async () => {
+	it("installs in the exclusively owned final directory by default", async () => {
 		const project = await temporaryProject();
+		const target = join(await realpath(project), "custom-demo");
 		const runChild = vi.fn(async (options: Readonly<{ cwd: string }>) => {
-			expect(options.cwd).not.toBe(join(project, "custom-demo"));
+			expect(options.cwd).toBe(target);
+			expect((await stat(options.cwd)).mode & 0o777).toBe(0o700);
 			await mkdir(join(options.cwd, "node_modules"));
 			await writeFile(join(options.cwd, "node_modules/installed"), "yes\n", "utf8");
 			return 0;
@@ -91,7 +98,7 @@ describe("demo cloner", () => {
 		expect(runChild).toHaveBeenCalledWith({
 			argv: ["pnpm", "install"],
 			connectionEnv: {},
-			cwd: expect.stringContaining(".localhost2137.demo-"),
+			cwd: target,
 			inheritedEnv: { EXISTING: "yes" },
 		});
 		await expect(
@@ -111,12 +118,12 @@ describe("demo cloner", () => {
 
 		expect(failure).toBeInstanceOf(CliDemoNotFoundError);
 		expect(failure).toMatchObject({ demoName: "slack" });
-		expect((failure as Error).message).toContain("Available demos: slack-ping-bot");
+		expect((failure as Error).message).toContain("localhost demo clone slack-ping-bot");
 		expect(await readdir(project)).toEqual([]);
 	});
 
 	it.each([".", "..", "../outside", "nested/../demo", "/absolute", "missing/demo"])(
-		"rejects the unsafe destination %s before creating staging state",
+		"rejects the unsafe destination %s before claiming a target",
 		async (directory) => {
 			const project = await temporaryProject();
 
@@ -155,7 +162,7 @@ describe("demo cloner", () => {
 		});
 	});
 
-	it("rolls back a failed install without publishing partial files", async () => {
+	it("rolls back a failed install without leaving partial files", async () => {
 		const project = await temporaryProject();
 		const failure = new Error("install failed");
 
@@ -178,8 +185,34 @@ describe("demo cloner", () => {
 		expect(await readdir(project)).toEqual([]);
 	});
 
+	it("rolls back nonzero and interrupted pnpm installs", async () => {
+		for (const exitCode of [17, 130]) {
+			const project = await temporaryProject();
+			const failure = await cloneDemoProject(
+				{
+					cwd: project,
+					inheritedEnv: {},
+					install: true,
+					name: "slack-ping-bot",
+				},
+				{ runChild: async () => exitCode },
+			).catch((cause: unknown) => cause);
+
+			if (exitCode === 17) {
+				expect(failure).toMatchObject({
+					message: "pnpm install exited with code 17; the incomplete demo was removed.",
+				});
+				expect(classifyCliFailure(failure).exitCode).toBe(10);
+			} else {
+				expect(failure).toMatchObject({ name: "SignalInterruption" });
+				expect(classifyCliFailure(failure)).toEqual({ exitCode: 130, message: "Interrupted." });
+			}
+			expect(await readdir(project)).toEqual([]);
+		}
+	});
+
 	it.each(["directory", "symlink"])(
-		"rejects a non-regular %s source entry and cleans staging",
+		"rejects a non-regular %s source entry and cleans the owned target",
 		async (kind) => {
 			const project = await temporaryProject();
 			const assetDirectory = await temporaryProject();
@@ -211,7 +244,7 @@ describe("demo cloner", () => {
 		},
 	);
 
-	it("preserves a target that appears during installation and removes only its own stage", async () => {
+	it("cannot replace a target created at the exclusive claim boundary", async () => {
 		const project = await temporaryProject();
 		const target = join(project, "slack-ping-bot");
 
@@ -224,10 +257,10 @@ describe("demo cloner", () => {
 					name: "slack-ping-bot",
 				},
 				{
-					runChild: async () => {
-						await mkdir(target);
+					createTargetDirectory: async (path) => {
+						await mkdir(path);
 						await writeFile(join(target, "external"), "keep\n", "utf8");
-						return 0;
+						await mkdir(path);
 					},
 				},
 			),
@@ -288,7 +321,7 @@ describe("demo cloner", () => {
 		]);
 	});
 
-	it("refuses to remove a staging path replaced by another writer", async () => {
+	it("refuses to remove the final target after another writer replaces it", async () => {
 		const project = await temporaryProject();
 		let replacement = "";
 		let retired = "";
@@ -306,17 +339,18 @@ describe("demo cloner", () => {
 					retired = `${options.cwd}.retired`;
 					await rename(options.cwd, retired);
 					await mkdir(options.cwd);
-					throw new Error("installer replaced staging");
+					await writeFile(join(options.cwd, "external"), "keep\n", "utf8");
+					throw new Error("installer replaced target");
 				},
 			},
 		).catch((cause: unknown) => cause);
 
 		expect(failure).toBeInstanceOf(AggregateError);
 		expect((failure as AggregateError).errors).toEqual([
-			expect.objectContaining({ message: "installer replaced staging" }),
+			expect.objectContaining({ message: "installer replaced target" }),
 			expect.objectContaining({ message: expect.stringContaining("Refusing to remove replaced") }),
 		]);
-		expect(await readdir(replacement)).toEqual([]);
+		await expect(readFile(join(replacement, "external"), "utf8")).resolves.toBe("keep\n");
 		expect(await readdir(retired)).toContain("package.json");
 		expect((await readdir(project)).some((name) => name.endsWith(".lock"))).toBe(false);
 	});

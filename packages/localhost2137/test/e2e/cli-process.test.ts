@@ -59,7 +59,7 @@ describe("localhost process transcript", () => {
 		const missing = command(project, ["demo", "clone", "missing", "--no-install"]);
 		expect(missing.status).toBe(4);
 		expect(missing.stdout).toBe("");
-		expect(missing.stderr).toContain("Available demos: slack-ping-bot");
+		expect(missing.stderr).toContain("localhost demo clone slack-ping-bot");
 	}, 30_000);
 
 	it("initializes an empty project without config discovery or a daemon", async () => {

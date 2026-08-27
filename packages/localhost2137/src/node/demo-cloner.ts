@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type BigIntStats, constants } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, realpath, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { CliDemoClone } from "../cli/cli-actions.js";
 import { CliDemoNotFoundError, CliUsageError } from "../cli/cli-errors.js";
@@ -19,6 +19,7 @@ export interface CloneDemoProjectInput {
 }
 
 export interface CloneDemoProjectDependencies {
+	readonly createTargetDirectory?: (path: string) => Promise<void>;
 	readonly findDemo?: typeof findEmbeddedDemo;
 	readonly runChild?: typeof runChildCommand;
 }
@@ -43,7 +44,9 @@ class DemoCloneCommittedError extends Error {
 	declare readonly cause: unknown;
 
 	constructor(path: string, cause: unknown) {
-		super(`Demo was cloned to ${path}, but its parent directory could not be synced.`);
+		super(
+			`Demo was cloned to ${path}, but its filesystem metadata could not be fully synced. The cloned directory was preserved.`,
+		);
 		this.name = "DemoCloneCommittedError";
 		Object.defineProperty(this, "cause", {
 			configurable: false,
@@ -54,7 +57,7 @@ class DemoCloneCommittedError extends Error {
 	}
 }
 
-/** Copies one embedded demo through a private sibling stage and never replaces an existing target. */
+/** Exclusively claims the final directory, then populates it without replacing existing paths. */
 export async function cloneDemoProject(
 	input: CloneDemoProjectInput,
 	dependencies: CloneDemoProjectDependencies = {},
@@ -63,37 +66,24 @@ export async function cloneDemoProject(
 	if (!demo) throw new CliDemoNotFoundError(input.name, EMBEDDED_DEMO_NAMES);
 	const target = await resolveCloneTarget(input.cwd, input.directory ?? demo.name);
 	const lock = await acquireCloneLock(input.cwd, target.path);
-	let stage: OwnedDirectory | undefined;
+	let ownedTarget: OwnedDirectory | undefined;
 	let primary: unknown;
-	let published = false;
+	let preserveTarget = false;
 	let result: CliDemoClone | undefined;
 	try {
-		await assertTargetAvailable(target);
-		stage = await createStage(target);
-		await copyDemoAssets(demo, stage.path);
+		await assertParentUnchanged(target);
+		ownedTarget = await claimTarget(target, dependencies.createTargetDirectory);
+		await copyDemoAssets(demo, ownedTarget.path);
 		if (input.install) {
-			await installDependencies(stage.path, input.inheritedEnv, dependencies.runChild);
+			await installDependencies(ownedTarget.path, input.inheritedEnv, dependencies.runChild);
 		}
-		await assertOwnedDirectory(stage);
-		await chmod(stage.path, 0o755);
-		await assertOwnedDirectory(stage);
-		await assertTargetAvailable(target);
+		await assertOwnedDirectory(ownedTarget);
+		await chmod(ownedTarget.path, 0o755);
+		await assertOwnedDirectory(ownedTarget);
+		await assertParentUnchanged(target);
+		preserveTarget = true;
 		try {
-			await rename(stage.path, target.path);
-		} catch (cause) {
-			if (
-				hasCode(cause, "EEXIST") ||
-				hasCode(cause, "EISDIR") ||
-				hasCode(cause, "ENOTDIR") ||
-				hasCode(cause, "ENOTEMPTY")
-			) {
-				throw targetConflict(target.directory, cause);
-			}
-			throw cause;
-		}
-		published = true;
-		stage = undefined;
-		try {
+			await syncDirectory(ownedTarget.path);
 			await syncDirectory(target.parent.path);
 		} catch (cause) {
 			throw new DemoCloneCommittedError(target.path, cause);
@@ -103,15 +93,17 @@ export async function cloneDemoProject(
 		primary = cause;
 	}
 	const cleanup: unknown[] = [];
-	if (stage) await removeOwnedDirectory(stage).catch((cause: unknown) => cleanup.push(cause));
+	if (ownedTarget && !preserveTarget) {
+		await removeOwnedDirectory(ownedTarget).catch((cause: unknown) => cleanup.push(cause));
+	}
 	await lock.release().catch((cause: unknown) => cleanup.push(cause));
 	if (primary !== undefined) {
 		if (cleanup.length === 0) throw primary;
 		throw new AggregateError(
 			[primary, ...cleanup],
-			published
+			preserveTarget
 				? "Demo was cloned, but clone bookkeeping cleanup failed."
-				: "Demo clone failed and owned staging cleanup also failed.",
+				: "Demo clone failed and owned target cleanup also failed.",
 		);
 	}
 	if (cleanup.length > 0) {
@@ -177,7 +169,7 @@ async function acquireCloneLock(cwd: string, targetPath: string): Promise<Storag
 	}
 }
 
-async function assertTargetAvailable(target: CloneTarget): Promise<void> {
+async function assertParentUnchanged(target: CloneTarget): Promise<void> {
 	let parentMetadata: BigIntStats;
 	try {
 		parentMetadata = await lstat(target.parent.path, { bigint: true });
@@ -190,29 +182,32 @@ async function assertTargetAvailable(target: CloneTarget): Promise<void> {
 	if (!parentMetadata.isDirectory() || !sameIdentity(parentMetadata, target.parent.identity)) {
 		throw new CliUsageError("Demo directory parent changed while cloning.");
 	}
+}
+
+async function claimTarget(
+	target: CloneTarget,
+	createTargetDirectory: (path: string) => Promise<void> = nodeCreateTargetDirectory,
+): Promise<OwnedDirectory> {
 	try {
-		await lstat(target.path, { bigint: true });
+		await createTargetDirectory(target.path);
 	} catch (cause) {
-		if (hasCode(cause, "ENOENT")) return;
+		if (hasCode(cause, "EEXIST")) throw targetConflict(target.directory, cause);
 		throw cause;
 	}
-	throw targetConflict(target.directory);
+	const metadata = await lstat(target.path, { bigint: true });
+	if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+		throw new Error(`Claimed demo target is not a real directory: ${target.path}`);
+	}
+	return Object.freeze({ identity: identity(metadata), path: target.path });
 }
 
-async function createStage(target: CloneTarget): Promise<OwnedDirectory> {
-	const targetKey = createHash("sha256").update(target.path).digest("hex");
-	const path = await mkdtemp(join(target.parent.path, `.localhost2137.demo-${targetKey}-`));
-	const metadata = await lstat(path, { bigint: true });
-	return Object.freeze({ identity: identity(metadata), path });
-}
-
-async function copyDemoAssets(demo: EmbeddedDemo, stage: string): Promise<void> {
+async function copyDemoAssets(demo: EmbeddedDemo, targetRoot: string): Promise<void> {
 	const assetRoot = await realpath(demo.assetDirectory);
 	for (const asset of demo.assets) {
 		const source = resolve(assetRoot, asset.source);
-		const target = resolve(stage, asset.target);
+		const target = resolve(targetRoot, asset.target);
 		assertContained(assetRoot, source, "Demo asset source");
-		assertContained(stage, target, "Demo asset target");
+		assertContained(targetRoot, target, "Demo asset target");
 		const canonicalSource = await realpath(source);
 		assertContained(assetRoot, canonicalSource, "Demo asset source");
 		const metadata = await lstat(source);
@@ -241,7 +236,7 @@ async function installDependencies(
 		throw interruption;
 	}
 	if (exitCode !== 0) {
-		throw new Error(`pnpm install exited with code ${exitCode}; the demo was not published.`);
+		throw new Error(`pnpm install exited with code ${exitCode}; the incomplete demo was removed.`);
 	}
 }
 
@@ -254,7 +249,7 @@ async function removeOwnedDirectory(directory: OwnedDirectory): Promise<void> {
 		throw cause;
 	}
 	if (!metadata.isDirectory() || !sameIdentity(metadata, directory.identity)) {
-		throw new Error(`Refusing to remove replaced demo staging path: ${directory.path}`);
+		throw new Error(`Refusing to remove replaced demo target path: ${directory.path}`);
 	}
 	await rm(directory.path, { recursive: true });
 }
@@ -264,11 +259,15 @@ async function assertOwnedDirectory(directory: OwnedDirectory): Promise<void> {
 	try {
 		metadata = await lstat(directory.path, { bigint: true });
 	} catch (cause) {
-		throw new Error(`Demo staging path changed while cloning: ${directory.path}`, { cause });
+		throw new Error(`Demo target path changed while cloning: ${directory.path}`, { cause });
 	}
 	if (!metadata.isDirectory() || !sameIdentity(metadata, directory.identity)) {
-		throw new Error(`Demo staging path changed while cloning: ${directory.path}`);
+		throw new Error(`Demo target path changed while cloning: ${directory.path}`);
 	}
+}
+
+async function nodeCreateTargetDirectory(path: string): Promise<void> {
+	await mkdir(path, { mode: 0o700 });
 }
 
 function targetConflict(directory: string, cause?: unknown): CliUsageError {
