@@ -1,12 +1,18 @@
 ---
 title: Configuration
-description: Define the runtime endpoint, clock, storage, services, connections, and explicit seed behavior.
+description: Reference for config discovery, runtime fields, service identities, connection values, validation, and changes to existing worlds.
 ---
 
-`localhost.config.ts` describes one reusable world template. Instances materialize that same
-template with independent plugin state. The current runtime does not deep-merge per-instance config.
+`localhost.config.ts` is executable project configuration and a reusable world template. Every
+instance receives the same configured services but owns independent plugin state, clock state, logs,
+and tracked work. There is no per-instance config overlay or deep merge.
+
+`defineConfig()` preserves service and operation types for TypeScript. The runtime still validates
+the imported value before it opens storage or starts a server.
 
 ## Runtime fields
+
+This valid config writes the runtime endpoint, storage directory, and clock choice explicitly:
 
 ```ts title="localhost.config.ts"
 import { defineConfig } from "localhost2137";
@@ -20,19 +26,59 @@ export default defineConfig({
 });
 ```
 
-- `host` accepts loopback hosts only. It defaults to `127.0.0.1`.
-- `port` defaults to `2137`; in-process tests require port `0` for an OS-assigned port.
-- `storage.dir` is resolved relative to the config file and defaults to `.localhost2137`.
-- `clock` is either `{ mode: "real" }` or a pinned clock with an RFC 3339 `startAt`.
-- `services` is a keyed map of configured plugin factories.
+| Field | Required | Accepted value | Default |
+| --- | --- | --- | --- |
+| `services` | Yes | A map from service keys to values returned by plugin factories. An empty map is valid. | None |
+| `host` | No | `"127.0.0.1"`, `"localhost"`, or `"::1"`. The daemon cannot bind a non-loopback host. | `"127.0.0.1"` |
+| `port` | No | An integer from 1 through 65535. | `2137` |
+| `storage` | No | `{ dir: string }`; `dir` must be non-empty after trimming. | `{ dir: ".localhost2137" }` |
+| `clock` | No | `{ mode: "real" }`, or `{ mode: "pinned", startAt }` with an RFC 3339 timestamp containing an offset. | `{ mode: "real" }` |
+| `seed` | No | A function receiving the typed scenario facade. | No scenario seed |
 
-[Virtual time and asynchronous work](/virtual-time) explains how mode selection, durable advances,
-plugin reconciliation, and application completion affect a test.
+The `port: 0` used by `createTestRuntime({ port: 0, storage: "temporary", config })` is an option on
+the test-runtime owner, not a valid `localhost.config.ts` port. It requests an OS-assigned port;
+leave `config.port` omitted or between 1 and 65535.
 
-Config discovery walks upward from the working directory. Pass `--config <path>` when discovery is
-ambiguous. Config is loaded and frozen once at daemon startup; changes require a restart.
+[Virtual time and asynchronous work](/virtual-time) covers clock selection and durable advances.
+[Integration testing](/testing#in-process-typed-tests) covers the separately owned test runtime.
 
-## Configure plugins under stable keys
+## Discovery and path resolution
+
+Without `--config`, commands walk upward from the current working directory and select the first
+supported file they find. Supported names are:
+
+```text
+localhost.config.ts
+localhost.config.mts
+localhost.config.cts
+localhost.config.js
+localhost.config.mjs
+localhost.config.cjs
+```
+
+Keep one config name per directory. If several exist together, the order above determines which one
+wins. `--config ./path/to/config.ts` bypasses discovery; a relative explicit path is resolved from
+the command's working directory.
+
+The selected module must default-export the config. TypeScript, ESM, CommonJS, local imports, and
+top-level await are supported according to the file's module form. An import error is reported as
+`CONFIG_IMPORT_FAILED`; a module without the required default export is
+`CONFIG_DEFAULT_EXPORT_MISSING`.
+
+`storage.dir` has different path semantics from `--config`: it is always resolved relative to the
+selected config file. With no nearer config, running the same project command from a nested
+directory therefore discovers the same file and uses the same storage. Changing `storage.dir`
+selects a different set of worlds; it does not move the old directory.
+
+`localhost dev --host` and `--port` override the configured endpoint for that invocation. Plugins
+receive the endpoint the server actually bound when they compute connection values.
+
+The module is loaded once during daemon startup. Editing it does not mutate the running daemon;
+restart before judging any config change.
+
+## Service keys are durable identities
+
+A plugin factory returns the descriptor stored below one service key:
 
 ```ts
 services: {
@@ -48,35 +94,96 @@ services: {
 }
 ```
 
-The key `primary` produces a public route below `/{instance}/primary`, the CLI selector `primary`,
-the storage namespace `primary`, and `instance.primary` in typed tests. Renaming it changes identity;
-there is no independent mount-name override.
+A service key must start with a lowercase letter, contain only lowercase letters, digits, or
+hyphens, and be at most 63 characters. `_`, `clock`, `destroy`, `env`, `idle`, `reset`, `seed` are
+reserved by the instance facade.
 
-`exportEnv: false` suppresses only the plugin's merged environment projection. Typed connection
-values, routes, and operations remain available. Use it when multiple mounts would export colliding
-environment names and wire each connection explicitly.
+The key `primary` simultaneously defines:
 
-## Connection values belong to the plugin
+- the public route prefix `/{instance}/primary`;
+- the CLI selector in `localhost describe primary` and `localhost exec primary`;
+- the service's durable storage namespace;
+- `instance.primary` in a typed test.
 
-A plugin returns typed `connection` values for code and an environment projection for process
-startup. The Slack plugin exposes:
+A hyphenated key is accessed with brackets, such as `instance["primary-api"]`. There is no separate
+mount-name override.
 
-```ts
-instance.slack.connection.apiUrl;
-instance.slack.connection.botToken;
-instance.slack.connection.signingSecret;
-```
+Mounting the same plugin under two keys creates two independent service states inside every
+instance. Renaming a key is therefore not a migration: on restart, the new key creates new service
+state, the old route and operations disappear, and the removed key's stored data remains on disk.
+Plan an explicit, plugin-supported data migration before renaming when the old state must survive;
+the runtime does not copy it.
 
-The daemon writes the `dev` projection to `.localhost2137/.env`. `localhost env` renders any
-instance, and `localhost run -- <command>` injects only app-facing connection variables. The runtime
-control token is stored separately and is never exposed to the application.
+[Using plugins](/plugins/using#mounting-and-environment-values) explains how to assess each mounted
+plugin's supported provider surface.
 
-Callback URLs are plugin configuration. Instances do not rewrite them. A single Slack `eventsUrl`
-or Stripe `webhookUrl` is therefore shared by every instance created from this config.
+## Config and seed data are validated values
+
+Each plugin owns a Zod schema for its `config`, and may own a second schema for declarative `seed`
+data. Defaults and transforms run during config resolution. The values that cross into plugin
+lifecycle code must end as JSON-compatible plain data: `null`, booleans, finite numbers, strings,
+dense arrays, and plain objects. Values such as `Date`, `Map`, class instances, `undefined`, sparse
+arrays, and cycles are rejected even if a schema transform produced them.
+
+The runtime copies and deeply freezes accepted values before a plugin callback receives them. Later
+mutation of an object used to construct the config cannot change the resolved daemon configuration.
+
+Top-level runtime fields and plugin envelope fields are strict; misspellings do not become ignored
+options. A `CONFIG_INVALID` error can contain several issues, each with a path such as
+`$.services.primary.config.botToken`. The runtime's `received` diagnostic records the value's type,
+not the value itself. A plugin-authored schema message is still plugin-authored text, so use the path
+to fix config rather than logging the whole object, which may contain credentials.
+
+## Connection values and environment export
+
+Connection values belong to the plugin. For each actual instance, its connection callback receives
+the bound `baseUrl`, `instanceId`, stable `serviceKey`, and validated config. It returns two views:
+
+- typed, JSON-compatible `values` available as `instance.primary.connection`;
+- string-valued `env` entries that may be merged for application processes.
+
+Environment names must match an uppercase shell name such as `PRIMARY_API_URL`. If two mounted
+services export the same name, config or instance connection resolution fails and names both owners.
+Set `exportEnv: false` on a mount to omit only its entries from the merged environment; its routes,
+operations, and typed connection values remain available.
+
+The daemon writes the `dev` instance's merged projection to `.env` below `storage.dir`—by default,
+`.localhost2137/.env`. `localhost env` renders another instance, and `localhost run -- <command>`
+starts a child with that projection. The runtime control token is stored separately and is never part
+of application connection metadata.
+
+Callback destinations are ordinary plugin config. The runtime does not rewrite one configured URL
+per instance, so parallel instances that call the same receiver need an application routing rule.
+[Callbacks and webhooks](/callbacks#parallel-receivers-require-a-routing-rule) develops that boundary.
+
+## What changes do to existing worlds
+
+Restarting applies the new template, but it does not rebuild every persistent world:
+
+| Config change | Effect after restart |
+| --- | --- |
+| Change `host` or `port` | The daemon binds the new endpoint and recomputes instance connection values. |
+| Change ordinary plugin `config` under the same key | The service starts with the new validated config while its durable state remains. Plugin-specific behavior still belongs to that plugin's contract. |
+| Add a service key | Existing persistent worlds create state for the added service before becoming ready. |
+| Remove a service key | Its route, operations, and connection disappear; its stored service data is retained. |
+| Change the plugin ID under an existing key | Startup fails rather than opening one plugin's stored state with another plugin. |
+| Increase a plugin's `stateVersion` | Its `update` hook must migrate stored state before `start`; a missing migration fails startup. |
+| Decrease a plugin's `stateVersion` | Startup fails rather than downgrading stored state. |
+| Change `clock` | New and reset worlds use the new clock config. Existing persistent worlds retain their current clock on restart. |
+| Change configured seed data or the scenario `seed` | Nothing runs automatically. The next explicit seed of an unseeded world uses the new values; a seeded or seed-failed world must reset before seeding again. |
+
+Removing or renaming a service while it still owes an acknowledgement for a committed time window is
+a special case: the persistent world cannot finish startup until the prior service config is
+restored and reconciliation completes. [Virtual-time recovery](/virtual-time#recover-a-committed-failure-without-moving-twice)
+explains why.
+
+State-version behavior belongs to plugin authors; [Plugin design and testing](/plugins/authoring#lifecycle-and-durable-state)
+defines the migration contract. Instance replacement and persistence are covered in
+[Instances and isolation](/instances#create-reset-and-destroy-mean-different-things).
 
 ## Seed only when requested
 
-Plugins may accept declarative seed data. A top-level scenario can then compose plugin operations:
+Plugin seed data and the top-level scenario function define a reusable baseline, not startup hooks:
 
 ```ts
 export default defineConfig({
@@ -105,9 +212,9 @@ export default defineConfig({
 ```
 
 Run `localhost seed`, create an instance with `--seed`, or reset with `--seed`. Plugin seeds run in
-configuration order, followed by the top-level scenario. A successful in-place seed cannot run twice
+configuration order, followed by the scenario function. A successful in-place seed cannot run twice
 until reset; a failed in-place seed also requires reset. Seed requested during create or reset follows
 that outer instance mutation's recovery behavior.
 
-[Seed test worlds](/seeding) shows when this reusable baseline is preferable to per-test operations
-or application-facing setup, and how to recover from seed failure under each mutation.
+[Seed test worlds](/seeding) explains when this baseline is preferable to per-test operations or
+application-facing setup, and how to recover from each seed failure boundary.
