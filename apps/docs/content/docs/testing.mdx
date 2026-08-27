@@ -232,9 +232,9 @@ request options are available for harness-level cancellation, but cancelling a c
 not transfer ownership of the instance or runtime.
 
 The control token is a test-run secret. Pass it through the framework's private in-memory context;
-never log it, snapshot it, inject it into the application, or write it to an artifact. The complete
-Vitest owner/worker pattern lives in `examples/testing-parallel`, including setup-failure cleanup and
-four workers proving isolated state on one port.
+never log it, capture it in test output, inject it into the application, or write it to an artifact.
+The complete Vitest owner/worker pattern lives in `examples/testing-parallel`, including
+setup-failure cleanup and four workers proving isolated state on one port.
 
 Instances isolate plugin state, storage, seed status, and clocks. They do not isolate shared plugin
 configuration or one configured application callback URL. Before callback tests run concurrently,

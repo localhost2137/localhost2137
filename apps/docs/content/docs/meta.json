@@ -19,6 +19,7 @@
 		"virtual-time",
 		"plugins",
 		"first-party",
-		"limitations"
+		"limitations",
+		"security"
 	]
 }

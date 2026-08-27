@@ -1,105 +1,146 @@
 ---
-title: Limitations and troubleshooting
-description: Current product boundaries and the shortest checks for common configuration, runtime, callback, and cleanup failures.
+title: Runtime boundaries
+description: Decide what localhost2137 can establish, where isolation stops, and when a scenario needs a different test boundary.
 ---
 
-These limits affect how a project should be structured. Deferred features are not present as empty
-methods or placeholder commands.
+localhost2137 gives an application a local, stateful implementation of the surface an installed
+plugin documents. It does not make every property of the external service local. These boundaries
+matter when choosing a test and when deciding how many runtimes a suite needs.
 
-For a failure that does not match one of the short checks below, use the boundary-first
-[diagnostic workflow](/diagnosing) before changing application or plugin behavior.
+This page describes current behavior. It is not a list of possible additions.
 
-## Current runtime boundaries
+## What one runtime represents
 
-- The server is loopback-only. Broad network binding and hosted execution are not implemented.
-- Plugins are trusted local code, not sandboxed code.
-- Instances isolate plugin state and storage, not plugin configuration or application callback URLs.
-- Callback interception and automatic per-instance callback rerouting are not implemented.
-- Config changes require a daemon restart; there is no hot reload or instance start/stop command.
-- Per-instance config overrides are not defined.
-- Snapshots, restore, forks, deterministic runtime randomness, MCP generation, and a web dashboard are
-  deferred and absent from the public API.
-- The runtime has no automatic wall-clock scheduler. Plugin time-derived work runs at documented API
-  boundaries or during explicit clock advancement.
+A runtime is one loopback HTTP process, one resolved config, and one storage root. It can host many
+instances, but those instances are worlds created from the same template.
 
-Plugin compatibility is narrower than the external provider unless the plugin says otherwise. Read
-the installed package's support matrix before committing a test strategy to it.
+| Property | Scope | Consequence |
+| --- | --- | --- |
+| Plugin state, storage, clock, logs, and tracked work | Instance | Parallel scenarios can use different instance IDs without sharing these values. |
+| Plugin configuration and callback destinations | Runtime | Instances do not create different credentials, feature settings, or receiver URLs. Use separate runtimes when those must differ. |
+| Host, port, control token, and storage lock | Runtime | One daemon owns the storage root and endpoint. Many instances do not imply many servers. |
+| Service key | Config and stored world | Renaming a key changes durable identity. Treat it as a data migration, not a display-name edit. |
 
-## Parallel callbacks need an application rule
+An instance is isolation for emulator state, not a process, user, or security boundary. Code in every
+installed plugin runs in the runtime process. [Instances and isolation](/instances) covers the exact
+create, reset, destroy, and persistence semantics. [Local security model](/security) covers the
+trust consequences.
 
-Several instances can share one runtime and remain state-isolated. They still use the same plugin
-config. If `eventsUrl` or `webhookUrl` points to one application receiver, the runtime does not add an
-instance header or rewrite the callback automatically.
+## The runtime is local by construction
 
-Choose one of these deliberately:
+The server accepts only `127.0.0.1`, `localhost`, or `::1` and serves plain HTTP. That makes it useful
+for a developer machine, a local test process, and an isolated CI worker. It does not establish:
 
-- make the shared receiver correlate callbacks using provider-shaped event data;
-- serialize callback scenarios that cannot be correlated safely;
-- run a separately configured runtime and receiver per worker.
+- public DNS, TLS termination, or requests crossing a real network;
+- external account configuration, permissions, quotas, or provider-side credentials;
+- behavior under production load, partial infrastructure failure, or multi-region deployment;
+- the security of a remotely reachable service.
 
-Do not claim callback isolation merely because each worker has a distinct instance ID.
+Use the real service, its test environment, or an infrastructure-level test when the claim depends
+on one of those properties. A local pass is not evidence that the external account or network is
+configured correctly.
 
-## Config will not import
+## Compatibility stops at the plugin contract
 
-Run:
+The runtime supplies routing, lifecycle, storage, clocks, operations, and tracked work. A plugin
+chooses which provider-shaped requests, responses, callbacks, state transitions, and failure modes
+it implements. Installing a plugin therefore establishes only the behavior in that plugin's current
+support matrix.
 
-```sh
-localhost doctor --json
-```
+Do not infer broader parity from a familiar SDK accepting the endpoint. Unsupported fields may be
+ignored, rejected, or never reached. Ordering, pagination, retries, idempotency, signatures, and
+error bodies count as supported only when the plugin documents and tests them.
 
-A TypeScript `localhost.config.ts` imported from a CommonJS package may fail with the current generic
-`CONFIG_IMPORT_FAILED` diagnostic. Add `"type": "module"` to the package or use
-`localhost.config.mjs`. Adding a direct `tsx` dependency does not correct the package's module mode.
+[Provider compatibility](/compatibility) explains how to read those claims. For a test-strategy
+decision, use [Choose the right test boundary](/test-boundaries).
 
-Config discovery resolves paths relative to the config file. Use `--config <path>` if a nested
-working directory discovers the wrong project.
+## Application traffic and control are different evidence
 
-## Runtime is missing or stale
+Provider-shaped HTTP routes live at `/{instance}/{service}/*`. Operations and lifecycle commands use
+the separate control API. Both can change the same world, but they prove different things:
 
-Control commands require an active daemon whose resolved config fingerprint matches the current
-config. Start `localhost dev`, or restart it after config changes. `localhost doctor` reports an
-absent or unhealthy descriptor, inconsistent control-token file, stored config mismatches, orphaned
-service data, invalid manifests, and pending trash transitions without mutating storage.
+- an operation is appropriate for arrangement, external triggers, and inspection;
+- an application SDK or HTTP request is required to exercise the application's provider
+  integration;
+- a callback must cross the application's receiver when the claim includes parsing, signatures, or
+  handler behavior.
 
-Do not delete broad project directories to clear one problem. `localhost instance reset <id>` safely
-replaces one world; `localhost instance destroy <id>` removes the explicitly named world.
+Replacing a failing SDK request with an operation can help locate the fault, but it narrows the test.
+It does not repair the application boundary. [Operations and emulated APIs](/operations-and-apis)
+develops this distinction.
 
-## Operation or input is missing
+## Callback isolation needs an application rule
 
-Use runtime discovery rather than a README remembered from another version:
+A callback destination belongs to plugin config and is shared by every instance in that runtime.
+The runtime does not rewrite the destination or add a universal instance header. Distinct instance
+IDs therefore prove independent plugin state, not independent callback routing.
 
-```sh
-localhost_service_key="replace-with-configured-service-key"
-localhost_operation_key="replace-with-discovered-operation-key"
-pnpm exec localhost describe "$localhost_service_key" --json
-pnpm exec localhost exec "$localhost_service_key" --help
-pnpm exec localhost exec "$localhost_service_key" "$localhost_operation_key" --help
-```
+For parallel callback scenarios, choose one rule deliberately:
 
-An unknown instance error lists existing IDs and the exact create hint. JSON-only operation inputs
-must use `--input-json`; generated help explains why flags were not safe to produce.
+- correlate events at the shared receiver using identifiers the plugin's provider-shaped contract
+  already carries;
+- serialize scenarios that cannot be correlated safely; or
+- give each worker a separately configured runtime and receiver.
 
-## Async assertions race
+Do not invent routing metadata in application code merely for the emulator. [Callbacks and
+webhooks](/callbacks#parallel-receivers-require-a-routing-rule) gives a worked decision.
 
-After an operation schedules callbacks, call `await instance.idle()` before observing delivery
-effects. If it fails, inspect bounded logs and the plugin's operation-level inspection surface. An
-idle failure is evidence of failed tracked work; adding an arbitrary sleep hides the failure and does
-not establish completion.
+## Configuration is a startup template
 
-Retries that depend on virtual time may require a later positive clock advance even after the
-initial attempt becomes idle.
+The config module is loaded and resolved when the runtime starts. Every instance uses that complete
+resolved config. Saving the module does not change a running daemon; restart it after an intended
+config change. The CLI rejects a running daemon whose config fingerprint no longer matches the
+project it loaded.
 
-## Test cleanup fails
+If two scenarios need different plugin config, callback destinations, or service sets at the same
+time, use separate runtimes and storage roots. Instance creation is the wrong mechanism because it
+copies state boundaries, not config boundaries.
 
-Destroy every test-owned instance before closing its runtime. If cleanup fails,
-`TestRuntimeCleanupError` retains the exact temporary storage path for diagnosis. Report that path;
-do not recursively delete an unresolved environment variable or a broad temporary directory.
+Configuration is executable code, not inert data. Importing it can run its module and dependencies.
+Keep imports free of unrelated side effects, and treat every imported plugin as trusted development
+code. [Configuration](/configuration) defines discovery, validation, and path resolution.
 
-Keep the control token inside the test harness. Never put it in application environment, browser
-code, screenshots, traces, snapshots, or build artifacts.
+## Time is explicit, but plugin scheduling is not universal
 
-## Native SQLite installation
+Each instance owns a clock. A positive clock advance durably moves it and asks each configured
+plugin to reconcile the elapsed window. The runtime does not continuously scan plugin storage for
+work whose timestamp has arrived.
 
-The first-party Slack and Stripe plugins use `better-sqlite3`. A package manager may compile the
-native module when no matching prebuild exists. Node.js 24 is the supported baseline. Treat a compiler
-toolchain failure as an installation issue, not an emulator compatibility result.
+A plugin must document where it schedules or reconciles time-derived work. Some behavior may run at
+a provider-shaped request boundary; other behavior may run during explicit advancement. `idle()`
+waits for work that a plugin has registered now. It does not make a later virtual deadline current,
+and it does not wait for application-owned queues after a callback response.
+
+[Virtual time and asynchronous work](/virtual-time) defines the three separate questions: what time
+the world reports, when a plugin reconciles state, and which current work has settled.
+
+## Storage is local and lifecycle-owned
+
+The foreground development runtime keeps persistent worlds below its configured storage root. A
+daemon restart can reopen them. A reset replaces one named world; a destroy removes one named world.
+Neither is a broad project cleanup command.
+
+`createTestRuntime({ storage: "temporary" })` instead owns a temporary root. The test must destroy
+its instances and close the runtime; cleanup errors retain the exact path for investigation. Reusing
+one runtime across tests can be efficient, but reusing mutable worlds couples the scenarios.
+
+Only one runtime may own a storage root at a time. If startup reports an active lock, use the running
+daemon or choose another root. If it reports a stale or damaged lock, follow the exact recovery in
+[Diagnose a failing scenario](/diagnosing#recover-a-storage-lock-safely).
+
+Local persistence is not a backup or a shared database. Keep the storage root out of source control
+and build artifacts. [Testing localhost2137 integrations](/testing#know-what-the-test-runtime-owns)
+defines test ownership and cleanup.
+
+## Installation has a native-code boundary
+
+The supported baseline is Node.js 24 and pnpm. A plugin may include native dependencies; the
+first-party Slack and Stripe plugins use `better-sqlite3`. If no matching prebuilt binary is
+available, installation may require a local compiler toolchain.
+
+Resolve a native package installation failure before interpreting emulator behavior. The runtime and
+provider-shaped API have not started at that point.
+
+When a scenario fails inside these boundaries, preserve the first broken boundary and use
+[Diagnose a failing scenario](/diagnosing). Do not erase all local state or widen the test until the
+failure disappears.

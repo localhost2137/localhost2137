@@ -35,6 +35,23 @@ Do not delete `.localhost2137` to silence one issue. Reset or destroy an explici
 when that is the intended recovery. Preserve an unexpected manifest or pending trash entry until you
 have recorded the diagnostic.
 
+Config import errors report one of two boundaries. `CONFIG_DEFAULT_EXPORT_MISSING` means the selected
+module loaded but did not default-export a config. `CONFIG_IMPORT_FAILED` means evaluating that module
+or one of its imports threw; inspect the original process output and the selected path rather than
+changing module format speculatively. TypeScript, ESM, CommonJS, and local imports are supported.
+
+## Recover a storage lock safely
+
+One daemon owns a storage root. `LOCKED` names a process that is still alive; use that daemon, stop it
+normally, or choose another storage root. Do not remove its lock.
+
+`LOCK_STALE` names a stopped owner. `LOCK_CORRUPT` means the lock has incomplete or invalid owner
+metadata. Both errors print the exact lock path. First confirm no runtime uses that storage root,
+including another terminal or test process. Then remove that exact lock path and retry. Never turn
+the printed path into a wildcard or replace it with the project directory.
+
+If another runtime may be starting, retry before treating a damaged-looking lock as abandoned.
+
 ## Confirm the selected world
 
 Ask the running daemon what it actually exposes:
@@ -162,5 +179,5 @@ Remove control tokens, provider credentials, personal data, and unnecessary requ
 is a reproducible boundary failure, not a complete dump of the local environment.
 
 [CLI workflow and reference](/cli) defines command and exit behavior, while
-[Limitations and troubleshooting](/limitations) lists current product boundaries and short fixes for
-known failure classes.
+[Runtime boundaries](/limitations) identifies claims that need a different test, and
+[Local security model](/security) defines what may be safe to retain or share.

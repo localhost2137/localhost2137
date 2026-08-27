@@ -32,6 +32,7 @@ const expectedPages = new Map([
 	["first-party/stripe.mdx", "/first-party/stripe"],
 	["agents.mdx", "/agents"],
 	["limitations.mdx", "/limitations"],
+	["security.mdx", "/security"],
 ]);
 
 const documentationFirstCommands = Object.freeze([
@@ -85,6 +86,12 @@ for (const [file, source] of content) {
 }
 
 const combined = [...content.values()].join("\n");
+for (const term of ["snapshot", "fork", "MCP"]) {
+	assert(
+		!new RegExp(`\\b${term}s?\\b`, "i").test(combined),
+		`Reserved product vocabulary leaked into the docs: ${term}.`,
+	);
+}
 for (const command of documentationFirstCommands) {
 	assert(combined.includes(command), `The docs must include ${command}.`);
 }
@@ -95,6 +102,14 @@ for (const command of [
 ]) {
 	assert(!combined.includes(command), `Deferred command leaked into the docs: ${command}.`);
 }
+const runtimeBoundaries = content.get("limitations.mdx");
+assert(runtimeBoundaries?.includes("title: Runtime boundaries"));
+assert(runtimeBoundaries?.includes("This page describes current behavior"));
+assert(!/\b(deferred|roadmap|snapshots?|forks?|MCP)\b/i.test(runtimeBoundaries ?? ""));
+const security = content.get("security.mdx");
+assert(security?.includes("title: Local security model"));
+assert(security?.includes("The runtime bearer token does not protect provider-shaped routes"));
+assert(/There is no process, filesystem, or\s+network sandbox/.test(security ?? ""));
 
 const commandProgram = await readFile(
 	join(repositoryRoot, "packages/localhost2137/src/cli/command-program.ts"),

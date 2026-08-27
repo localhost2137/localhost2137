@@ -158,7 +158,7 @@ shows the corresponding application workflow.
 | --- | --- |
 | `localhost clock status [--instance id] [--json]` | Current instance clock mode and RFC 3339 time. |
 | `localhost clock advance <duration> [--instance id] [--json]` | One durable time window after configured services reconcile it. |
-| `localhost logs [service] [--instance id] [--tail n] [--json]` | A bounded snapshot of request, operation, delivery, and plugin logs. |
+| `localhost logs [service] [--instance id] [--tail n] [--json]` | A bounded view of request, operation, delivery, and plugin logs. |
 | `localhost doctor [--json]` | A read-only report over config, runtime discovery, stored manifests, service versions, and pending trash. |
 
 `logs` defaults to the latest 50 entries and accepts a tail from 0 through 1000. An optional service

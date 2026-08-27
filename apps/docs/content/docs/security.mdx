@@ -1,0 +1,149 @@
+---
+title: Local security model
+description: Understand which localhost2137 surfaces are protected, what is trusted, and how to handle local credentials and state safely.
+---
+
+localhost2137 is designed for a trusted developer project on a developer machine or isolated CI
+worker. Its security controls prevent accidental boundary crossing and protect the control surface
+from ordinary application code. They do not turn one local process into a hostile-code sandbox.
+
+Use fake local credentials and test data. If a scenario requires real secrets, untrusted plugins, or
+access from another machine, this security model is the wrong boundary.
+
+## Know the four surfaces
+
+| Surface | Who should use it | Protection | What it can do |
+| --- | --- | --- | --- |
+| Provider-shaped routes at `/{instance}/{service}/*` | The application and provider SDK | Whatever authentication the installed plugin documents | Read or mutate the selected emulated service world. |
+| Control routes below `/_/v1/*` | The CLI, test harness, or explicitly trusted automation | Daemon bearer token; browser-origin requests rejected | Create, reset, seed, inspect, advance, or destroy worlds and invoke operations. |
+| Unauthenticated health route | Local discovery | Loopback binding only | Report `{ "status": "ok", "version": "v1" }`. |
+| Files below `storage.dir` | The runtime and trusted local tools | Local operating-system account and file permissions | Hold discovery metadata, local credentials, manifests, and plugin state. |
+
+Loopback is a network boundary, not authorization between local processes. Another process running
+as the same user may be able to connect to public routes and read project files. Do not run the
+runtime on a shared or untrusted host and assume `127.0.0.1` makes tenants independent.
+
+## Public routes belong to the plugin contract
+
+The runtime bearer token does not protect provider-shaped routes. Those routes exist so the
+application can use its ordinary SDK or HTTP client. Each plugin owns the local credentials,
+signature rules, and rejected requests that make sense for its emulated provider surface.
+
+A browser can request a public route when normal browser networking rules allow it. The runtime does
+not apply the control API's browser-origin rejection to application traffic. Do not place privileged
+test operations under a public plugin route, and do not mistake a fake provider token for protection
+against hostile local code.
+
+Use clearly local credential values. Never copy a production provider key into a plugin config just
+because its format passes validation. A local emulator does not need authority over the external
+account.
+
+## The control token is local authority
+
+Except for health, every control request needs the daemon's bearer token. Control requests carrying
+an `Origin` header are rejected, and the control API does not enable CORS. JSON mutations require a
+JSON content type and accept at most 64 KiB.
+
+The daemon generates a new random token when it starts and writes it to `control-token` below the
+configured storage root. The token file, active runtime descriptor, and generated `.env` are written
+with owner-only mode `0600` where the platform supports POSIX permissions. File mode is defense in
+depth; the storage directory and local account still define who can read them.
+
+The CLI and test client handle the token automatically. Read it directly only for a trusted custom
+control client, and keep its lifetime short:
+
+- do not add it to application environment or pass it through `localhost run`;
+- do not expose it to browser code;
+- do not print it in logs, shell tracing, screenshots, or diagnostic reports;
+- do not cache it across daemon restarts;
+- do not commit or package the storage root.
+
+[CLI workflow and reference](/cli#plain-http-control) contains the minimal direct HTTP example. Most
+application and test code should use plugin connection values or the typed test harness instead.
+
+If a running daemon's token leaves trusted tooling, stop and restart that daemon before continuing;
+the restart replaces the token. Remove the leaked value from any retained artifact. Token rotation
+does not undo control mutations that already happened, so inspect the affected instances before
+reusing them.
+
+## Config and plugins are trusted Node code
+
+The config file is an executable module. Loading it runs its imports. A plugin also runs inside the
+runtime process with the privileges of that Node process. There is no process, filesystem, or
+network sandbox between plugins, instances, and the host user.
+
+Installing and importing a plugin is therefore equivalent to trusting a development dependency that
+runs code:
+
+- review the package, dependency source, and version policy appropriate to the project;
+- install packages explicitly and pin them according to the repository's dependency policy;
+- keep config imports limited to code needed to construct the runtime;
+- do not load plugins from an untrusted change merely to inspect their metadata;
+- run untrusted project code inside a separate OS or CI isolation boundary, not beside sensitive
+  files.
+
+The plugin storage helper rejects absolute paths and traversal outside its service data directory.
+That prevents accidental misuse of the helper; it does not restrict a plugin from calling Node's
+filesystem or network APIs directly. Likewise, tracked outbound fetch makes work observable to the
+runtime but is not a network firewall.
+
+Instances isolate plugin-owned data and lifecycle. They do not isolate code execution, config,
+callback destinations, or permissions. Use separate processes or stronger operating-system
+isolation when those properties must differ.
+
+## Treat storage as potentially sensitive
+
+With the default config, runtime state is below `.localhost2137`, which the project ignore file
+should exclude from version control. A custom `storage.dir` needs the same treatment. The directory
+can contain:
+
+- provider-shaped test records and callback payload data persisted by plugins;
+- generated application connection values in `.env`;
+- the active control token and runtime discovery descriptor;
+- instance manifests and plugin databases.
+
+Use synthetic data even when testing realistic flows. Do not put personal data or production request
+bodies into a world and rely on later cleanup as the privacy control. Persistent development worlds
+survive daemon restarts, and test cleanup can fail while preserving a path for diagnosis.
+
+Structured logs use a bounded in-memory ring, omit body-like attributes, and redact known sensitive
+keys and values. That reduces routine leakage; it is not a proof that arbitrary plugin messages are
+safe to share. Review `localhost logs --json`, `localhost doctor --json`, test failure output, and
+retained storage paths before posting them.
+
+If test data is exposed, stop the runtime and identify the affected storage root and instances.
+Destroy only explicitly owned worlds or remove an explicitly owned temporary directory after the
+runtime has closed. If real credentials were mistakenly used, revoke them at their source; resetting
+the local world cannot rotate an external credential.
+
+## Browser and application code stay on the public side
+
+Application code needs only the connection projection produced by its installed plugins. That may
+include a local base URL and fake provider credentials. It must not receive the runtime descriptor or
+control token.
+
+This separation is deliberate: a compromised application test should not automatically gain the
+ability to enumerate, reset, seed, or destroy every world. The browser-origin rejection adds another
+guard against control calls from a web page, but it does not make a leaked token safe and it does not
+protect public plugin routes.
+
+When a browser-based test needs privileged arrangement, keep the operation in the Node test harness
+or CLI. Pass only the resulting provider-shaped identifiers or application-visible state into the
+browser.
+
+## Safe operating checklist
+
+Before running a project or sharing its output:
+
+1. Confirm the runtime binds a loopback host and uses a storage root owned by this project or test.
+2. Use fake provider credentials and synthetic records.
+3. Keep the storage root out of source control, caches, and build artifacts.
+4. Import only trusted config and plugin code.
+5. Keep the control token in the CLI, test harness, or one trusted local client.
+6. Review logs and diagnostic output before sharing them.
+7. Use a separate runtime, storage root, and OS isolation boundary when local users or code are not
+   mutually trusted.
+
+[Runtime boundaries](/limitations) explains what local execution and instance isolation can prove.
+[Diagnose a failing scenario](/diagnosing) shows how to preserve useful evidence without publishing
+secrets or deleting broad directories.
