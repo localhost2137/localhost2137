@@ -58,7 +58,7 @@ Stop at the first command whose result differs from the scenario:
 | `doctor` reports absent/unhealthy runtime after `dev` should be ready | Runtime discovery | Runtime issue code and foreground daemon error |
 | `describe slack` fails | Control access, `dev` selection, or service mount | Existing instance/service names in the error or doctor report |
 | `env` points elsewhere | Connection projection | Instance and service segments in the exported URL |
-| The app request fails | Provider-shaped route or application adapter | App error plus matching `request` log entry |
+| The app request fails | Application adapter or provider-shaped route | Compare the app error with the presence or absence of a matching `request` entry. Absence keeps the failure at the application boundary; a present entry can be traced inside the provider-shaped boundary. |
 | The app succeeds but a callback is missing | Delivery or receiver | `delivery` entry, receiver evidence, then tracked completion |
 | Local behavior differs from a claimed provider route | Compatibility surface | Installed plugin's documented support entry |
 

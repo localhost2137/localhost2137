@@ -327,6 +327,11 @@ assert(diagnosing?.includes('```md title="diagnostic-report.md"'));
 assert(diagnosing?.includes("## Removed before sharing"));
 assert(diagnosing?.includes("Runtime control token"));
 assert(diagnosing?.includes("`droppedEntries`"));
+assert(
+	diagnosing?.includes(
+		"Absence keeps the failure at the application boundary; a present entry can be traced inside the provider-shaped boundary.",
+	),
+);
 assert(!diagnosing?.includes("replace-with-"));
 assert(!/\bLOCK(?:ED|_STALE|_CORRUPT)\b/.test(diagnosing ?? ""));
 assert(diagnosing?.includes("Correlation IDs are scoped to one boundary"));
