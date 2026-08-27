@@ -387,6 +387,19 @@ assert(cli?.includes("does not expose structured error details"));
 assert(cli?.includes("localhost_control_token="));
 assert(!cli?.includes("export LOCALHOST_CONTROL_TOKEN"));
 const configuration = content.get("configuration.mdx");
+assert(
+	configuration?.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),
+	"Configuration reference must lead from the checked complete crash-course config.",
+);
+assert.equal(
+	configuration?.match(/```[a-z]+[^\n]*\n/)?.[0],
+	'```ts title="localhost.config.ts"\n',
+	"Configuration reference must lead with a complete config file.",
+);
+assert(
+	configuration?.includes(titledCodeBlock("ts", "test/fixtures/seeding-config.ts", seedingConfig)),
+	"Configuration scenario seed must match its checked fixture.",
+);
 assert(configuration?.includes("The `port: 0` used by `createTestRuntime"));
 assert(configuration?.includes("Renaming a key is therefore not a migration"));
 assert(configuration?.includes("The runtime's `received` diagnostic records the value's type"));
