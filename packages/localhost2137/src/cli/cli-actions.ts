@@ -7,8 +7,6 @@ export interface CliDevOptions {
 
 export interface CliProjectInitialization {
 	readonly gitignore: "created" | "unchanged" | "updated";
-	readonly needsPackageManifest: boolean;
-	readonly needsRuntimeDependency: boolean;
 }
 
 export interface CliActions {

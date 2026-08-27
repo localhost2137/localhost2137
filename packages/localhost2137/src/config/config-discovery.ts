@@ -2,7 +2,7 @@ import { realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { ConfigError } from "./config-error.js";
 
-const CONFIG_FILE_NAMES = Object.freeze([
+export const CONFIG_FILE_NAMES: readonly string[] = Object.freeze([
 	"localhost.config.ts",
 	"localhost.config.mts",
 	"localhost.config.cts",

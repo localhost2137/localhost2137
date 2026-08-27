@@ -30,6 +30,26 @@ afterEach(async () => {
 });
 
 describe("localhost process transcript", () => {
+	it("initializes an empty project without config discovery or a daemon", async () => {
+		const project = await temporaryProject("init");
+		temporaryDirectories.push(project);
+
+		const first = command(project, ["init"]);
+		expect(first.status, first.stderr).toBe(0);
+		expect(first.stderr).toBe("");
+		expect(first.stdout).toContain("Created localhost.config.ts");
+		expect(first.stdout).toContain("pnpm exec localhost dev");
+		await expect(readFile(join(project, "localhost.config.ts"), "utf8")).resolves.toContain(
+			"defineConfig",
+		);
+		await expect(readFile(join(project, ".gitignore"), "utf8")).resolves.toBe(".localhost2137/\n");
+
+		const second = command(project, ["init"]);
+		expect(second.status).toBe(2);
+		expect(second.stdout).toBe("");
+		expect(second.stderr).toContain("Refusing to replace existing localhost2137 config");
+	}, 30_000);
+
 	it("uses one explicit, non-discoverable config for the complete CLI session", async () => {
 		const project = await temporaryProject("config");
 		temporaryDirectories.push(project);

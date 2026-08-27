@@ -6,16 +6,9 @@ import {
 } from "../control/control-client-errors.js";
 
 export class CliUsageError extends Error {
-	constructor(message: string) {
-		super(message);
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
 		this.name = "CliUsageError";
-	}
-}
-
-export class CliProjectConflictError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "CliProjectConflictError";
 	}
 }
 
@@ -71,7 +64,6 @@ export interface CliFailure {
 export function classifyCliFailure(cause: unknown): CliFailure {
 	if (cause instanceof CliUsageError) return failure(2, cause.message);
 	if (cause instanceof CliTargetNotFoundError) return failure(4, cause.message);
-	if (cause instanceof CliProjectConflictError) return failure(5, cause.message);
 	if (cause instanceof CliConfigMismatchError || cause instanceof CliRuntimeUnavailableError) {
 		return failure(3, cause.message);
 	}

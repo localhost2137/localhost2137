@@ -1,203 +1,189 @@
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
-import { lstat, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CliProjectInitialization } from "../cli/cli-actions.js";
-import { CliProjectConflictError } from "../cli/cli-errors.js";
+import { CliUsageError } from "../cli/cli-errors.js";
+import { CONFIG_FILE_NAMES } from "../config/config-discovery.js";
+import {
+	closeOwnedProjectFile,
+	createOwnedProjectFile,
+	assertOwnedProjectFile,
+	hasCode,
+	hasIdentity,
+	lstatIfPresent,
+	nodeProjectInitFileSystem,
+	type OwnedProjectFile,
+	ProjectFileCommittedError,
+	type ProjectInitFileSystem,
+	removeOwnedProjectFile,
+	withCleanup,
+} from "./project-init-file.js";
+import {
+	closeProjectGitignore,
+	commitProjectGitignore,
+	inspectProjectGitignore,
+	type ProjectGitignore,
+	rollbackProjectGitignore,
+	validateProjectGitignore,
+} from "./project-gitignore.js";
+import { acquireStorageLock, type StorageLock } from "./storage-lock.js";
+import type { StoragePaths } from "./storage-paths.js";
 
-const CONFIG_FILE_NAMES = Object.freeze([
-	"localhost.config.ts",
-	"localhost.config.mts",
-	"localhost.config.cts",
-	"localhost.config.js",
-	"localhost.config.mjs",
-	"localhost.config.cjs",
-]);
 const CONFIG_FILE_NAME = "localhost.config.ts";
 const CONFIG_CONTENT = `import { defineConfig } from "localhost2137";\n\nexport default defineConfig({\n\tservices: {},\n});\n`;
-const IGNORE_ENTRY = ".localhost2137/";
+const LOCK_FILE_NAME = ".localhost2137.init.lock";
 
-/** Creates the smallest runnable project contract without changing package metadata. */
+export interface ProjectInitializerOptions {
+	readonly fileSystem?: ProjectInitFileSystem;
+	readonly ownerToken?: () => string;
+}
+
+/** Creates a minimal config and ignore entry without touching package metadata. */
 export async function initializeProject(
 	cwd: string,
-	dependencies: ProjectInitializerDependencies = {},
+	options: ProjectInitializerOptions = {},
 ): Promise<CliProjectInitialization> {
-	const createFile = dependencies.createFile ?? createProjectFile;
-	const root = await realpath(cwd);
-	if (!(await stat(root)).isDirectory()) {
-		throw new CliProjectConflictError(`Project path is not a directory: ${root}`);
-	}
-	await rejectExistingConfig(root);
-
-	const configPath = join(root, CONFIG_FILE_NAME);
-	const gitignorePath = join(root, ".gitignore");
-	const gitignore = await inspectGitignore(gitignorePath);
-	const packageState = await inspectPackage(root);
-
-	await createFile(configPath, CONFIG_CONTENT);
+	const fileSystem = options.fileSystem ?? nodeProjectInitFileSystem;
+	const lock = await acquireInitLock(cwd, options.ownerToken?.() ?? randomUUID());
+	let config: OwnedProjectFile | undefined;
+	let gitignore: ProjectGitignore | undefined;
+	let committed = false;
+	let lockReleaseAttempted = false;
 	try {
-		if (gitignore.kind === "missing") {
-			await createFile(gitignorePath, `${IGNORE_ENTRY}\n`);
-		} else if (gitignore.kind === "update") {
-			await replaceUnchangedFile(
-				gitignorePath,
-				gitignore.content,
-				gitignore.updated,
-				gitignore.mode,
+		await validateConfigAliases(cwd, fileSystem);
+		gitignore = await inspectProjectGitignore(join(cwd, ".gitignore"), fileSystem);
+		config = await createConfig(cwd, fileSystem);
+		await validateConfigAliases(cwd, fileSystem, config);
+		await assertOwnedProjectFile(config, fileSystem);
+		const gitignoreResult = await commitProjectGitignore(gitignore, fileSystem);
+		await validateConfigAliases(cwd, fileSystem, config);
+		await assertOwnedProjectFile(config, fileSystem);
+		await validateProjectGitignore(gitignore, fileSystem);
+		committed = true;
+
+		const cleanup = await closeScaffoldFiles(config, gitignore);
+		lockReleaseAttempted = true;
+		await lock.release().catch((cause: unknown) => cleanup.push(cause));
+		if (cleanup.length > 0) {
+			throw new AggregateError(
+				cleanup,
+				"localhost init created the project files, but cleanup did not complete.",
 			);
 		}
+		return Object.freeze({ gitignore: gitignoreResult });
 	} catch (cause) {
-		await rollbackConfig(configPath);
-		throw cause;
-	}
-
-	return Object.freeze({
-		gitignore:
-			gitignore.kind === "missing"
-				? "created"
-				: gitignore.kind === "update"
-					? "updated"
-					: "unchanged",
-		needsPackageManifest: !packageState.exists,
-		needsRuntimeDependency: !packageState.hasRuntime,
-	});
-}
-
-export interface ProjectInitializerDependencies {
-	readonly createFile?: (path: string, content: string) => Promise<void>;
-}
-
-async function createProjectFile(path: string, content: string): Promise<void> {
-	await writeFile(path, content, { encoding: "utf8", flag: "wx", mode: 0o644 });
-}
-
-async function rejectExistingConfig(root: string): Promise<void> {
-	for (const name of CONFIG_FILE_NAMES) {
-		const path = join(root, name);
-		if (await pathExists(path)) {
-			throw new CliProjectConflictError(
-				`Refusing to replace existing localhost2137 config: ${name}`,
-			);
+		if (committed || cause instanceof ProjectFileCommittedError) {
+			const cleanup = await closeScaffoldFiles(config, gitignore);
+			if (cause instanceof ProjectFileCommittedError && !cause.owned.closed) {
+				await closeOwnedProjectFile(cause.owned).catch((failure: unknown) => cleanup.push(failure));
+			}
+			if (!lockReleaseAttempted) {
+				await lock.release().catch((failure: unknown) => cleanup.push(failure));
+			}
+			throw withCleanup(cause, cleanup);
 		}
+		const rollback = await rollbackScaffold(config, gitignore, fileSystem);
+		await lock.release().catch((failure: unknown) => rollback.push(failure));
+		throw withCleanup(cause, rollback);
 	}
 }
 
-type GitignoreState =
-	| Readonly<{ kind: "missing" }>
-	| Readonly<{ kind: "unchanged" }>
-	| Readonly<{ content: string; kind: "update"; mode: number; updated: string }>;
-
-async function inspectGitignore(path: string): Promise<GitignoreState> {
-	const metadata = await lstatIfPresent(path);
-	if (!metadata) return Object.freeze({ kind: "missing" });
-	if (!metadata.isFile()) {
-		throw new CliProjectConflictError("Refusing to replace .gitignore because it is not a file.");
-	}
-	const content = await readFile(path, "utf8");
-	if (hasEffectiveIgnoreEntry(content)) return Object.freeze({ kind: "unchanged" });
-	const newline = content.includes("\r\n") ? "\r\n" : "\n";
-	const separator = content.length === 0 || content.endsWith("\n") ? "" : newline;
-	return Object.freeze({
-		content,
-		kind: "update",
-		mode: metadata.mode & 0o777,
-		updated: `${content}${separator}${IGNORE_ENTRY}${newline}`,
-	});
-}
-
-function hasEffectiveIgnoreEntry(content: string): boolean {
-	let ignored = false;
-	for (const line of content.split(/\r?\n/u)) {
-		const value = line.trim();
-		if ([IGNORE_ENTRY, ".localhost2137", `/${IGNORE_ENTRY}`, "/.localhost2137"].includes(value)) {
-			ignored = true;
-		} else if (
-			[`!${IGNORE_ENTRY}`, "!.localhost2137", `!/${IGNORE_ENTRY}`, "!/.localhost2137"].includes(
-				value,
-			)
-		) {
-			ignored = false;
-		}
-	}
-	return ignored;
-}
-
-async function replaceUnchangedFile(
-	path: string,
-	expected: string,
-	updated: string,
-	mode: number,
-): Promise<void> {
-	const temporaryPath = `${path}.localhost2137-${randomUUID()}.tmp`;
-	try {
-		await writeFile(temporaryPath, updated, { encoding: "utf8", flag: "wx", mode });
-		if ((await readFile(path, "utf8")) !== expected) {
-			throw new CliProjectConflictError(".gitignore changed while localhost init was running.");
-		}
-		await rename(temporaryPath, path);
-	} finally {
-		await rm(temporaryPath, { force: true });
-	}
-}
-
-async function rollbackConfig(path: string): Promise<void> {
-	try {
-		if ((await readFile(path, "utf8")) === CONFIG_CONTENT) await rm(path);
-	} catch {
-		// Preserve the original failure; a changed config is deliberately left in place.
-	}
-}
-
-async function inspectPackage(
+async function createConfig(
 	root: string,
-): Promise<Readonly<{ exists: boolean; hasRuntime: boolean }>> {
-	const path = join(root, "package.json");
-	const metadata = await lstatIfPresent(path);
-	if (!metadata?.isFile())
-		return Object.freeze({ exists: metadata !== undefined, hasRuntime: false });
+	fileSystem: ProjectInitFileSystem,
+): Promise<OwnedProjectFile> {
 	try {
-		const value: unknown = JSON.parse(await readFile(path, "utf8"));
-		if (!isRecord(value)) return Object.freeze({ exists: true, hasRuntime: false });
-		const sections = [
-			"dependencies",
-			"devDependencies",
-			"optionalDependencies",
-			"peerDependencies",
-		];
-		return Object.freeze({
-			exists: true,
-			hasRuntime: sections.some((section) => {
-				const dependencies = value[section];
-				return isRecord(dependencies) && typeof dependencies.localhost2137 === "string";
-			}),
-		});
-	} catch {
-		return Object.freeze({ exists: true, hasRuntime: false });
-	}
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function pathExists(path: string): Promise<boolean> {
-	return (await lstatIfPresent(path)) !== undefined;
-}
-
-async function lstatIfPresent(path: string): Promise<Stats | undefined> {
-	try {
-		return await lstat(path);
+		return await createOwnedProjectFile(
+			join(root, CONFIG_FILE_NAME),
+			CONFIG_CONTENT,
+			0o644,
+			fileSystem,
+		);
 	} catch (cause) {
-		if (isMissingPathError(cause)) return undefined;
+		if (hasCode(cause, "EEXIST")) {
+			throw new CliUsageError("localhost.config.ts appeared while localhost init was running.");
+		}
 		throw cause;
 	}
 }
 
-function isMissingPathError(value: unknown): boolean {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"code" in value &&
-		(value.code === "ENOENT" || value.code === "ENOTDIR")
-	);
+async function acquireInitLock(root: string, ownerToken: string): Promise<StorageLock> {
+	const paths: StoragePaths = {
+		controlToken: join(root, ".localhost2137.init-control-token"),
+		instances: join(root, ".localhost2137.init-instances"),
+		lock: join(root, LOCK_FILE_NAME),
+		root,
+		runtime: join(root, ".localhost2137.init-runtime"),
+		trash: join(root, ".localhost2137.init-trash"),
+	};
+	try {
+		return await acquireStorageLock(paths, { ownerToken: () => ownerToken });
+	} catch (cause) {
+		if (isStorageLockFailure(cause)) {
+			throw new CliUsageError(
+				`Another localhost init may be running. If not, remove ${LOCK_FILE_NAME} and retry.`,
+				{ cause },
+			);
+		}
+		throw cause;
+	}
+}
+
+function isStorageLockFailure(value: unknown): boolean {
+	return value instanceof Error && value.name === "StorageLockError";
+}
+
+async function validateConfigAliases(
+	root: string,
+	fileSystem: ProjectInitFileSystem,
+	owned?: OwnedProjectFile,
+): Promise<void> {
+	for (const name of CONFIG_FILE_NAMES) {
+		const metadata = await lstatIfPresent(join(root, name), fileSystem);
+		if (name === CONFIG_FILE_NAME && owned && metadata) {
+			if (hasIdentity(metadata, owned.identity)) continue;
+			throw new CliUsageError("localhost.config.ts changed while localhost init was running.");
+		}
+		if (metadata) {
+			throw new CliUsageError(`Refusing to replace existing localhost2137 config: ${name}`);
+		}
+		if (name === CONFIG_FILE_NAME && owned) {
+			throw new CliUsageError("localhost.config.ts disappeared while localhost init was running.");
+		}
+	}
+}
+
+async function closeScaffoldFiles(
+	config: OwnedProjectFile | undefined,
+	gitignore: ProjectGitignore | undefined,
+): Promise<unknown[]> {
+	const failures: unknown[] = [];
+	if (gitignore && "handle" in gitignore && !gitignore.closed) {
+		await closeProjectGitignore(gitignore).catch((cause: unknown) => failures.push(cause));
+	}
+	if (gitignore && !("handle" in gitignore) && gitignore.created && !gitignore.created.closed) {
+		await closeOwnedProjectFile(gitignore.created).catch((cause: unknown) => failures.push(cause));
+	}
+	if (config && !config.closed) {
+		await closeOwnedProjectFile(config).catch((cause: unknown) => failures.push(cause));
+	}
+	return failures;
+}
+
+async function rollbackScaffold(
+	config: OwnedProjectFile | undefined,
+	gitignore: ProjectGitignore | undefined,
+	fileSystem: ProjectInitFileSystem,
+): Promise<unknown[]> {
+	const failures: unknown[] = [];
+	if (gitignore && "handle" in gitignore) {
+		failures.push(...(await rollbackProjectGitignore(gitignore)));
+	}
+	if (gitignore && !("handle" in gitignore) && gitignore.created) {
+		failures.push(...(await removeOwnedProjectFile(gitignore.created, fileSystem)));
+	}
+	if (config) failures.push(...(await removeOwnedProjectFile(config, fileSystem)));
+	if (gitignore && "handle" in gitignore && !gitignore.closed) {
+		await closeProjectGitignore(gitignore).catch((cause: unknown) => failures.push(cause));
+	}
+	return failures;
 }

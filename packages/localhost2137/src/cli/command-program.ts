@@ -105,10 +105,8 @@ async function runStatic(input: DispatchCliInput): Promise<number> {
 					: `${result.gitignore === "created" ? "Created" : "Updated"} .gitignore\n`,
 			);
 			input.io.writeOutput("\nNext:\n");
-			if (result.needsPackageManifest) input.io.writeOutput("  pnpm init\n");
-			if (result.needsRuntimeDependency) input.io.writeOutput("  pnpm add -D localhost2137\n");
 			input.io.writeOutput(
-				"  Add an emulator plugin to localhost.config.ts, then run:\n  pnpm exec localhost dev\n",
+				"  Install localhost2137 and an emulator plugin with pnpm.\n  Add the plugin to localhost.config.ts.\n  pnpm exec localhost dev\n",
 			);
 		});
 

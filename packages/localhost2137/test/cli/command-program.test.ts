@@ -6,6 +6,7 @@ import { runCliCommand } from "../../src/cli/command-program.js";
 import { ownCliServiceDescription } from "../../src/cli/service-description.js";
 import { createOperationMetadata } from "../../src/config/schema-metadata.js";
 import { ControlApiError, ControlTransportError } from "../../src/control/control-client-errors.js";
+import { CliUsageError } from "../../src/cli/cli-errors.js";
 
 describe("CLI command program", () => {
 	it("emits valid stdout-only JSON for every --json command", async () => {
@@ -77,8 +78,6 @@ describe("CLI command program", () => {
 		const fixture = cliFixture();
 		fixture.actions.initProject.mockResolvedValue({
 			gitignore: "updated",
-			needsPackageManifest: true,
-			needsRuntimeDependency: true,
 		});
 		const createActions = vi.fn(() => fixture.actions);
 
@@ -93,9 +92,44 @@ describe("CLI command program", () => {
 		expect(createActions).toHaveBeenCalledWith({});
 		expect(fixture.actions.initProject).toHaveBeenCalledOnce();
 		expect(fixture.stdout).toBe(
-			"Created localhost.config.ts\nUpdated .gitignore\n\nNext:\n  pnpm init\n  pnpm add -D localhost2137\n  Add an emulator plugin to localhost.config.ts, then run:\n  pnpm exec localhost dev\n",
+			"Created localhost.config.ts\nUpdated .gitignore\n\nNext:\n  Install localhost2137 and an emulator plugin with pnpm.\n  Add the plugin to localhost.config.ts.\n  pnpm exec localhost dev\n",
 		);
 		expect(fixture.stderr).toBe("");
+	});
+
+	it("keeps init help config-independent and rejects extra arguments", async () => {
+		for (const [arguments_, expectedExit] of [
+			[["init", "--help"], 0],
+			[["init", "extra"], 2],
+		] as const) {
+			const fixture = cliFixture();
+			const exitCode = await runCliCommand({
+				arguments: arguments_,
+				createActions: () => fixture.actions,
+				defaultInstance: "dev",
+				io: fixture.io,
+			});
+			expect(exitCode).toBe(expectedExit);
+			expect(fixture.actions.initProject).not.toHaveBeenCalled();
+		}
+	});
+
+	it("renders project conflicts as usage failures without stdout", async () => {
+		const fixture = cliFixture();
+		fixture.actions.initProject.mockRejectedValue(
+			new CliUsageError("Refusing to replace existing localhost2137 config: localhost.config.ts"),
+		);
+
+		const exitCode = await runCliCommand({
+			arguments: ["init"],
+			createActions: () => fixture.actions,
+			defaultInstance: "dev",
+			io: fixture.io,
+		});
+
+		expect(exitCode).toBe(2);
+		expect(fixture.stdout).toBe("");
+		expect(fixture.stderr).toContain("Refusing to replace existing");
 	});
 
 	it("rejects a config selector for project initialization", async () => {
@@ -364,8 +398,6 @@ function cliFixture(): CliFixture {
 		execute: vi.fn(async () => ({ ok: true })),
 		initProject: vi.fn(async () => ({
 			gitignore: "unchanged",
-			needsPackageManifest: false,
-			needsRuntimeDependency: false,
 		})),
 		listInstances: vi.fn(async () => [{ id: "dev" }]),
 		logs: vi.fn(async () => ({ droppedEntries: 0, entries: [] })),
