@@ -1,187 +1,189 @@
 ---
 title: Diagnose a failing scenario
-description: Locate a failure across project discovery, the runtime, a provider-shaped API, callbacks, and application completion without hiding the broken boundary.
+description: Reproduce one fixed world and stop at the first config, control, provider, delivery, or application boundary that differs.
 ---
 
-Diagnosis is successful when you know which boundary failed. It is not successful merely because a
-test passes after adding a sleep, replacing an SDK call with an operation, or clearing all local
-state.
+Keep the config path, instance, service, application action, and expected effect fixed while you
+diagnose. A passing rewrite that bypasses the original SDK, HTTP, or callback path is not a fix.
 
-Start with one failing scenario. Record its instance ID, service key, config path, command or
-application request, and expected application effect. Keep those identifiers fixed while you move
-through the checks below.
+## Run one concrete triage loop
 
-## Check the project before the scenario
+The commands below target the crash-course `localhost.config.ts`, its `slack` service, persistent
+`dev` instance, and `src/read-workspace.ts` application.
 
-Run the read-only project inspection first:
+Before starting or changing anything, inspect the project:
 
 ```sh
 pnpm exec localhost doctor --json
 ```
 
-`doctor` loads the resolved config, inspects runtime discovery, and reads stored manifests. It does
-not start a daemon, create directories, or repair state. Check these parts of its result:
+`doctor` is read-only. It loads config, inspects runtime discovery and stored manifests, and reports:
 
-- `config.loaded`, `config.path`, and `config.storageRoot` identify the project that was inspected;
-- `runtime.state` distinguishes an absent runtime from an unhealthy or healthy one;
-- `issues` reports config, discovery, manifest, service-version, and pending-cleanup problems;
-- `storage.instances` reports each stored world's status, seed status, and service keys.
+| JSON path | Decision it supports |
+| --- | --- |
+| `config.loaded`, `config.path`, `config.storageRoot` | Is this the intended project and storage root? |
+| `runtime.state`, `runtime.url` | Is the daemon absent, healthy, or unhealthy? |
+| `storage.instances[].id`, `.status`, `.seedStatus`, `.services` | Does `dev` exist with `slack` and a usable lifecycle state? |
+| `issues[].code`, `.instanceId`, `.serviceKey`, `.message` | Which project or stored-world boundary needs action first? |
 
-An absent runtime is expected before `localhost dev` starts. A config fingerprint mismatch means the
-running daemon still has a different resolved config; restart it after saving the intended config.
-Fix config import and discovery failures before interpreting plugin behavior.
-
-Do not delete `.localhost2137` to silence one issue. Reset or destroy an explicitly named instance
-when that is the intended recovery. Preserve an unexpected manifest or pending trash entry until you
-have recorded the diagnostic.
-
-Config import errors report one of two boundaries. `CONFIG_DEFAULT_EXPORT_MISSING` means the selected
-module loaded but did not default-export a config. `CONFIG_IMPORT_FAILED` means evaluating that module
-or one of its imports threw. Its serialized diagnostic identifies the selected config path but
-deliberately omits the retained cause, so do not expect the CLI or JSON output to print a private
-import detail. Inspect that module and its imports directly rather than changing module format
-speculatively. TypeScript, ESM, CommonJS, and local imports are supported.
-
-## Recover a storage lock safely
-
-One daemon owns a storage root. If startup says the root is already locked by a process that is still
-alive, use that daemon, stop it normally, or choose another storage root. Do not remove its lock.
-
-Startup can instead say the lock belongs to a stopped process, or that the exact lock path is
-incomplete or damaged. Damaged means the runtime could not establish one valid owner—for example,
-because it found an obsolete layout or a missing, multiple, malformed, or mismatched owner record.
-First confirm no runtime uses that storage root, including another terminal or test process. Then
-remove the exact lock path printed by the error and retry. Never turn that path into a wildcard or
-replace it with the project directory.
-
-If another runtime may be starting, retry before treating a damaged-looking lock as abandoned.
-
-## Confirm the selected world
-
-Ask the running daemon what it actually exposes:
+An absent daemon is normal before `dev` starts. If config loaded and no earlier project issue blocks
+startup, keep it in the foreground:
 
 ```sh
-localhost_service_key="replace-with-configured-service-key"
-localhost_instance_id="replace-with-instance-id"
-pnpm exec localhost describe "$localhost_service_key" --instance "$localhost_instance_id" --json
-pnpm exec localhost env --instance "$localhost_instance_id" --format json
+# Terminal 1
+pnpm exec localhost dev
 ```
 
-The service name is the key from `services` in your config, not necessarily the plugin package name.
-Use `describe` or generated `exec` help for the installed operation names and inputs. Do not copy an
-operation from documentation for a different plugin version and treat its absence as a runtime bug.
+From another terminal, walk the selected world from control metadata to the real application path:
 
-When a connection value is a URL, check that it names the same instance and service. `env` contains
-application-facing connection values only. The control token is separate and must not enter the
-application, browser code, logs, screenshots, or a bug report.
+```sh
+# 1. Prove that this daemon exposes slack on dev
+pnpm exec localhost describe slack --instance dev --json
 
-## Classify the first broken boundary
+# 2. Inspect the app-facing projection; do not paste it into a report
+pnpm exec localhost env --instance dev --format json
 
-Follow the request from left to right and stop at the first place where observed behavior differs
-from the claim:
+# 3. Reproduce the provider-shaped application request
+pnpm exec localhost run --instance dev -- pnpm dev
 
-| Symptom | Boundary to inspect first | What it establishes |
+# 4. Read only this service's latest bounded evidence
+pnpm exec localhost logs slack --instance dev --tail 50 --json
+```
+
+Stop at the first command whose result differs from the scenario:
+
+| First failure | Broken boundary | Next evidence |
 | --- | --- | --- |
-| Config will not load, or the wrong project is found | Config resolution | The intended plugin set has not reached a runtime yet. |
-| `describe`, `exec`, or instance commands cannot reach the daemon | Discovery, control authentication, or instance selection | The control path failed before a plugin operation ran. |
-| An operation rejects its input or fails | Operation schema or plugin control behavior | Privileged setup or inspection failed; it says nothing by itself about the provider-shaped API. |
-| The application SDK or HTTP client receives an unexpected response | Provider-shaped HTTP surface and application adapter | The normal application integration path was exercised. |
-| A callback is absent | Callback configuration, receiver, signature handling, or delivery | The outbound delivery path needs to be traced separately from the triggering request. |
-| `idle()` rejects | Idle control request and tracked plugin work | Its error distinguishes failed work, timeout, cancellation, or another control failure; an arbitrary delay is not completion evidence. |
-| `idle()` succeeds but the expected application effect is absent | Application completion | Plugin-owned work is idle, but the application may still have its own queue, transaction, or background job. |
-| Behavior changes after reset or restart | Instance lifecycle or persisted plugin state | The failure depends on world state or reconciliation rather than only the request. |
-| The local result differs from the real provider | Documented compatibility surface | The gap may be unsupported behavior; it is not automatically an emulator defect. |
+| `doctor` cannot load the intended config | Config discovery or import | Selected config path and issue code |
+| `doctor` reports absent/unhealthy runtime after `dev` should be ready | Runtime discovery | Runtime issue code and foreground daemon error |
+| `describe slack` fails | Control access, `dev` selection, or service mount | Existing instance/service names in the error or doctor report |
+| `env` points elsewhere | Connection projection | Instance and service segments in the exported URL |
+| The app request fails | Provider-shaped route or application adapter | App error plus matching `request` log entry |
+| The app succeeds but a callback is missing | Delivery or receiver | `delivery` entry, receiver evidence, then tracked completion |
+| Local behavior differs from a claimed provider route | Compatibility surface | Installed plugin's documented support entry |
 
-This classification prevents a common false fix: arranging the desired result through an operation
-when the scenario is supposed to prove an SDK call or callback handler. Operations remain useful for
-setup and inspection, but they cannot supply evidence for a boundary they bypass.
+The service key is the property under `services`, not necessarily a package name. `describe` and
+generated `exec` help are the installed control contract. Do not guess operation names from another
+plugin version.
 
 ## Trace each boundary through logs
 
-Correlation IDs are scoped to one boundary, not propagated through an entire scenario. A control
-request that invokes an operation shares its ID with that operation's entries. A provider-shaped
-request, each outbound delivery, each plugin log call, and a later `idle` control request have their
-own IDs.
+The log command already filters by `instanceId: dev`, `serviceKey: slack`, and at most 50 newest
+entries. Its JSON contains a top-level `droppedEntries` count and bounded entries with these useful
+fields:
 
-Read the latest structured entries for the same instance and, when known, service:
-
-```sh
-localhost_service_key="replace-with-configured-service-key"
-localhost_instance_id="replace-with-instance-id"
-pnpm exec localhost logs "$localhost_service_key" \
-  --instance "$localhost_instance_id" --tail 50 --json
+```text
+kind
+status
+message
+correlationId
+instanceId
+serviceKey
+wallTime
+virtualTime
+attributes
 ```
 
-Use a known `correlationId` to group entries within its boundary. To move to the next boundary,
-pivot using `instanceId`, `serviceKey`, `wallTime`, `virtualTime`, and provider-shaped resource or
-event identifiers visible in the application and safe log attributes. Do not search for one
-correlation ID end to end.
+The runtime emits `request`, `operation`, `delivery`, and `plugin` entries. `status`, `message`, and
+safe `attributes` distinguish work within the same second. `wallTime` is when the entry was recorded;
+`virtualTime` is the selected world's clock.
 
-The runtime emits `request`, `operation`, `delivery`, and `plugin` entries. Read their `status`,
-`message`, and safe `attributes` to distinguish work that may otherwise occur within the same
-wall-clock second. `virtualTime` shows the instance clock when it is relevant; `wallTime` shows when
-the entry was recorded.
+Correlation IDs are scoped to one boundary, not propagated through a whole scenario. A control
+request and the operation it invokes share one ID. A provider request, each delivery, a plugin log,
+and a later idle request can have different IDs. Move between them using the fixed instance,
+service, time, and safe resource/event IDs. Do not search one correlation ID end to end.
 
-Logs are a bounded diagnostic ring, not an audit trail. A non-zero `droppedEntries` means older or
-oversized entries are unavailable, so reproduce the smallest failing scenario before drawing a
-conclusion from absence. Body-like attributes are omitted and known sensitive values are redacted,
-but still review entries before sharing them. If a request body is essential, capture only the
-necessary fields at the application boundary with its own safe instrumentation.
+Logs are a bounded ring, not an audit trail. If `droppedEntries` is non-zero, reproduce the smallest
+scenario and read the new tail. Body-like attributes are omitted and known sensitive values are
+redacted, but review every retained entry before sharing it.
 
 ## Treat asynchronous failures as evidence
 
-Call `await instance.idle()` after the plugin schedules callbacks or other tracked work. If it
-rejects, start with that control error's code, message, and correlation ID. The runtime does not emit
-a task entry for the failure. Inspect nearby delivery and plugin evidence for the same instance,
-service, and time instead of adding a delay. If `idle()` resolves, only plugin-tracked work is known
-to be idle. Wait on the application's explicit completion boundary before asserting application
-state.
+When the action schedules callbacks or plugin-owned background work, the test should call
+`await instance.idle()`. A rejection identifies a control failure, timeout, cancellation, or tracked
+work failure. Inspect nearby `delivery` and `plugin` entries for the same world and time; the runtime
+does not emit a separate task log entry.
 
-Work scheduled for a later virtual time does not run merely because the current work became idle.
-Advance the clock by a positive duration when the documented behavior depends on a later retry or
-deadline, then wait for completion again. See [Virtual time and asynchronous work](/virtual-time)
-for the distinction between clock movement, reconciliation, and idle work.
+A successful idle wait proves only that plugin-tracked work is idle. The application may still own a
+queue, transaction, or job, so wait for its explicit completion boundary before asserting. Work due
+at a later virtual time also needs a positive clock advance, not a wall-clock sleep. [Virtual time
+and asynchronous work](/virtual-time) covers committed windows and reconciliation.
 
-Some lifecycle failures require extra care. `LIFECYCLE_CONFLICT` is an umbrella for invalid
-transitions, lifecycle timeouts, a closing or changing runtime generation, and time-reconciliation
-conflicts. Read its message and inspect the current instance and clock state before choosing another
-action. `INSTANCE_MUTATION_COMMITTED` means the mutation took effect but finalization did not finish
-cleanly; do not blindly retry it. For a committed clock advance, the error details include the
-`from`, `to`, `advanceId`, mode, and whether reconciliation remains pending. Read the current state
-and those details before deciding whether any recovery action is needed.
+For `LIFECYCLE_CONFLICT`, read the message and current instance/clock state before choosing another
+transition. `INSTANCE_MUTATION_COMMITTED` means the mutation took effect but finalization failed; do
+not retry it blindly. Seed failures have action-specific recovery rules in [Seed test
+worlds](/seeding#recover-according-to-the-outer-mutation).
 
-Seed failures have action-specific recovery rules. [Seed test worlds](/seeding#recover-according-to-the-outer-mutation)
-distinguishes an in-place seed failure from a failed seeded create or reset.
+## Handle project failures
 
-## Keep the broken boundary visible
+A config fingerprint mismatch means the daemon resolved different config; save the intended file and
+restart that daemon. `CONFIG_DEFAULT_EXPORT_MISSING` means the selected module loaded without a
+default config. `CONFIG_IMPORT_FAILED` means that module or one import threw. Its serialized diagnostic identifies the selected config path
+but omits the retained private cause, so inspect that
+module and its imports directly.
 
-During diagnosis:
+## Recover a storage lock safely
 
-- do not replace the application's SDK or HTTP call with a control operation;
-- do not read or edit a plugin database from the application test;
-- do not add a test-only success endpoint to the application or plugin;
-- do not widen a cleanup command from one owned instance to project storage;
-- do not label a provider difference a bug until the installed plugin claims that behavior.
+One live daemon owns a storage root. If startup reports a live owner, use it, stop it normally, or
+choose another storage root. Never remove that lock. If the error reports a stopped owner or damaged
+lock, first confirm no runtime or test process uses the root. Only then remove the exact lock path
+printed by the error. Do not turn it into a wildcard or delete `.localhost2137` to silence a problem.
 
-If the plugin does not support the required request, response field, callback, or lifecycle behavior,
-write down that precise compatibility gap. [Provider compatibility](/compatibility) explains the
-evidence required for broader parity claims.
+Reset or destroy only an explicitly selected world when that lifecycle action is the intended
+recovery. Preserve unexpected manifests and pending cleanup evidence until it is recorded.
 
-## Leave a useful diagnostic record
+## Copy a useful redacted report
 
-A report another person can act on includes:
+```md title="diagnostic-report.md"
+# localhost2137 diagnostic report
 
-- the localhost2137, plugin, SDK, and Node.js versions;
-- the resolved config path, service key, and instance ID;
-- the exact boundary exercised and the smallest reproducing command or application action;
-- the error code and boundary-scoped correlation ID or IDs;
-- the relevant structured log entries and `droppedEntries` count;
-- `doctor` issue codes, expected behavior, and observed behavior;
-- the plugin support-matrix entry or documentation claim when provider compatibility is involved.
+## Scope
 
-Remove control tokens, provider credentials, personal data, and unnecessary request bodies. The aim
-is a reproducible boundary failure, not a complete dump of the local environment.
+- Config path (shortened before sharing):
+- Instance ID: `dev`
+- Service key: `slack`
+- Application action: `pnpm exec localhost run --instance dev -- pnpm dev`
+- Expected application result:
+- Observed application result:
 
-[CLI workflow and reference](/cli) defines command and exit behavior, while
-[Runtime boundaries](/limitations) identifies claims that need a different test, and
-[Local security model](/security) defines what may be safe to retain or share.
+## Versions
+
+- Node.js:
+- localhost2137:
+- Emulator plugin:
+- Provider SDK or HTTP client:
+
+## First broken boundary
+
+- Boundary:
+- Error code and message:
+- Boundary-scoped correlation ID:
+
+## Project diagnostic
+
+- `doctor` status:
+- `runtime.state`:
+- `issues[].code` values:
+- `dev` status, seed status, and service keys:
+
+## Relevant bounded logs
+
+- `droppedEntries`:
+- Retained `request`, `operation`, `delivery`, or `plugin` entries:
+
+## Compatibility claim
+
+- Installed plugin documentation entry, when relevant:
+
+## Removed before sharing
+
+- Runtime control token
+- App-facing connection credentials and provider secrets
+- Personal data and unrelated request bodies
+- Unrelated environment variables and log entries
+```
+
+Keep only evidence needed to reproduce the first broken boundary. The report is not a dump of the
+environment or storage directory. [CLI workflow and reference](/cli) defines command behavior,
+[Runtime boundaries](/limitations) identifies claims that need another test, and [Local security
+model](/security) defines the local trust boundary.

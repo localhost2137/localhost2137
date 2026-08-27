@@ -303,7 +303,25 @@ assert(seeding?.includes("no partially seeded new instance becomes addressable")
 assert(seeding?.includes("restores the prior world when it can"));
 
 const diagnosing = content.get("diagnosing.mdx");
+let previousDiagnosticStep = -1;
+for (const step of [
+	"pnpm exec localhost doctor --json",
+	"pnpm exec localhost dev",
+	"pnpm exec localhost describe slack --instance dev --json",
+	"pnpm exec localhost env --instance dev --format json",
+	"pnpm exec localhost run --instance dev -- pnpm dev",
+	"pnpm exec localhost logs slack --instance dev --tail 50 --json",
+]) {
+	const position = diagnosing?.indexOf(step) ?? -1;
+	assert(position > previousDiagnosticStep, `Diagnosing step is missing or out of order: ${step}`);
+	previousDiagnosticStep = position;
+}
 assert(diagnosing?.includes("serialized diagnostic identifies the selected config path"));
+assert(diagnosing?.includes('```md title="diagnostic-report.md"'));
+assert(diagnosing?.includes("## Removed before sharing"));
+assert(diagnosing?.includes("Runtime control token"));
+assert(diagnosing?.includes("`droppedEntries`"));
+assert(!diagnosing?.includes("replace-with-"));
 assert(!/\bLOCK(?:ED|_STALE|_CORRUPT)\b/.test(diagnosing ?? ""));
 assert(diagnosing?.includes("Correlation IDs are scoped to one boundary"));
 assert(diagnosing?.includes("`request`, `operation`, `delivery`, and `plugin` entries"));
