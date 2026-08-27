@@ -230,6 +230,12 @@ for (const skillPath of [
 	const source = await readFile(join(repositoryRoot, skillPath), "utf8");
 	assert(!/\b(Slack|Stripe)\b/.test(source), `${skillPath} must remain service-generic.`);
 }
+const useLocalhostSkill = await readFile(
+	join(repositoryRoot, "skills/use-localhost2137/SKILL.md"),
+	"utf8",
+);
+assert(useLocalhostSkill.includes("runtime-wide bearer token only to trusted test workers"));
+assert(useLocalhostSkill.includes("not authorization isolation"));
 const pluginContractSkill = await readFile(
 	join(repositoryRoot, "skills/build-localhost2137-plugin/references/public-contract.md"),
 	"utf8",
@@ -781,6 +787,8 @@ assert(
 		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3 vitest",
 	),
 );
+assert(pluginUsing?.includes(nativeBuildPermission));
+assert(!pluginUsing?.includes('describe "$localhost_service_key"'));
 assert(
 	pluginUsing?.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),
 	"Plugin adoption guide must match the checked mounted config.",

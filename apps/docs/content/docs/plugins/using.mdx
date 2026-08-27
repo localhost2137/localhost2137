@@ -16,6 +16,14 @@ Use the installed plugin's exact package command. This guide uses the shipped Sl
 concrete adoption path; the same runtime sequence applies to other plugins, but their config,
 connection values, operations, and compatibility surface come from their own package.
 
+Merge the native dependency permission into the project workspace file before installing this
+plugin:
+
+```yaml title="pnpm-workspace.yaml"
+allowBuilds:
+  better-sqlite3: true
+```
+
 ```sh
 pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3 vitest
 ```
@@ -124,7 +132,7 @@ The two `describe` forms return different projections:
 - Unscoped `localhost describe --json` returns one summary per configured service: `name`,
   `description`, `pluginId`, `stateVersion`, and operation keys. It does not include lifecycle
   status.
-- Scoped `localhost describe "$localhost_service_key" --json` returns `name`, `description`, and a
+- Scoped `localhost describe slack --json` returns `name`, `description`, and a
   full metadata object for each operation. That metadata contains input and output schemas plus the
   generated CLI representation. The scoped CLI output intentionally strips `pluginId`,
   `stateVersion`, and backend status.
