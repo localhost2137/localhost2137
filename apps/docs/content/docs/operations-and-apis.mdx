@@ -56,8 +56,9 @@ pnpm exec vitest run test/owned-runtime.test.ts
 ```
 
 The operation is honest setup because the claim is about reading an existing user through the
-Slack-shaped route. Replacing `fetch(...users.list)` with a `listUsers` control operation would no
-longer prove request routing, bearer authentication, response shape, or the application adapter.
+Slack-shaped route. The test proves route selection, bearer authentication, and response shape over
+operation-created state; its direct test-side `fetch` does not prove an application adapter. Merely
+asserting the result of `createUser` would skip all provider HTTP evidence.
 
 Change the claim and the right boundary can change. A plugin semantic test may intentionally claim
 that `createUser` validates and persists one user; there, the operation itself is the subject.

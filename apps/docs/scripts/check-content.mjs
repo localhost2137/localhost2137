@@ -214,6 +214,8 @@ assert.equal(
 );
 assert(operationsAndApis?.includes('fetch(new URL("users.list"'));
 assert(operationsAndApis?.includes('instance.slack.createUser({ name: "Grace" })'));
+assert(operationsAndApis?.includes("direct test-side `fetch` does not prove an application adapter"));
+assert(!operationsAndApis?.includes("`listUsers`"));
 
 const gettingStarted = content.get("getting-started.mdx");
 assert(gettingStarted, "Getting started content is missing.");
