@@ -6,7 +6,7 @@ import type { CliDemoClone } from "../cli/cli-actions.js";
 import { CliDemoNotFoundError, CliUsageError } from "../cli/cli-errors.js";
 import { syncDirectory } from "./atomic-file.js";
 import { runChildCommand } from "./child-command.js";
-import { EMBEDDED_DEMO_NAMES, findEmbeddedDemo, type EmbeddedDemo } from "./demo-registry.js";
+import { EMBEDDED_DEMO_NAMES, type EmbeddedDemo, findEmbeddedDemo } from "./demo-registry.js";
 import { hasCode } from "./project-init-file.js";
 import { acquireStorageLock, type StorageLock } from "./storage-lock.js";
 

@@ -15,12 +15,12 @@ import { ControlApiError } from "../control/control-client-errors.js";
 import type { RuntimeDescriptor } from "../control/runtime-descriptor.js";
 import { discoverActiveRuntime, RuntimeDiscoveryError } from "./active-runtime-discovery.js";
 import { runChildCommand } from "./child-command.js";
+import { cloneDemoProject } from "./demo-cloner.js";
 import { runDevCommand } from "./dev-command.js";
 import { startDevDaemon } from "./dev-daemon.js";
 import { createDevProjectRuntime } from "./dev-runtime-dependencies.js";
-import { cloneDemoProject } from "./demo-cloner.js";
-import { inspectProjectRuntime } from "./runtime-doctor.js";
 import { initializeProject } from "./project-initializer.js";
+import { inspectProjectRuntime } from "./runtime-doctor.js";
 
 export interface NodeCliActionsInput {
 	readonly configPath?: string;

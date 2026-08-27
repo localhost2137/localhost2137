@@ -1,8 +1,8 @@
 import {
-	mkdtemp,
 	mkdir,
-	readFile,
+	mkdtemp,
 	readdir,
+	readFile,
 	realpath,
 	rename,
 	rm,
