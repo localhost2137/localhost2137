@@ -31,34 +31,28 @@ pnpm add stripe@22.5.0
 
 Omit the second command when the application already has that exact tested client version.
 
-## Configure and seed the account
+## Configure the account
 
-```ts
+```ts title="localhost.config.ts"
 import { stripe } from "@localhost2137/stripe";
 import { defineConfig } from "localhost2137";
 
 export default defineConfig({
-  clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
-  services: {
-    stripe: stripe({
-      config: {
-        secretKey: "sk_test_local",
-        webhookSecret: "whsec_local",
-        webhookUrl: "http://127.0.0.1:3000/stripe/webhooks",
-      },
-      seed: {
-        customers: [
-          { id: "cus_ada", name: "Ada", email: "ada@example.test" },
-        ],
-        products: [{ id: "prod_pro", name: "Pro" }],
-        prices: [
-          { id: "price_pro", product: "prod_pro", unitAmount: 2500 },
-        ],
-      },
-    }),
-  },
+	clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
+	services: {
+		stripe: stripe({
+			config: {
+				secretKey: "sk_test_local_sdk",
+				webhookSecret: "whsec_local_sdk",
+				webhookUrl: null,
+			},
+		}),
+	},
 });
 ```
+
+This is the checked SDK example config. Set `webhookUrl` to the application's receiver for webhook
+scenarios. Seed data is optional; the same factory accepts the seed fields below.
 
 | Config field | Contract |
 | --- | --- |
@@ -98,18 +92,22 @@ Stripe's Node client fixes requests to `api.stripe.com`, while a localhost2137 s
 instance and service path segments. `createStripeSdkFetch` replaces the request origin with that
 service URL and preserves its path, query, method, headers, and body:
 
-```ts
+```ts title="src/local-stripe.ts"
 import { createStripeSdkFetch } from "@localhost2137/stripe";
 import Stripe from "stripe";
 
-const client = new Stripe(connection.secretKey, {
-  httpClient: Stripe.createFetchHttpClient(
-    createStripeSdkFetch(connection.apiUrl),
-  ),
-  maxNetworkRetries: 0,
-});
+export interface LocalStripeConnection {
+	readonly apiUrl: string;
+	readonly secretKey: string;
+}
 
-const customer = await client.customers.create({ name: "Ada" });
+/** Builds the official Stripe SDK against one localhost2137 instance-scoped account. */
+export function createLocalStripe(connection: LocalStripeConnection): Stripe {
+	return new Stripe(connection.secretKey, {
+		httpClient: Stripe.createFetchHttpClient(createStripeSdkFetch(connection.apiUrl)),
+		maxNetworkRetries: 0,
+	});
+}
 ```
 
 The adapter accepts an HTTP or HTTPS service URL without a query or fragment. It performs routing
@@ -117,11 +115,79 @@ only: it does not add resources, reshape responses, emulate idempotency, or impl
 behavior. `maxNetworkRetries: 0` keeps application tests explicit and prevents a client retry from
 being confused with plugin webhook delivery.
 
-The repository integration example currently exercises Stripe Node 22.5.0 across customer and
-subscription creation, a 30-day renewal, and filtered invoice listing. Plugin compatibility tests
-cover the other routes and webhook behavior without claiming that the SDK exercises them all. That
-evidence covers those calls and that resolved client version; other SDK versions and methods remain
-unverified until exercised.
+The repository integration example exercises Stripe Node 22.5.0 across customer and subscription
+creation, a typed missing-customer error, a 30-day renewal, and filtered invoice listing:
+
+```ts title="test/subscription.test.ts"
+import { createTestRuntime } from "localhost2137/testing";
+import { afterEach, describe, expect, it } from "vitest";
+import config from "../localhost.config.js";
+import { createLocalStripe } from "../src/local-stripe.js";
+
+const runtimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
+
+afterEach(async () => {
+	await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
+});
+
+describe("official Stripe SDK", () => {
+	it("creates and renews a subscription through normal SDK calls", async () => {
+		const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
+		runtimes.push(runtime);
+		const instance = await runtime.createInstance();
+		try {
+			const product = await instance.stripe.createProduct({ name: "Pro" });
+			const price = await instance.stripe.createPrice({
+				productId: product.id,
+				unitAmount: 2_500,
+			});
+			const client = createLocalStripe(instance.stripe.connection);
+
+			const customer = await client.customers.create({
+				email: "ada@example.test",
+				name: "Ada",
+			});
+			await expect(client.customers.retrieve("cus_missing")).rejects.toMatchObject({
+				code: "customer_missing",
+				statusCode: 404,
+				type: "StripeInvalidRequestError",
+			});
+			const subscription = await client.subscriptions.create({
+				customer: customer.id,
+				items: [{ price: price.id }],
+			});
+			expect(subscription).toMatchObject({
+				customer: customer.id,
+				id: "sub_000001",
+				latest_invoice: "in_000001",
+				status: "active",
+			});
+
+			await instance.clock.advance("30d");
+			const invoices = await client.invoices.list({
+				limit: 10,
+				subscription: subscription.id,
+			});
+			expect(invoices.data.map(({ id }) => id)).toEqual(["in_000001", "in_000002"]);
+			expect(invoices.data[1]).toMatchObject({
+				amount_paid: 2_500,
+				customer: customer.id,
+				paid: true,
+				subscription: subscription.id,
+			});
+		} finally {
+			await instance.destroy();
+		}
+	});
+});
+```
+
+```sh
+pnpm exec vitest run test/subscription.test.ts
+```
+
+Plugin compatibility tests cover the other routes and webhook behavior without claiming the SDK
+exercises them all. Other client versions and methods remain unverified until exercised.
 
 ## Supported HTTP surface
 
@@ -181,30 +247,10 @@ envelope described above.
 
 Every subscription has one fixed-price item with quantity one and an exact 30-day period. Creation
 issues the first invoice immediately. Each positive time advance reconciles every crossed boundary
-in stable order, so one 90-day jump creates the same three renewal periods as three 30-day jumps:
-
-```ts
-const product = await instance.stripe.createProduct({ name: "Pro" });
-const price = await instance.stripe.createPrice({
-  productId: product.id,
-  unitAmount: 2500,
-});
-const customer = await instance.stripe.createCustomer({ name: "Ada" });
-const subscription = await instance.stripe.createSubscription({
-  customerId: customer.id,
-  priceId: price.id,
-});
-
-await instance.stripe.setNextPaymentOutcome({
-  subscriptionId: subscription.id,
-  outcome: "failed",
-});
-await instance.clock.advance("30d");
-
-const invoices = await instance.stripe.listInvoices({
-  subscriptionId: subscription.id,
-});
-```
+in stable order, so one 90-day jump creates the same three renewal periods as three 30-day jumps.
+The checked SDK test above shows a successful boundary. To test failure, call
+`setNextPaymentOutcome` for the created subscription before the same `clock.advance("30d")` call,
+then inspect `listInvoices` or `listEvents` through the typed instance handle.
 
 The forced failure is consumed once: it creates an open invoice and
 `invoice.payment_failed`; later invoices return to paid unless another outcome is set. Canceling a
@@ -232,21 +278,11 @@ request but the local attempt never committed success or failure, restart treats
 pending and may send the same event ID and byte-identical body again. Applications should deduplicate
 on event ID when the scenario includes that ambiguity.
 
-The package exports a small verifier for the exact local signature:
-
-```ts
-import { verifyStripeWebhookSignature } from "@localhost2137/stripe";
-
-const valid = verifyStripeWebhookSignature({
-  body: rawRequestBody,
-  secret: connection.webhookSecret,
-  signature: stripeSignatureHeader,
-});
-```
-
-Pass the raw body, before JSON parsing. The helper verifies the HMAC digest only; it does not impose a
-timestamp replay window. A production handler that enforces recency should keep that policy and use a
-clock arrangement appropriate to the test.
+The package exports `verifyStripeWebhookSignature({ body, secret, signature })`. Pass the raw body,
+before JSON parsing, the instance connection's `webhookSecret`, and the request's `Stripe-Signature`
+header. The helper verifies the HMAC digest only; it does not impose a timestamp replay window. A
+production handler that enforces recency should keep that policy and use a clock arrangement
+appropriate to the test.
 
 ## Persistence and ordering
 

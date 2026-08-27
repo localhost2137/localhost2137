@@ -1,7 +1,6 @@
-import { stripe } from "@localhost2137/stripe";
-import { defineConfig } from "localhost2137";
 import { createTestRuntime } from "localhost2137/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import config from "../localhost.config.js";
 import { createLocalStripe } from "../src/local-stripe.js";
 
 const runtimes: Array<Awaited<ReturnType<typeof createTestRuntime>>> = [];
@@ -12,18 +11,6 @@ afterEach(async () => {
 
 describe("official Stripe SDK", () => {
 	it("creates and renews a subscription through normal SDK calls", async () => {
-		const config = defineConfig({
-			clock: { mode: "pinned", startAt: "2026-01-01T00:00:00.000Z" },
-			services: {
-				stripe: stripe({
-					config: {
-						secretKey: "sk_test_local_sdk",
-						webhookSecret: "whsec_local_sdk",
-						webhookUrl: null,
-					},
-				}),
-			},
-		});
 		const runtime = await createTestRuntime({ config, port: 0, storage: "temporary" });
 		runtimes.push(runtime);
 		const instance = await runtime.createInstance();

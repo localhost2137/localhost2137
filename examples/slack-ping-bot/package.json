@@ -11,7 +11,7 @@
 		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
 	},
 	"dependencies": {
-		"@slack/bolt": "^5.0.0"
+		"@slack/bolt": "5.0.0"
 	},
 	"devDependencies": {
 		"@localhost2137/slack": "workspace:*",

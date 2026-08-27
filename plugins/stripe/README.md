@@ -1,18 +1,14 @@
 # `@localhost2137/stripe`
 
-A stateful local Stripe account for recurring-billing development. It provides official-SDK
-compatible HTTP routes, typed control operations, SQLite persistence, signed webhooks, and durable
-virtual-time renewals without a Stripe account or real credentials.
+A stateful local Stripe account plugin for localhost2137. The current compatibility slice covers
+customers, a seeded or control-created catalog, fixed recurring subscriptions, invoices, and signed
+invoice webhooks.
 
 ## Install
 
-Install the runtime, plugin, and runtime host peers as development dependencies. Install Stripe Node
-as an application dependency:
+Merge this native dependency permission into the project workspace file before installing:
 
-The plugin uses `better-sqlite3`. Before installing, add its project-scoped build permission to
-`pnpm-workspace.yaml` at the project root, or merge it into the existing `allowBuilds` map:
-
-```yaml
+```yaml title="pnpm-workspace.yaml"
 allowBuilds:
   better-sqlite3: true
 ```
@@ -22,11 +18,9 @@ pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3
 pnpm add stripe@22.5.0
 ```
 
-Omit the second command when the application already has that exact tested client version.
+## Mount
 
-## Configure
-
-```ts
+```ts title="localhost.config.ts"
 import { stripe } from "@localhost2137/stripe";
 import { defineConfig } from "localhost2137";
 
@@ -35,81 +29,61 @@ export default defineConfig({
 	services: {
 		stripe: stripe({
 			config: {
-				secretKey: "sk_test_local",
-				webhookSecret: "whsec_local",
-				webhookUrl: "http://127.0.0.1:3000/stripe/webhooks",
-			},
-			seed: {
-				products: [{ id: "prod_pro", name: "Pro" }],
-				prices: [{ product: "prod_pro", unitAmount: 2500 }],
+				secretKey: "sk_test_local_sdk",
+				webhookSecret: "whsec_local_sdk",
+				webhookUrl: null,
 			},
 		}),
 	},
 });
 ```
 
-`webhookUrl` defaults to `null`. Connection metadata exposes `apiUrl`, `secretKey`, and
-`webhookSecret`; its environment projection is `STRIPE_API_URL`, `STRIPE_SECRET_KEY`, and
-`STRIPE_WEBHOOK_SECRET`.
+## Wire Stripe Node
 
-## Official Stripe SDK
-
-Stripe's API client fixes requests to `api.stripe.com`, while a localhost2137 service URL also
-contains the instance and service path. Use the supplied fetch adapter to preserve normal SDK calls:
-
-```ts
+```ts title="src/local-stripe.ts"
 import { createStripeSdkFetch } from "@localhost2137/stripe";
 import Stripe from "stripe";
 
-const client = new Stripe(instance.stripe.connection.secretKey, {
-	httpClient: Stripe.createFetchHttpClient(
-		createStripeSdkFetch(instance.stripe.connection.apiUrl),
-	),
-	maxNetworkRetries: 0,
-});
+export interface LocalStripeConnection {
+	readonly apiUrl: string;
+	readonly secretKey: string;
+}
 
-const customer = await client.customers.create({ name: "Ada" });
+/** Builds the official Stripe SDK against one localhost2137 instance-scoped account. */
+export function createLocalStripe(connection: LocalStripeConnection): Stripe {
+	return new Stripe(connection.secretKey, {
+		httpClient: Stripe.createFetchHttpClient(createStripeSdkFetch(connection.apiUrl)),
+		maxNetworkRetries: 0,
+	});
+}
 ```
 
-The tested SDK scenario creates a customer and subscription, advances virtual time by 30 days, and
-lists both invoices through the official SDK.
+The connection also exposes `webhookSecret`; environment names are `STRIPE_API_URL`,
+`STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`. Set `webhookUrl` to the application's receiver when
+the scenario needs callbacks.
 
-## Supported HTTP surface
+## Supported surface
 
-Requests use Bearer authentication. POST bodies use Stripe's
-`application/x-www-form-urlencoded` encoding, and list endpoints use opaque cursors over durable
-creation order.
-
-| Resource | Supported methods |
+| HTTP resources | Control operations |
 | --- | --- |
-| customers | create, retrieve, list |
-| products | retrieve, list |
-| prices | retrieve, list |
-| subscriptions | create, retrieve, cancel |
-| invoices | retrieve, list |
+| customers: create, retrieve, list | `createCustomer` |
+| products: retrieve, list | `createProduct` |
+| prices: retrieve, list | `createPrice` |
+| subscriptions: create, retrieve, cancel | `createSubscription` |
+| invoices: retrieve, list | `listInvoices` |
+| | `listEvents` |
+| | `setNextPaymentOutcome` |
 
-Products and prices are created through typed control operations in this compatibility slice.
-Unsupported Stripe endpoints deliberately return the runtime's normal not-found response instead
-of pretending to implement broader payment behavior.
+```sh
+pnpm exec localhost describe stripe --json
+pnpm exec localhost exec stripe --help
+```
 
-## Billing and webhook semantics
+The checked Stripe Node 22.5.0 path creates a customer and subscription, advances the instance clock
+30 days, and lists both invoices through the official SDK. Products and prices remain read-only over
+HTTP. Webhook retries are not scheduled after an ordinary terminal attempt; recovery may redeliver a
+pending event after process interruption.
 
-Every subscription uses an exact 30-day billing period. A positive `instance.clock.advance(...)`
-creates every crossed invoice in stable order; replaying the same durable advance ID and window is
-idempotent. Canceled subscriptions do not renew.
-
-Invoice events and webhook outbox rows commit in the same SQLite transaction. Webhook attempts send
-one stable compact JSON body signed with the configured secret. If a process stops after the remote
-receiver observes a request but before local completion, restart may deliver the same event ID and
-byte-identical body again (at-least-once delivery). `instance.idle()` drains tracked initial webhook
-work; time-advance delivery completes as part of durable reconciliation.
-
-## Control operations
-
-`createCustomer`, `createProduct`, `createPrice`, `createSubscription`, `listInvoices`, `listEvents`,
-and `setNextPaymentOutcome` provide controlled setup and inspection without coupling domain code
-to the HTTP adapter. Public routes and control operations share the same domain services and
-repositories.
-
-The [full plugin reference](https://localhost2137.dev/first-party/stripe) documents exact operation
-inputs, supported Stripe Node evidence, webhook recovery, and deliberate differences.
+The [full Stripe plugin reference](https://localhost2137.dev/first-party/stripe) contains the complete
+SDK test, exact inputs and error shapes, renewal behavior, webhook signature and recovery rules,
+persistence, and deliberate differences.

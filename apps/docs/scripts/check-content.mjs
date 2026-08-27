@@ -884,6 +884,18 @@ assert(pluginUsing?.includes("A `seed_failed` instance remains addressable"));
 assert(pluginUsing?.includes("`stateVersion` describes durable storage only"));
 assert(pluginUsing?.includes("Do not use reset as a rollback"));
 const firstPartySlack = content.get("first-party/slack.mdx");
+const slackBoltAdapter = await readFile(
+	join(repositoryRoot, "examples/slack-ping-bot/src/bot.ts"),
+	"utf8",
+);
+const slackBoltTest = await readFile(
+	join(repositoryRoot, "examples/slack-ping-bot/test/ping-pong.test.ts"),
+	"utf8",
+);
+const slackBoltManifest = JSON.parse(
+	await readFile(join(repositoryRoot, "examples/slack-ping-bot/package.json"), "utf8"),
+);
+assert.equal(slackBoltManifest.dependencies["@slack/bolt"], "5.0.0");
 assert(
 	firstPartySlack?.includes(
 		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3",
@@ -891,6 +903,18 @@ assert(
 );
 assert(firstPartySlack?.includes("pnpm add @slack/bolt@5.0.0"));
 assert(firstPartySlack?.includes(nativeBuildPermission));
+assert(
+	firstPartySlack?.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),
+	"Slack reference must match the checked project config.",
+);
+assert(
+	firstPartySlack?.includes(titledCodeBlock("ts", "src/bot.ts", slackBoltAdapter)),
+	"Slack reference must match the checked Bolt adapter.",
+);
+assert(
+	firstPartySlack?.includes(titledCodeBlock("ts", "test/ping-pong.test.ts", slackBoltTest)),
+	"Slack reference must match the checked Bolt workflow.",
+);
 assert(!/^pnpm add @slack\/bolt\s*$/m.test(firstPartySlack ?? ""));
 assert(
 	firstPartySlack?.includes("Public Web API channel arguments deliberately require stored IDs"),
@@ -904,6 +928,10 @@ assert(firstPartySlack?.includes("Messages and pending deliveries cannot be seed
 assert(firstPartySlack?.includes("message timestamps come from the instance clock"));
 assert(!/\bdeterministic\b/i.test(firstPartySlack ?? ""));
 const firstPartyStripe = content.get("first-party/stripe.mdx");
+const stripeSdkConfig = await readFile(
+	join(repositoryRoot, "examples/stripe-sdk/localhost.config.ts"),
+	"utf8",
+);
 assert(
 	firstPartyStripe?.includes(
 		"pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3",
@@ -911,6 +939,18 @@ assert(
 );
 assert(firstPartyStripe?.includes("pnpm add stripe@22.5.0"));
 assert(firstPartyStripe?.includes(nativeBuildPermission));
+assert(
+	firstPartyStripe?.includes(titledCodeBlock("ts", "localhost.config.ts", stripeSdkConfig)),
+	"Stripe reference must match the checked project config.",
+);
+assert(
+	firstPartyStripe?.includes(titledCodeBlock("ts", "src/local-stripe.ts", stripeSdkAdapter)),
+	"Stripe reference must match the checked SDK adapter.",
+);
+assert(
+	firstPartyStripe?.includes(titledCodeBlock("ts", "test/subscription.test.ts", stripeSdkTest)),
+	"Stripe reference must match the checked SDK workflow.",
+);
 assert(!/^pnpm add stripe\s*$/m.test(firstPartyStripe ?? ""));
 assert(firstPartyStripe?.includes("Products and prices are intentionally read-only through HTTP"));
 assert(firstPartyStripe?.includes("Stripe Node 22.5.0"));
@@ -951,6 +991,19 @@ for (const [readmePath, installCommand, clientCommand] of [
 }
 const slackReadme = await readFile(join(repositoryRoot, "plugins/slack/README.md"), "utf8");
 assert(!/upgrades relocate|v0\.1|preserved-/.test(slackReadme));
+assert(
+	slackReadme.includes(titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig)),
+	"Slack README must match the checked project config.",
+);
+const stripeReadme = await readFile(join(repositoryRoot, "plugins/stripe/README.md"), "utf8");
+assert(
+	stripeReadme.includes(titledCodeBlock("ts", "localhost.config.ts", stripeSdkConfig)),
+	"Stripe README must match the checked project config.",
+);
+assert(
+	stripeReadme.includes(titledCodeBlock("ts", "src/local-stripe.ts", stripeSdkAdapter)),
+	"Stripe README must match the checked SDK adapter.",
+);
 const pluginTestkitReadme = await readFile(
 	join(repositoryRoot, "packages/plugin-testkit/README.md"),
 	"utf8",
