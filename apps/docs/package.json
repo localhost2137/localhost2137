@@ -9,6 +9,7 @@
 	"scripts": {
 		"build": "react-router build",
 		"check:content": "node scripts/check-content.mjs",
+		"check:routes": "node scripts/check-built-routes.mjs",
 		"deploy": "pnpm build && wrangler deploy",
 		"dev": "react-router dev",
 		"preview": "pnpm build && vite preview",

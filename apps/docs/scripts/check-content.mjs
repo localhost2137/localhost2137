@@ -3,7 +3,11 @@ import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import GithubSlugger from "github-slugger";
-import { markdownRouteForPage, rewriteLLMIndexLinks } from "../lib/markdown-routes.ts";
+import {
+	markdownRouteForPage,
+	rewriteLLMIndexLinks,
+	rewriteMarkdownPageLinks,
+} from "../lib/markdown-routes.ts";
 
 const docsRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contentRoot = join(docsRoot, "content/docs");
@@ -356,7 +360,7 @@ assert.deepEqual(navigation.pages, [
 	"virtual-time",
 	"limitations",
 	"security",
-	"---Plugins---",
+	"---Add services---",
 	"plugins",
 	"first-party",
 ]);
@@ -446,6 +450,7 @@ assert(!("account_id" in wrangler), "Wrangler config must not contain account-sp
 const packageManifest = JSON.parse(await readFile(join(docsRoot, "package.json"), "utf8"));
 assert(!packageManifest.dependencies?.next && !packageManifest.devDependencies?.next);
 assert.equal(packageManifest.scripts.build, "react-router build");
+assert.equal(packageManifest.scripts["check:routes"], "node scripts/check-built-routes.mjs");
 assert.equal(packageManifest.scripts.dev, "react-router dev");
 assert.equal(packageManifest.scripts.deploy, "pnpm build && wrangler deploy");
 
@@ -486,14 +491,42 @@ assert.deepEqual(
 	"Every llms.txt link must target the Markdown route for one docs page.",
 );
 
+const markdownLinkFixture = [
+	"[callback](/callbacks#parallel-receivers-require-a-routing-rule)",
+	"[root](/)",
+	"[llms](/llms.txt)",
+	"[unknown](/not-a-doc#fragment)",
+	"[external](https://example.test/callbacks)",
+].join("\n");
+assert.equal(
+	rewriteMarkdownPageLinks(markdownLinkFixture, pageUrls),
+	[
+		"[callback](/callbacks.md#parallel-receivers-require-a-routing-rule)",
+		"[root](/index.md)",
+		"[llms](/llms.txt)",
+		"[unknown](/not-a-doc#fragment)",
+		"[external](https://example.test/callbacks)",
+	].join("\n"),
+	"Markdown resources must rewrite only known docs links and preserve suffixes.",
+);
+
 const llmsIndexRoute = await readFile(join(docsRoot, "app/routes/llms-index.ts"), "utf8");
 assert(llmsIndexRoute.includes("rewriteLLMIndexLinks"));
+const llmsFullRoute = await readFile(join(docsRoot, "app/routes/llms-full.ts"), "utf8");
+assert(llmsFullRoute.includes("getSidebarPages().map(getLLMText)"));
+assert(!llmsFullRoute.includes("source.getPages()"));
+const getLLMTextSource = await readFile(join(docsRoot, "lib/get-llm-text.ts"), "utf8");
+assert(getLLMTextSource.includes("rewriteMarkdownPageLinks"));
+const docsSource = await readFile(join(docsRoot, "lib/source.ts"), "utf8");
+assert(docsSource.includes("flattenTree(source.getPageTree().children)"));
+assert(docsSource.includes("every documentation page exactly once"));
 for (const route of [
 	"app/routes/search.ts",
 	"app/routes/llms-index.ts",
 	"app/routes/llms-full.ts",
 	"app/routes/markdown.ts",
 	"lib/markdown-resource.ts",
+	"scripts/check-built-routes.mjs",
 ]) {
 	assert((await readFile(join(docsRoot, route), "utf8")).length > 0, `Missing ${route}.`);
 }
