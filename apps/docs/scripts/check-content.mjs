@@ -161,6 +161,20 @@ assert(virtualTime?.includes("safe integer of milliseconds"));
 assert(virtualTime?.includes("In real mode, they add 60 days"));
 assert(virtualTime?.includes("does not expose the underlying cause"));
 assert(!virtualTime?.includes("Fix the reported plugin"));
+const pluginAuthoring = content.get("plugins/authoring.mdx");
+assert(
+	pluginAuthoring?.includes("Importing the plugin, or a config that mounts it, must be inert"),
+);
+assert(pluginAuthoring?.includes("A failed `start` does not earn a later `stop`"));
+assert(pluginAuthoring?.includes("`update` may receive any older stored version"));
+assert(pluginAuthoring?.includes("The `State` returned by `start` is live process state"));
+assert(pluginAuthoring?.includes("It is tracked automatically"));
+assert(
+	pluginAuthoring?.includes(
+		"The generic contract proves runtime integration, not provider fidelity",
+	),
+);
+assert(pluginAuthoring?.includes("A state-version-1 plugin has no honest predecessor"));
 for (const [file, source] of content) {
 	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(

@@ -1,42 +1,75 @@
 ---
 title: Plugin design and testing
-description: Implement a small stateful emulator through the public Hono, Zod, lifecycle, operation, and testkit contracts.
+description: Design a production plugin around one domain, restartable lifecycle hooks, explicit control operations, and honest compatibility evidence.
 ---
 
-A plugin is ordinary trusted TypeScript packaged for npm. It owns an executable service, not a set of
-static response fixtures. Build the smallest coherent provider surface that a real application or SDK
-needs, then say what remains unsupported.
+A plugin is trusted TypeScript that implements an executable local service. It owns the provider
+behavior, durable model, public API, control operations, and any callbacks it sends. The runtime
+owns instance isolation, storage locations, lifecycle orchestration, operation adapters, tracked
+transport, virtual time, and control authentication.
 
-For a guided implementation before the full contract, [build your first plugin](/plugins/first-plugin).
+This guide is the design contract for a plugin intended to grow without splitting into parallel
+implementations. For a guided first implementation, [build the status plugin](/plugins/first-plugin).
+
+## Start with a behavior claim
+
+Do not begin by copying an entire provider API. Write down the application behavior the first
+version must support:
+
+- which real client, SDK, or HTTP calls the application makes;
+- which state transitions those calls cause;
+- which callbacks, signatures, delays, or retries the application observes;
+- which privileged actions a test needs to arrange or inspect that world;
+- what is deliberately unsupported.
+
+That claim determines the first coherent slice. An endpoint returning a plausible object is not a
+slice if the next request cannot observe the resulting state. A broad route inventory backed by
+fixtures usually creates more compatibility claims than it proves.
+
+Keep the public surface and control surface distinct. Public routes imitate the integration used by
+the application. Operations arrange, trigger, and inspect the local world. Both must reach the same
+domain behavior. [Operations and emulated APIs](/operations-and-apis) develops this boundary, while
+[Compatibility is a tested claim](/compatibility) defines the evidence required before saying a
+provider behavior is supported.
 
 ## Keep the dependency direction simple
 
 ```text
-HTTP routes + control operations
-             │
-             v
-       domain services
-             │
-             v
-   plugin-owned persistence
+provider-shaped routes ─┐
+                        ├── domain behavior ── plugin persistence
+control operations ─────┘           │
+                                    └── callback or delivery adapter
 ```
 
-Public routes and operations call the same domain behavior; they never call each other. The plugin
-owns response mapping, state, identities, transactions, migrations, events, and retry policy. The
-runtime owns mounting, instance storage locations, lifecycle timing, operation adapters, tracked
-transport, virtual-time delivery, and control authentication.
+Routes parse provider-shaped requests and map provider-shaped responses. Operations validate
+developer-facing inputs and map stable control results. Neither adapter calls the other. Domain
+services own rules and transactions; persistence owns durable representation; delivery code owns
+request encoding, signing, and retry policy.
 
-[Operations and emulated APIs](/operations-and-apis) explains why these adapters remain separate
-even though they act on one service world.
+This separation matters most when behavior grows. If a route and an operation each implement
+"create customer," they will eventually disagree about validation, IDs, events, or transactions.
+If both call one domain method, their response shapes can differ without creating two services.
 
-When importing `localhost2137`, plugins use only its public package root. A missing public capability
-is a contract question, not a reason to reach into runtime source internals.
+Split files when responsibilities have different reasons to change, not merely to create more
+folders. A small plugin can stay in one file. A larger one will commonly have an API adapter,
+operations, domain services, persistence, lifecycle, and delivery code. The dependency direction
+above should remain visible regardless of file count.
+
+Importing the plugin, or a config that mounts it, must be inert. It may construct schemas, route
+tables, operation definitions, and frozen descriptors. It must not change the working directory or
+environment, write files, print output, open a database, start a server, or leave a timer or socket
+running. Open process resources in `start`, where the runtime can own their lifetime. If tests need
+fault injection, accept narrow dependencies in a plugin factory instead of adding test-only routes,
+operations, or response fields.
+
+Only import authoring APIs from the `localhost2137` package root. A missing public capability is a
+contract question, not a reason to couple a plugin to runtime internals.
 
 ## Minimal authoring shape
 
-This compact file plugin uses only the public authoring contract. A real provider emulator will
-normally split domain, persistence, API, operation, and lifecycle ownership once each part has a
-separate reason to change.
+This file-backed counter shows the complete public authoring surface. Direct file I/O keeps the
+example small; a database-backed plugin would open its database in `start` and return it as live
+state.
 
 ```ts
 import { readFile, writeFile } from "node:fs/promises";
@@ -52,15 +85,17 @@ const read = operation({
   description: "Read this instance's counter",
   input: z.object({}),
   output: z.object({ value: z.int() }),
-  run: async (ctx) => ({
-    value: Number(await readFile(ctx.state.valuePath, "utf8")),
+  run: async (context) => ({
+    value: Number(await readFile(context.state.valuePath, "utf8")),
   }),
 });
 
 const api = new Hono<PluginEnv<State, Config>>();
-api.get("/value", async (c) => {
-  const { state } = c.get("lh");
-  return c.json({ value: Number(await readFile(state.valuePath, "utf8")) });
+api.get("/value", async (context) => {
+  const { state } = context.get("lh");
+  return context.json({
+    value: Number(await readFile(state.valuePath, "utf8")),
+  });
 });
 
 export const counter = definePlugin({
@@ -71,48 +106,179 @@ export const counter = definePlugin({
   api,
   operations: { read },
   lifecycle: {
-    create: (ctx) => writeFile(ctx.storage.path("value"), "0", "utf8"),
-    start: (ctx): State => ({ valuePath: ctx.storage.path("value") }),
+    create: (context) =>
+      writeFile(context.storage.path("value"), "0", "utf8"),
+    start: (context): State => ({
+      valuePath: context.storage.path("value"),
+    }),
   },
   connection: ({ baseUrl, instanceId, serviceKey }) => {
     const apiUrl = `${baseUrl}/${instanceId}/${serviceKey}`;
-    return { values: { apiUrl }, env: { COUNTER_API_URL: apiUrl } };
+    return {
+      values: { apiUrl },
+      env: { COUNTER_API_URL: apiUrl },
+    };
   },
 });
 ```
 
-Bind `defineOperation` once for one literal plugin ID, state, and config combination. Operation
-inputs are Zod objects; outputs are JSON-compatible and validated by every adapter. Throw
-`LocalhostError` for expected control failures, while public routes return provider-compatible
-failure shapes.
+Bind `defineOperation` once for one literal plugin ID, state type, and config type. The runtime
+rejects unbound operations or operations produced by mixed binders. The Hono app is a shared route
+table, so request handlers read the selected instance from `context.get("lh")`; they never close over
+mutable instance state.
 
-The Hono app is a shared route table. Read instance state only from `c.get("lh")`; never close over
-mutable state opened by a lifecycle hook.
+## Identity and configuration are contracts
+
+The plugin ID and configured service key answer different questions:
+
+- `id` identifies the implementation that owns stored data. It is stable across mounts and
+  releases.
+- The service key is chosen by the user. It selects the route, storage namespace, CLI target, and
+  typed instance property for one mount.
+
+Changing a plugin ID under an existing key is rejected rather than opening another plugin's data.
+Renaming a service key creates a different mount; it is not a data migration. Both IDs are lowercase,
+URL-safe names, but they do not need to be equal.
+
+`configSchema` defines deployment choices rather than mutable world state. Parsed config and seed
+values must end as JSON-compatible plain data and are frozen before callbacks receive them. Keep
+runtime resources, test doubles, clocks, and callback functions out of config; pass private factory
+dependencies when the implementation genuinely needs them.
+
+Treat operation keys and descriptions as public authoring metadata. Keys are camel-case JavaScript
+identifiers and must remain distinct after conversion to kebab-case CLI names. Descriptions and Zod
+field descriptions should say what an action means, because humans, generated CLI help, and coding
+agents all read them.
+
+[Configuration](/configuration#service-keys-are-durable-identities) covers mount identity, config
+validation, and what changes do to existing worlds.
 
 ## Lifecycle and durable state
 
-| Hook | Responsibility |
+Lifecycle hooks are ownership boundaries, not convenient startup callbacks:
+
+| Hook | Contract |
 | --- | --- |
-| `create` | Initialize empty service storage once. |
-| `update` | Migrate stopped durable state from the recorded `stateVersion`. |
-| `start` | Open process resources on every start and return instance state. |
-| `onStarted` | Reconcile durable running work before readiness. |
-| `seed` | Apply explicitly requested, schema-validated baseline data. |
-| `onTimeAdvanced` | Reconcile one committed time window idempotently by `advanceId`. |
-| `stop` | Close process resources after a successful start. |
+| `create` | Initialize absent durable state. It may run again after an interrupted attempt, so repeating it must be safe. Do not open long-lived process resources. |
+| `update` | Migrate stopped durable state from `from` to `to`. A failed pair can be retried unchanged. |
+| `start` | Open resources for every active process generation and return live `State`. Clean up anything already opened if this hook itself throws. |
+| `onStarted` | Reconcile durable running work after every configured service has started and before the instance becomes ready. |
+| `seed` | Apply schema-validated baseline state only when seeding is explicitly requested. |
+| `onTimeAdvanced` | Reconcile one already committed time window idempotently by `advanceId`, `from`, and `to`. |
+| `stop` | Close resources belonging to one successful `start`, including during cleanup after a later startup hook fails. |
 
-Only `create` and `start` are required. `stateVersion` describes the durable storage format, not the
-npm release. Increment it only for a real storage contract change and keep the old fixture needed to
-prove the migration. A newer stored state must fail rather than downgrade silently.
+Only `create` and `start` are required. A failed `start` does not earn a later `stop`, because the
+service never reached running state. Use `try`/`catch` inside `start` to close a database, listener,
+or other resource opened before the failure. Once `start` succeeds, the runtime calls `stop` during
+normal shutdown and startup cleanup; `stop` should close exactly what the returned live state owns.
 
-Pair `seedSchema` with `lifecycle.seed`, or omit both. Use `ctx.clock.now()` for emulator time. Send
-outbound HTTP through `ctx.fetch`, and register other asynchronous work with `ctx.tasks.track`.
-There must be no untracked fire-and-forget promise.
+`onStarted` is for recovery that requires a running service, such as draining a durable outbox. It
+runs after all services have started, so every configured service has reached running state. If it
+fails, readiness fails and the runtime stops the services that started. Make recovery idempotent: a
+process can end after an external effect but before the durable acknowledgement.
+
+Pair `seedSchema` with `lifecycle.seed`, or omit both. Seeding is not an automatic startup migration,
+and a hook is not automatically rolled back if it partially changes storage. Perform related
+durable changes in a plugin-owned transaction where possible. Recovery depends on whether seed was
+requested during create, reset, or in place; [follow the outer mutation](/seeding#recover-according-to-the-outer-mutation).
+
+### Version the durable format, not the package
+
+`stateVersion` is a positive integer describing the plugin's stored representation. It is not the
+npm version and should not change for route additions, operation additions, or internal refactors
+that leave old data readable.
+
+When stored state is older, the runtime calls `update` before `start`.
+`update` may receive any older stored version that the release claims to support, so apply the
+required migrations in order rather than assuming only the immediately previous version. The
+runtime records the new version only after the hook succeeds; if the hook fails, the same `from` and
+`to` can arrive again. Migrations therefore need restartable steps or a storage engine that applies
+them transactionally.
+
+A newer stored version is rejected rather than silently downgraded. Keep real historical fixtures
+for every supported upgrade path and verify that user-visible data survives.
+A state-version-1 plugin has no honest predecessor: do not publish version 2 or invent an old schema
+merely to satisfy a generic upgrade test.
+
+### Separate live state from durable state
+
+The `State` returned by `start` is live process state, not the durable format. It can contain open
+database handles, repositories, domain services, and delivery dispatchers. It is discarded after
+`stop`; anything that must survive restart belongs under `context.storage`.
+
+Call `context.storage.path()` with a portable relative path. Absolute paths, empty or dot segments,
+and traversal outside the service root are rejected. Do not derive storage from the current working
+directory or manually include the instance ID or service key—the runtime already selects the
+isolated root.
+
+## Own time and asynchronous work
+
+All lifecycle, route, and operation code receives the instance clock through `context.clock.now()`.
+Using `new Date()` for domain timestamps creates a second time source and breaks pinned-clock tests.
+Wall-clock deadlines for network and process safety are different; the runtime still owns those.
+
+The base context used by `create`, `update`, and `start` deliberately has no live state, fetch, or task
+tracker. The running context used by routes, operations, `seed`, `onStarted`, `onTimeAdvanced`, and
+`stop` adds them.
+
+Use `context.fetch` for outbound HTTP. It is tracked automatically, carries the instance abort
+signal, and produces delivery diagnostics. Register every other promise that may outlive the current
+stack with `context.tasks.track(label, promise)`. Await or return work needed for the current result;
+when scheduling background delivery, handle its rejection deliberately. An untracked
+fire-and-forget promise makes `instance.idle()` lie and can continue after reset or shutdown.
+
+Durable asynchronous behavior needs both halves: persist enough intent to retry before releasing the
+current action, then reconcile pending work in `onStarted` or `onTimeAdvanced`. Task tracking makes
+the current process observable; it does not make an in-memory promise survive a crash.
+
+Honor `context.signal` in long-running work and use `context.log.info()` for plugin diagnostics
+instead of printing to stdout. Keep credentials and provider payloads out of log attributes.
+[Virtual time and asynchronous work](/virtual-time) covers scheduling, idempotency, and idle
+semantics in depth.
+
+## Derive connection metadata per mount
+
+`connection()` runs for a concrete `baseUrl`, `instanceId`, `serviceKey`, and parsed config. Derive
+URLs from those values; do not hard-code the default port, the `dev` instance, or the assumption that
+the mount key equals the plugin ID.
+
+Return two deliberate projections:
+
+- `values` is JSON-compatible typed metadata for `instance[serviceKey].connection`;
+- `env` contains only string values suitable for an application process.
+
+Keep the two projections consistent when they expose the same endpoint. Environment names are
+global to the child process, so use stable plugin-specific names and test two mounts for collisions.
+The user can set `exportEnv: false` for one mount without removing typed connection values.
+[Connection values and environment export](/configuration#connection-values-and-environment-export)
+defines the complete merge behavior.
+
+## Keep routes and operations honest
+
+Operation inputs are Zod objects. Outputs may use any Zod schema, but the parsed result must be
+JSON-compatible because it can cross typed, CLI, and HTTP adapters. Output validation happens after
+`run`; a schema that describes the intended result but a function that returns something else is a
+plugin defect, not a client error.
+
+Translate expected domain failures at the adapter boundary:
+
+- a provider route returns that provider's status, headers, and error body;
+- an operation throws `LocalhostError` with a stable upper-snake-case code, safe message, HTTP
+  status, and only useful JSON details.
+
+Keep the original error as `cause` for internal diagnosis, but do not expose secrets in the safe
+message or details. Unexpected operation errors become the generic `PLUGIN_EXECUTION_FAILED`
+boundary. Do not make public routes return control-plane error shapes merely because operations use
+them.
+
+Test application-facing routes using real encodings: query strings, form bodies, headers,
+pagination, signatures, and target SDK behavior where relevant. Hono makes route construction
+convenient; it does not prove provider compatibility.
 
 ## Contract and semantic tests
 
 `@localhost2137/plugin-testkit` supplies shared runtime-integration cases. Register them with the
-test runner so each case is visible:
+test runner so each behavior remains visible:
 
 ```ts
 import { createPluginContractCases } from "@localhost2137/plugin-testkit";
@@ -126,15 +292,25 @@ describe("plugin contract", () => {
 });
 ```
 
-The selected-plugin harness must call the production factory for base, fault, and historical
-variants. Do not add test-only operations or response fields to the production inventory.
+The fixture asks one production plugin factory to build base and deliberately faulted variants. The
+testkit then owns the runtime, instances, daemon processes, control calls, cleanup, and assertions.
+It checks import purity, schema paths, operation introspection and validation, Hono context,
+multi-instance isolation, connection values, environment collisions, tracked fetch, seed and reset,
+storage containment, lifecycle recovery, restart persistence, upgrades, and future-version
+rejection. Optional durability cases exercise pending delivery and committed time-advance recovery
+in real child processes.
 
-The current fixture requires positive versions ordered `old < current < future`. A new
-state-version-1 plugin has no honest predecessor and cannot satisfy that contract yet. Do not bump it
-to version 2 or invent an old schema. Cover import behavior, public routes, lifecycle, isolation,
-persistence, reset, seed, restart, and future-version rejection with focused public-surface tests;
-add the shared upgrade case once a real prior schema exists.
+Fault variants may inject a dependency or historical state version. They must not replace the
+production factory or add a test-only public surface. Otherwise the contract proves a harness that
+users never run.
 
-The generic contract proves runtime integration, not provider fidelity. Add semantic tests for every
-supported endpoint, real request encodings, target SDK behavior, domain transactions, signatures,
-retry schedules, recovery, and each meaningful unsupported boundary.
+The current durability fixture requires positive versions ordered `old < current < future`. For a
+new version-1 plugin, use focused public-surface tests for creation, restart persistence, reset,
+future-version rejection, and the other applicable behaviors. Add the shared upgrade case when a
+real prior format exists.
+
+The generic contract proves runtime integration, not provider fidelity. Add semantic suites for the
+exact supported endpoints and operations, domain transactions, ID and timestamp rules, failure
+shapes, callback signatures, retry schedules, SDK behavior, restart recovery, and every meaningful
+unsupported boundary. A useful release claim should point to one of those executable tests rather
+than to the amount of code in the plugin.
