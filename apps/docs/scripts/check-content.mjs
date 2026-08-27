@@ -296,6 +296,20 @@ assert(configuration?.includes("`.env` below `storage.dir`"));
 assert(configuration?.includes("Removing or renaming a service while it still owes"));
 assert(!configuration?.includes("in-process tests require port `0`"));
 const testing = content.get("testing.mdx");
+for (const [title, path] of [
+	["test/owned-runtime.test.ts", "examples/getting-started/test/owned-runtime.test.ts"],
+	["test/subscription.test.ts", "examples/stripe-sdk/test/subscription.test.ts"],
+	["test/runtime-connection.ts", "examples/testing-parallel/test/runtime-connection.ts"],
+	["test/global-setup.ts", "examples/testing-parallel/test/global-setup.ts"],
+	["test/owned-instance.ts", "examples/testing-parallel/test/owned-instance.ts"],
+	["test/worker-contract.ts", "examples/testing-parallel/test/worker-contract.ts"],
+]) {
+	const example = await readFile(join(repositoryRoot, path), "utf8");
+	assert(
+		testing?.includes(titledCodeBlock("ts", title, example)),
+		`Testing guide must match the checked example ${path}.`,
+	);
+}
 assert(testing?.includes("Reuse the runtime, not the world"));
 assert(testing?.includes("It does not discover or attach to `localhost dev`"));
 assert(testing?.includes("private bearer token for crossing a process boundary"));
