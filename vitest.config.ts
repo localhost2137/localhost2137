@@ -13,7 +13,7 @@ export default defineConfig({
 				statements: 80,
 			},
 		},
-		exclude: ["**/dist/**", "**/node_modules/**", "design/**"],
+		exclude: ["**/demo-assets/**", "**/dist/**", "**/node_modules/**", "design/**"],
 		include: ["packages/**/*.test.ts", "plugins/**/*.test.ts", "tests/**/*.test.ts"],
 	},
 });

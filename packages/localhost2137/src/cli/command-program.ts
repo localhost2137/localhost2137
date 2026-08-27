@@ -110,6 +110,33 @@ async function runStatic(input: DispatchCliInput): Promise<number> {
 			);
 		});
 
+	const demo = program.command("demo").description("work with executable localhost2137 demos");
+	demo
+		.command("clone")
+		.description("clone an embedded demo")
+		.argument("<name>")
+		.argument("[directory]")
+		.option("--no-install", "skip pnpm install")
+		.action(
+			async (
+				name: string,
+				directory: string | undefined,
+				options: Readonly<{ install: boolean }>,
+			) => {
+				if (input.configPath !== undefined) {
+					throw new CliUsageError("--config does not apply to localhost demo clone.");
+				}
+				const result = await input.actions.cloneDemo(name, directory, options.install);
+				input.io.writeOutput(`Cloned ${name} to ${result.directory}\n`);
+				input.io.writeOutput(
+					result.installed
+						? "Installed dependencies with pnpm.\n"
+						: "Skipped dependency installation. Run `pnpm install` before the demo.\n",
+				);
+				input.io.writeOutput(`\nNext in ${result.directory}:\n  pnpm exec localhost dev\n`);
+			},
+		);
+
 	addBootstrapHelp(program.command("describe"))
 		.description("describe configured services and operations")
 		.argument("[service]")

@@ -12,6 +12,18 @@ export class CliUsageError extends Error {
 	}
 }
 
+export class CliDemoNotFoundError extends Error {
+	readonly demoName: string;
+
+	constructor(demoName: string, available: readonly string[]) {
+		super(
+			`Unknown demo ${JSON.stringify(demoName)}. Available demos: ${available.length === 0 ? "none" : available.join(", ")}.`,
+		);
+		this.name = "CliDemoNotFoundError";
+		this.demoName = demoName;
+	}
+}
+
 export class CliConfigMismatchError extends Error {
 	constructor() {
 		super(
@@ -63,6 +75,7 @@ export interface CliFailure {
 
 export function classifyCliFailure(cause: unknown): CliFailure {
 	if (cause instanceof CliUsageError) return failure(2, cause.message);
+	if (cause instanceof CliDemoNotFoundError) return failure(4, cause.message);
 	if (cause instanceof CliTargetNotFoundError) return failure(4, cause.message);
 	if (cause instanceof CliConfigMismatchError || cause instanceof CliRuntimeUnavailableError) {
 		return failure(3, cause.message);

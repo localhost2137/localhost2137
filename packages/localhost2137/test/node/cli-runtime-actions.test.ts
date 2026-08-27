@@ -16,6 +16,26 @@ import { RuntimeDiscoveryError } from "../../src/node/active-runtime-discovery.j
 import { createNodeCliActions } from "../../src/node/cli-runtime-actions.js";
 
 describe("Node CLI runtime actions", () => {
+	it("clones demos without loading config or discovering a runtime", async () => {
+		const fixture = actionFixture();
+		const cloneDemo = vi.fn(async () => ({ directory: "./demo", installed: false }));
+		const actions = createNodeCliActions(fixture.input, { cloneDemo });
+
+		await expect(actions.cloneDemo("slack-ping-bot", "demo", false)).resolves.toEqual({
+			directory: "./demo",
+			installed: false,
+		});
+		expect(cloneDemo).toHaveBeenCalledWith({
+			cwd: "/project",
+			directory: "demo",
+			inheritedEnv: { EXISTING: "yes" },
+			install: false,
+			name: "slack-ping-bot",
+		});
+		expect(fixture.loadConfig).not.toHaveBeenCalled();
+		expect(fixture.discoverRuntime).not.toHaveBeenCalled();
+	});
+
 	it("derives env and child overlays locally from the actual discovered URL", async () => {
 		const fixture = actionFixture();
 		const runChild = vi.fn(async () => 17);

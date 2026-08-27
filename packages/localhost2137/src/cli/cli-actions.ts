@@ -9,9 +9,15 @@ export interface CliProjectInitialization {
 	readonly gitignore: "created" | "unchanged" | "updated";
 }
 
+export interface CliDemoClone {
+	readonly directory: string;
+	readonly installed: boolean;
+}
+
 export interface CliActions {
 	advanceClock(instanceId: string, duration: string): Promise<unknown>;
 	clockStatus(instanceId: string): Promise<unknown>;
+	cloneDemo(name: string, directory: string | undefined, install: boolean): Promise<CliDemoClone>;
 	createInstance(id: string, seed: boolean): Promise<unknown>;
 	describe(instanceId: string, serviceKey?: string): Promise<unknown>;
 	describeService(instanceId: string, serviceKey: string): Promise<CliServiceDescription>;

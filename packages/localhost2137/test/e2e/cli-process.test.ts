@@ -30,6 +30,38 @@ afterEach(async () => {
 });
 
 describe("localhost process transcript", () => {
+	it("clones the embedded Slack demo without config discovery", async () => {
+		const project = await temporaryProject("demo-clone");
+		temporaryDirectories.push(project);
+
+		const cloned = command(project, ["demo", "clone", "slack-ping-bot", "my-demo", "--no-install"]);
+		expect(cloned.status, cloned.stderr).toBe(0);
+		expect(cloned.stderr).toBe("");
+		expect(cloned.stdout).toContain("Cloned slack-ping-bot to ./my-demo");
+		await expect(readFile(join(project, "my-demo/localhost.config.ts"), "utf8")).resolves.toContain(
+			"@localhost2137/slack",
+		);
+		await expect(readFile(join(project, "my-demo/.gitignore"), "utf8")).resolves.toContain(
+			"node_modules/",
+		);
+
+		const repeated = command(project, [
+			"demo",
+			"clone",
+			"slack-ping-bot",
+			"my-demo",
+			"--no-install",
+		]);
+		expect(repeated.status).toBe(2);
+		expect(repeated.stdout).toBe("");
+		expect(repeated.stderr).toContain("Refusing to replace existing demo directory");
+
+		const missing = command(project, ["demo", "clone", "missing", "--no-install"]);
+		expect(missing.status).toBe(4);
+		expect(missing.stdout).toBe("");
+		expect(missing.stderr).toContain("Available demos: slack-ping-bot");
+	}, 30_000);
+
 	it("initializes an empty project without config discovery or a daemon", async () => {
 		const project = await temporaryProject("init");
 		temporaryDirectories.push(project);

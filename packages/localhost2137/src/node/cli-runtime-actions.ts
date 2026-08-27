@@ -18,6 +18,7 @@ import { runChildCommand } from "./child-command.js";
 import { runDevCommand } from "./dev-command.js";
 import { startDevDaemon } from "./dev-daemon.js";
 import { createDevProjectRuntime } from "./dev-runtime-dependencies.js";
+import { cloneDemoProject } from "./demo-cloner.js";
 import { inspectProjectRuntime } from "./runtime-doctor.js";
 import { initializeProject } from "./project-initializer.js";
 
@@ -33,6 +34,7 @@ export interface NodeCliActionDependencies {
 	readonly discoverRuntime?: typeof discoverActiveRuntime;
 	readonly inspectRuntime?: typeof inspectProjectRuntime;
 	readonly loadConfig?: typeof loadResolvedConfig;
+	readonly cloneDemo?: typeof cloneDemoProject;
 	readonly runChild?: typeof runChildCommand;
 	readonly runDev?: typeof runDevCommand;
 }
@@ -69,6 +71,14 @@ export function createNodeCliActions(
 			forTarget(instanceId, ({ client }) => client.clockAdvance(instanceId, duration)),
 		clockStatus: (instanceId) =>
 			forTarget(instanceId, ({ client }) => client.clockStatus(instanceId)),
+		cloneDemo: (name, directory, install) =>
+			(dependencies.cloneDemo ?? cloneDemoProject)({
+				cwd: input.cwd,
+				...(directory === undefined ? {} : { directory }),
+				inheritedEnv: input.inheritedEnv,
+				install,
+				name,
+			}),
 		createInstance: async (id, seed) => {
 			const runtime = await session();
 			return await runtime.client.createInstance({ id, persistence: "persistent", seed });

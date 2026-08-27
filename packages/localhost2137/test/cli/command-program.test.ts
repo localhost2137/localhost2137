@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineOperation } from "../../src/authoring/operation.js";
 import type { CliActions, CliIo } from "../../src/cli/cli-actions.js";
-import { CliUsageError } from "../../src/cli/cli-errors.js";
+import { CliDemoNotFoundError, CliUsageError } from "../../src/cli/cli-errors.js";
 import { runCliCommand } from "../../src/cli/command-program.js";
 import { ownCliServiceDescription } from "../../src/cli/service-description.js";
 import { createOperationMetadata } from "../../src/config/schema-metadata.js";
@@ -146,6 +146,94 @@ describe("CLI command program", () => {
 		expect(fixture.actions.initProject).not.toHaveBeenCalled();
 		expect(fixture.stdout).toBe("");
 		expect(fixture.stderr).toContain("--config does not apply to localhost init");
+	});
+
+	it("clones a demo with installation by default and no runtime config", async () => {
+		const fixture = cliFixture();
+		fixture.actions.cloneDemo.mockResolvedValue({
+			directory: "./slack-ping-bot",
+			installed: true,
+		});
+		const createActions = vi.fn(() => fixture.actions);
+
+		const exitCode = await runCliCommand({
+			arguments: ["demo", "clone", "slack-ping-bot"],
+			createActions,
+			defaultInstance: "dev",
+			io: fixture.io,
+		});
+
+		expect(exitCode).toBe(0);
+		expect(createActions).toHaveBeenCalledWith({});
+		expect(fixture.actions.cloneDemo).toHaveBeenCalledWith("slack-ping-bot", undefined, true);
+		expect(fixture.stdout).toBe(
+			"Cloned slack-ping-bot to ./slack-ping-bot\nInstalled dependencies with pnpm.\n\nNext in ./slack-ping-bot:\n  pnpm exec localhost dev\n",
+		);
+		expect(fixture.stderr).toBe("");
+	});
+
+	it("supports only the explicit demo directory and --no-install escape hatch", async () => {
+		const fixture = cliFixture();
+		fixture.actions.cloneDemo.mockResolvedValue({ directory: "./scratch/demo", installed: false });
+
+		expect(
+			await runCliCommand({
+				arguments: ["demo", "clone", "slack-ping-bot", "scratch/demo", "--no-install"],
+				createActions: () => fixture.actions,
+				defaultInstance: "dev",
+				io: fixture.io,
+			}),
+		).toBe(0);
+		expect(fixture.actions.cloneDemo).toHaveBeenCalledWith("slack-ping-bot", "scratch/demo", false);
+		expect(fixture.stdout).toContain("Skipped dependency installation");
+
+		const help = cliFixture();
+		expect(
+			await runCliCommand({
+				arguments: ["demo", "clone", "--help"],
+				createActions: () => help.actions,
+				defaultInstance: "dev",
+				io: help.io,
+			}),
+		).toBe(0);
+		expect(help.stdout).toContain("--no-install");
+		expect(help.stdout).not.toContain("--config");
+		expect(help.actions.cloneDemo).not.toHaveBeenCalled();
+	});
+
+	it("keeps demo cloning config-independent and maps unknown demos to not-found", async () => {
+		for (const arguments_ of [
+			["--config", "elsewhere.ts", "demo", "clone", "slack-ping-bot"],
+			["demo", "clone", "slack-ping-bot", "--config=elsewhere.ts"],
+		]) {
+			const fixture = cliFixture();
+			expect(
+				await runCliCommand({
+					arguments: arguments_,
+					createActions: () => fixture.actions,
+					defaultInstance: "dev",
+					io: fixture.io,
+				}),
+			).toBe(2);
+			expect(fixture.actions.cloneDemo).not.toHaveBeenCalled();
+			expect(fixture.stdout).toBe("");
+			expect(fixture.stderr).toContain("--config does not apply");
+		}
+
+		const missing = cliFixture();
+		missing.actions.cloneDemo.mockRejectedValue(
+			new CliDemoNotFoundError("missing", ["slack-ping-bot"]),
+		);
+		expect(
+			await runCliCommand({
+				arguments: ["demo", "clone", "missing"],
+				createActions: () => missing.actions,
+				defaultInstance: "dev",
+				io: missing.io,
+			}),
+		).toBe(4);
+		expect(missing.stdout).toBe("");
+		expect(missing.stderr).toContain("Available demos: slack-ping-bot");
 	});
 
 	it("passes run argv directly and returns the child exit code", async () => {
@@ -386,6 +474,7 @@ function cliFixture(): CliFixture {
 			to: "2026-09-24T12:00:00.000Z",
 		})),
 		clockStatus: vi.fn(async () => ({ mode: "real", now: "2026-08-25T12:00:00.000Z" })),
+		cloneDemo: vi.fn(async () => ({ directory: "./slack-ping-bot", installed: true })),
 		createInstance: vi.fn(async () => ({ id: "review" })),
 		describe: vi.fn(async () => ({ services: ["fixture"] })),
 		describeService: vi.fn(async () => serviceDescription()),
