@@ -1,8 +1,20 @@
 # `@localhost2137/slack`
 
-A stateful local Slack workspace for localhost2137. It gives applications and coding agents a real
-HTTP service, typed control operations, SQLite persistence, and signed Events API callbacks without
-a Slack account, OAuth setup, or real credentials.
+A stateful local Slack workspace for localhost2137. It provides a provider-shaped HTTP service,
+typed control operations, SQLite persistence, and signed Events API callbacks without a Slack
+account, OAuth setup, or real credentials.
+
+## Install
+
+Install the runtime, plugin, and runtime host peers as development dependencies. Install Bolt as an
+application dependency:
+
+```sh
+pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3
+pnpm add @slack/bolt
+```
+
+Omit the second command when the application already provides its supported Slack client.
 
 ## Configure
 
@@ -58,11 +70,9 @@ Deliberate differences:
   rich blocks/attachments, presence, search, or message editing/deletion APIs;
 - channel posting requires membership, but scope authorization is not emulated;
 - bot and user IDs, event IDs, and Slack timestamps are deterministic database sequences;
-- `U000000` and `localhost2137-bot` are reserved for the installed bot; upgrades relocate a
-  conflicting persisted human to the next generated user ID, rewrite its references
-  transactionally, and preserve a conflicting human name as
-  `localhost2137-bot-preserved-{userId}` (with a deterministic numeric suffix on collision);
-- only the configured bot token is public in v0.1; local users do not receive tokens;
+- `U000000` and `localhost2137-bot` identify the installed bot and are unavailable for local human
+  users;
+- only the installed bot can authenticate to the Web API, using the configured bot token;
 - public channels are the only accepted `conversations.list` type;
 - Events retries are driven only by explicit virtual-time advancement; there is no wall-clock
   scheduler.
@@ -104,9 +114,5 @@ redirect and TLS-specific failure classifications that the local transport does 
 Use real clock mode with Bolt's default replay-window verification. Pinned-clock signature tests
 should verify the supplied virtual timestamp directly instead of comparing it with wall time.
 
-Run the real plugin contract and the official Bolt example with:
-
-```sh
-pnpm exec vitest run plugins/slack/test
-pnpm --filter @localhost2137/example-slack-ping-bot test
-```
+The [full plugin reference](https://localhost2137.dev/first-party/slack) documents exact operation
+inputs, supported Bolt evidence, retry behavior, and deliberate differences.

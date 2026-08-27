@@ -4,6 +4,18 @@ A stateful local Stripe account for recurring-billing development. It provides o
 compatible HTTP routes, typed control operations, SQLite persistence, signed webhooks, and durable
 virtual-time renewals without a Stripe account or real credentials.
 
+## Install
+
+Install the runtime, plugin, and runtime host peers as development dependencies. Install Stripe Node
+as an application dependency:
+
+```sh
+pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3
+pnpm add stripe
+```
+
+Omit the second command when the application already provides its supported Stripe client.
+
 ## Configure
 
 ```ts
@@ -51,8 +63,8 @@ const client = new Stripe(instance.stripe.connection.secretKey, {
 const customer = await client.customers.create({ name: "Ada" });
 ```
 
-The executable [`examples/stripe-sdk`](../../examples/stripe-sdk) package creates a customer and
-subscription, advances virtual time by 30 days, and lists both invoices through the official SDK.
+The tested SDK scenario creates a customer and subscription, advances virtual time by 30 days, and
+lists both invoices through the official SDK.
 
 ## Supported HTTP surface
 
@@ -91,9 +103,5 @@ and `setNextPaymentOutcome` provide deterministic setup and inspection without c
 to the HTTP adapter. Public routes and control operations share the same domain services and
 repositories.
 
-Run the plugin contract and official SDK example with:
-
-```sh
-pnpm exec vitest run plugins/stripe/test
-pnpm --filter @localhost2137/example-stripe-sdk test
-```
+The [full plugin reference](https://localhost2137.dev/first-party/stripe) documents exact operation
+inputs, supported Stripe Node evidence, webhook recovery, and deliberate differences.

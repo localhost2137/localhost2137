@@ -3,9 +3,10 @@ title: Run an existing application
 description: Point an application's existing service boundary at one daemon instance without adding local behavior branches.
 ---
 
-This guide starts with an installed plugin already present in `localhost.config.ts`. If that is not
-true yet, first [evaluate the plugin](/plugins/using) and add it through
-[Configuration](/configuration).
+This guide starts after the runtime and plugin packages are installed and the plugin is mounted in
+`localhost.config.ts`. If the package is missing, first
+[install and evaluate the plugin](/plugins/using). If it is installed but not mounted,
+[Configuration](/configuration) defines how to activate it; configuration does not install packages.
 
 The goal is to change where the application connects, not how it behaves:
 

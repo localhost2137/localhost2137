@@ -240,6 +240,7 @@ assert(
 );
 assert(pluginAuthoring?.includes("A state-version-1 plugin has no honest predecessor"));
 const pluginUsing = content.get("plugins/using.mdx");
+assert(pluginUsing?.includes("pnpm add -D localhost2137 <plugin-package> hono@^4.13.4 zod@^4.4.3"));
 assert(pluginUsing?.includes("There is no plugin registry or automatic package discovery"));
 assert(pluginUsing?.includes("Temporary test storage limits what world state survives the test"));
 assert(pluginUsing?.includes("`describe` does not enumerate provider routes or connection values"));
@@ -251,6 +252,12 @@ assert(pluginUsing?.includes("`stateVersion` describes durable storage only"));
 assert(pluginUsing?.includes("Do not use reset as a rollback"));
 const firstPartySlack = content.get("first-party/slack.mdx");
 assert(
+	firstPartySlack?.includes(
+		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3",
+	),
+);
+assert(firstPartySlack?.includes("pnpm add @slack/bolt"));
+assert(
 	firstPartySlack?.includes("Public Web API channel arguments deliberately require stored IDs"),
 );
 assert(firstPartySlack?.includes("ascending stored-ID order"));
@@ -260,10 +267,43 @@ assert(firstPartySlack?.includes("There are at most four attempts"));
 assert(firstPartySlack?.includes("The tested client is `@slack/bolt` 5.0.0"));
 assert(firstPartySlack?.includes("Messages and pending deliveries cannot be seeded"));
 const firstPartyStripe = content.get("first-party/stripe.mdx");
+assert(
+	firstPartyStripe?.includes(
+		"pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3",
+	),
+);
+assert(firstPartyStripe?.includes("pnpm add stripe"));
 assert(firstPartyStripe?.includes("Products and prices are intentionally read-only through HTTP"));
 assert(firstPartyStripe?.includes("Stripe Node 22.5.0"));
 assert(firstPartyStripe?.includes("this plugin does not schedule a retry"));
 assert(firstPartyStripe?.includes("The helper verifies the HMAC digest only"));
+
+for (const [readmePath, installCommand, clientCommand] of [
+	[
+		"plugins/slack/README.md",
+		"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3",
+		"pnpm add @slack/bolt",
+	],
+	[
+		"plugins/stripe/README.md",
+		"pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3",
+		"pnpm add stripe",
+	],
+]) {
+	const source = await readFile(join(repositoryRoot, readmePath), "utf8");
+	assert(
+		source.includes(installCommand),
+		`${readmePath} must include its consumer install command.`,
+	);
+	assert(
+		source.includes(clientCommand),
+		`${readmePath} must include its application client command.`,
+	);
+	assert(!source.includes("pnpm exec vitest run plugins/"));
+	assert(!source.includes("../../examples/"));
+}
+const slackReadme = await readFile(join(repositoryRoot, "plugins/slack/README.md"), "utf8");
+assert(!/upgrades relocate|v0\.1|preserved-/.test(slackReadme));
 for (const [file, source] of content) {
 	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(

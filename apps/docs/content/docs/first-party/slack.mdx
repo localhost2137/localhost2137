@@ -11,6 +11,18 @@ reply through Slack Bolt or the Web API, and inspect the resulting history.
 Use this page as a compatibility boundary. A method or field not listed here should be treated as
 unsupported even if another Slack client happens to accept the local response.
 
+## Install
+
+Install the runtime, plugin, and runtime host peers as development dependencies. Install Bolt as an
+application dependency:
+
+```sh
+pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3
+pnpm add @slack/bolt
+```
+
+Omit the second command when the application already provides its supported Slack client.
+
 ## Configure and seed the workspace
 
 ```ts

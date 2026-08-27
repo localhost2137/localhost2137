@@ -10,6 +10,21 @@ factory and placing the returned descriptor under a service key in `localhost.co
 There is no plugin registry or automatic package discovery. The project config is the complete
 inventory of configured services.
 
+## Install the runtime and plugin
+
+Add the runtime, the selected plugin, and the runtime's host peers as development dependencies:
+
+```text
+pnpm add -D localhost2137 <plugin-package> hono@^4.13.4 zod@^4.4.3
+```
+
+Replace `<plugin-package>` with the package that implements the service behavior you need. Install
+the provider SDK or client separately as an ordinary application dependency. A plugin reference
+should give the exact command and state which client version its compatibility tests exercise.
+
+This only installs packages. The plugin remains inactive until its factory is mounted under a
+service key in `localhost.config.ts`.
+
 ## Trust the package before importing it
 
 Plugins are trusted local code, not sandboxed extensions. Importing the config imports every plugin

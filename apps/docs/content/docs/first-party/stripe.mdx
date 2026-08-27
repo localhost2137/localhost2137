@@ -11,6 +11,18 @@ cross exact billing boundaries, and exercise the application's invoice webhook b
 Use this page as a compatibility boundary. The plugin does not emulate general payment processing,
 and an SDK method resolving at runtime does not make an unlisted resource supported.
 
+## Install
+
+Install the runtime, plugin, and runtime host peers as development dependencies. Install Stripe Node
+as an application dependency:
+
+```sh
+pnpm add -D localhost2137 @localhost2137/stripe hono@^4.13.4 zod@^4.4.3
+pnpm add stripe
+```
+
+Omit the second command when the application already provides its supported Stripe client.
+
 ## Configure and seed the account
 
 ```ts
