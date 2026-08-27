@@ -7,10 +7,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const placeholderPackageBins = Object.freeze(
-	new Map([
-		["create-localhost2137", "create-localhost2137"],
-		["create-localhost2137-plugin", "create-localhost2137-plugin"],
-	]),
+	new Map([["create-localhost2137-plugin", "create-localhost2137-plugin"]]),
 );
 const hostPeerPackages = Object.freeze([
 	"@localhost2137/plugin-testkit",

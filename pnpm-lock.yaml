@@ -222,8 +222,6 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
-  packages/create-localhost2137: {}
-
   packages/create-localhost2137-plugin: {}
 
   packages/localhost2137:
