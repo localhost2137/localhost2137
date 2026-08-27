@@ -69,8 +69,8 @@ lists both invoices through the official SDK.
 ## Supported HTTP surface
 
 Requests use Bearer authentication. POST bodies use Stripe's
-`application/x-www-form-urlencoded` encoding, and list endpoints support deterministic opaque
-pagination.
+`application/x-www-form-urlencoded` encoding, and list endpoints use opaque cursors over durable
+creation order.
 
 | Resource | Supported methods |
 | --- | --- |
@@ -99,7 +99,7 @@ work; time-advance delivery completes as part of durable reconciliation.
 ## Control operations
 
 `createCustomer`, `createProduct`, `createPrice`, `createSubscription`, `listInvoices`, `listEvents`,
-and `setNextPaymentOutcome` provide deterministic setup and inspection without coupling domain code
+and `setNextPaymentOutcome` provide controlled setup and inspection without coupling domain code
 to the HTTP adapter. Public routes and control operations share the same domain services and
 repositories.
 

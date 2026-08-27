@@ -3,7 +3,7 @@ title: Stripe plugin
 description: Supported Stripe SDK resources, recurring billing, virtual-time renewal, signed webhooks, and deliberate differences.
 ---
 
-`@localhost2137/stripe` models one deterministic Stripe account for a fixed recurring-billing slice.
+`@localhost2137/stripe` models one stateful local Stripe account for a fixed recurring-billing slice.
 It persists customers, products, prices, subscriptions, invoices, events, and webhook attempts in
 SQLite. The useful workflow is deliberately narrow: create or seed a catalog, subscribe a customer,
 cross exact billing boundaries, and exercise the application's invoice webhook behavior.
@@ -79,10 +79,10 @@ Each instance exposes these typed values under `instance[serviceKey].connection`
 | `webhookSecret` | `STRIPE_WEBHOOK_SECRET` | Secret shared with the application's webhook receiver. |
 
 The webhook destination is not a connection value. `webhookUrl` belongs to mount configuration, so
-all instances of this mount deliver to the same receiver. Event IDs are stable inside one instance
-but repeatable across instances; they do not route a shared receiver by themselves. Serialize such
-scenarios, use application data that genuinely distinguishes them, or configure separate runtimes.
-The runtime does not add an instance header or rewrite the URL.
+all instances of this mount deliver to the same receiver. Event IDs are allocated within an instance
+and the same values can recur in another instance; they do not route a shared receiver by
+themselves. Serialize such scenarios, use application data that genuinely distinguishes them, or
+configure separate runtimes. The runtime does not add an instance header or rewrite the URL.
 
 ## Use the official Node SDK
 
@@ -243,8 +243,10 @@ clock arrangement appropriate to the test.
 ## Persistence and ordering
 
 Account resources, time-advance records, events, and webhook outcomes survive a persistent runtime
-restart. IDs and list order follow durable creation order, including when a seed supplies explicit
-IDs. Pinned and real-offset clock modes use the same exact 30-day billing arithmetic.
+restart. Generated IDs are allocated locally; seeds may supply explicit customer, product, and price
+IDs. Lists follow durable creation order independently of ID spelling. Resource, event, and webhook
+timestamps come from the instance clock. Pinned and real-offset clock modes use the same exact
+30-day billing arithmetic.
 
 Changing credentials or `webhookUrl` requires a runtime restart. Events created while `webhookUrl`
 was `null` have no pending delivery to replay later. A failed terminal webhook is not turned back into
@@ -260,5 +262,6 @@ behavior.
 
 Cancellation is immediate. A failed invoice remains open without automatic collection. Webhook
 delivery has the terminal and crash-recovery behavior documented above, not Stripe's full retry
-schedule. Deterministic local IDs and timestamps are suitable for repeatable tests but are not
+schedule. With a pinned clock, a fresh instance, and the same controlled actions, the documented
+locally allocated IDs, clock-derived timestamps, and list order are repeatable. They are not
 provider-issued values. Keep provider-facing checks for every behavior outside the supported tables.

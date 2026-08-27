@@ -53,7 +53,7 @@ All recognized Slack platform errors return HTTP 200 with `{ ok: false, error }`
 official Web API client distinguishes platform errors from transport errors. Bearer authentication
 is supported for every method; a form-body `token` is also accepted for compatibility. JSON and
 `application/x-www-form-urlencoded` POST bodies are supported, and list methods also accept query
-parameters. Cursor pagination is opaque, method/filter-bound, and based on deterministic keys.
+parameters. Cursor pagination is opaque, method/filter-bound, and based on durable stored keys.
 
 | Method | Supported behavior |
 | --- | --- |
@@ -69,7 +69,8 @@ Deliberate differences:
 - no HTTPS, OAuth, scopes, rate limits, enterprise/grid, DMs, private channels, files, reactions,
   rich blocks/attachments, presence, search, or message editing/deletion APIs;
 - channel posting requires membership, but scope authorization is not emulated;
-- bot and user IDs, event IDs, and Slack timestamps are deterministic database sequences;
+- the bot identity is fixed, other IDs are allocated locally, and message timestamps use the
+  instance clock with monotonic microsecond tie-breaking;
 - `U000000` and `localhost2137-bot` identify the installed bot and are unavailable for local human
   users;
 - only the installed bot can authenticate to the Web API, using the configured bot token;

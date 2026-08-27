@@ -76,10 +76,11 @@ Each instance exposes these typed values under `instance[serviceKey].connection`
 | `signingSecret` | `SLACK_SIGNING_SECRET` | Secret shared with the application's Events receiver. |
 
 The callback destination is not a connection value. `eventsUrl` belongs to mount configuration, so
-all instances of this mount deliver to the same URL. Event IDs and workspace IDs are stable inside
-one instance but repeatable across instances; they do not route a shared receiver by themselves.
-Serialize such scenarios, use application data that genuinely distinguishes them, or configure
-separate runtimes. localhost2137 does not add an instance header.
+all instances of this mount deliver to the same URL. Event IDs are allocated within an instance,
+while the workspace ID is a fixed local identity; either value can recur in another instance. They
+do not route a shared receiver by themselves. Serialize such scenarios, use application data that
+genuinely distinguishes them, or configure separate runtimes. localhost2137 does not add an
+instance header.
 
 ## Supported Web API
 
@@ -205,6 +206,8 @@ blocks or attachments, presence, search, message editing or deletion, interactiv
 commands, or socket mode.
 
 Only the configured bot has a token. Control operations can act as local members so a test can
-trigger an inbound event, but those users cannot authenticate to the Web API. IDs and timestamps are
-deterministic local values. Treat provider behavior outside the tables above as unsupported and keep
-a provider-facing check when it matters to the application.
+trigger an inbound event, but those users cannot authenticate to the Web API. The bot identity is
+fixed, other IDs are allocated locally, and message timestamps come from the instance clock with
+monotonic microsecond tie-breaking. These are not provider-issued identities or timestamps. Treat
+behavior outside the tables above as unsupported and keep a provider-facing check when it matters to
+the application.

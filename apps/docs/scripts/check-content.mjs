@@ -279,6 +279,8 @@ assert(firstPartySlack?.includes("first character must be an ASCII lowercase let
 assert(firstPartySlack?.includes("There are at most four attempts"));
 assert(firstPartySlack?.includes("The tested client is `@slack/bolt` 5.0.0"));
 assert(firstPartySlack?.includes("Messages and pending deliveries cannot be seeded"));
+assert(firstPartySlack?.includes("message timestamps come from the instance clock"));
+assert(!/\bdeterministic\b/i.test(firstPartySlack ?? ""));
 const firstPartyStripe = content.get("first-party/stripe.mdx");
 assert(
 	firstPartyStripe?.includes(
@@ -290,6 +292,8 @@ assert(firstPartyStripe?.includes("Products and prices are intentionally read-on
 assert(firstPartyStripe?.includes("Stripe Node 22.5.0"));
 assert(firstPartyStripe?.includes("this plugin does not schedule a retry"));
 assert(firstPartyStripe?.includes("The helper verifies the HMAC digest only"));
+assert(firstPartyStripe?.includes("With a pinned clock, a fresh instance"));
+assert(!/\bdeterministic\b/i.test(firstPartyStripe ?? ""));
 
 for (const [readmePath, installCommand, clientCommand] of [
 	[
@@ -314,6 +318,7 @@ for (const [readmePath, installCommand, clientCommand] of [
 	);
 	assert(!source.includes("pnpm exec vitest run plugins/"));
 	assert(!source.includes("../../examples/"));
+	assert(!/\bdeterministic\b/i.test(source));
 }
 const slackReadme = await readFile(join(repositoryRoot, "plugins/slack/README.md"), "utf8");
 assert(!/upgrades relocate|v0\.1|preserved-/.test(slackReadme));
