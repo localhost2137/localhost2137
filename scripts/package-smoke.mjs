@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,188 @@ function resolveFileDependency(specifier, workingDirectory) {
 	}
 
 	return resolve(workingDirectory, specifier.slice("file:".length));
+}
+
+async function assertMissing(path, message) {
+	try {
+		await readFile(path);
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+			return;
+		}
+		throw error;
+	}
+
+	throw new Error(message);
+}
+
+function assertRegistrySafeDemoManifest(manifest) {
+	for (const sectionName of [
+		"dependencies",
+		"devDependencies",
+		"optionalDependencies",
+		"peerDependencies",
+	]) {
+		const section = manifest[sectionName];
+		if (section === undefined) continue;
+		if (typeof section !== "object" || section === null || Array.isArray(section)) {
+			throw new Error(`Embedded demo ${sectionName} must be an object`);
+		}
+		for (const [name, specifier] of Object.entries(section)) {
+			if (typeof specifier !== "string" || /^(?:file|link|workspace):/.test(specifier)) {
+				throw new Error(
+					`Embedded demo dependency ${name} must use a public npm specifier; found ${String(specifier)}`,
+				);
+			}
+		}
+	}
+}
+
+function assertTarballDependencies({ label, packageDependencies, packageNames, workingDirectory }) {
+	const installedResult = runPnpm(["list", "--depth", "0", "--json"], workingDirectory, [
+		"ignore",
+		"pipe",
+		"inherit",
+	]);
+	const [installedProject] = JSON.parse(installedResult.stdout.toString());
+	for (const packageName of packageNames) {
+		const installed =
+			installedProject?.dependencies?.[packageName] ??
+			installedProject?.devDependencies?.[packageName];
+		const expectedTarball = resolveFileDependency(
+			packageDependencies[packageName],
+			workingDirectory,
+		);
+		const installedTarball = resolveFileDependency(installed?.resolved, workingDirectory);
+		if (!expectedTarball || installedTarball !== expectedTarball) {
+			throw new Error(`${label} ${packageName} did not resolve from its generated tarball`);
+		}
+	}
+}
+
+async function preparePackedDemoFixture({ consumerDirectory, packageDependencies }) {
+	const hostPackageDirectory = join(consumerDirectory, "node_modules/localhost2137");
+	const embeddedManifestPath = join(
+		hostPackageDirectory,
+		"demo-assets/v1/slack-ping-bot/package.json",
+	);
+	const shippedManifest = await readJson(embeddedManifestPath);
+	assertRegistrySafeDemoManifest(shippedManifest);
+	const packedPackages = [
+		{
+			manifest: await readJson(join(hostPackageDirectory, "package.json")),
+			name: "localhost2137",
+		},
+		{
+			manifest: await readJson(
+				join(consumerDirectory, "node_modules/@localhost2137/slack/package.json"),
+			),
+			name: "@localhost2137/slack",
+		},
+	];
+
+	for (const { manifest, name } of packedPackages) {
+		const shippedSpecifier = shippedManifest.devDependencies?.[name];
+		if (shippedSpecifier !== manifest.version) {
+			throw new Error(
+				`Embedded demo must declare the packed ${name} version exactly; found ${String(shippedSpecifier)}`,
+			);
+		}
+		if (!packageDependencies[name]) {
+			throw new Error(`Package smoke did not pack the demo dependency ${name}`);
+		}
+	}
+
+	const fixtureManifest = structuredClone(shippedManifest);
+	for (const { name } of packedPackages) {
+		fixtureManifest.devDependencies[name] = packageDependencies[name];
+	}
+
+	// Replace only the disposable consumer's virtual-store entry. An atomic rename avoids
+	// mutating a hard-linked pnpm store file or changing the manifest inside the tarball.
+	const fixtureManifestPath = `${embeddedManifestPath}.package-smoke-${process.pid}`;
+	await writeFile(fixtureManifestPath, `${JSON.stringify(fixtureManifest, null, 2)}\n`, {
+		flag: "wx",
+	});
+	await rename(fixtureManifestPath, embeddedManifestPath);
+
+	return { fixtureManifest, packageNames: packedPackages.map(({ name }) => name) };
+}
+
+function runPackedDemoClone({ consumerDirectory, installedBinPath }) {
+	const cloneResult = spawnSync(
+		process.execPath,
+		[installedBinPath, "demo", "clone", "slack-ping-bot"],
+		{
+			cwd: consumerDirectory,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+	if (cloneResult.error) {
+		throw cloneResult.error;
+	}
+	if (cloneResult.status !== 0) {
+		const detail = cloneResult.signal
+			? `signal ${cloneResult.signal}`
+			: `exit code ${cloneResult.status}`;
+		throw new Error(
+			`Packed localhost demo clone failed with ${detail}\n${cloneResult.stdout}${cloneResult.stderr}`,
+		);
+	}
+	if (
+		!cloneResult.stdout.includes("Cloned slack-ping-bot to ./slack-ping-bot") ||
+		!cloneResult.stdout.includes("Installed dependencies with pnpm.")
+	) {
+		throw new Error("Packed localhost demo clone did not report clone and install completion");
+	}
+}
+
+async function verifyClonedDemo({
+	demoDirectory,
+	fixtureManifest,
+	packageDependencies,
+	packageNames,
+}) {
+	const clonedManifest = await readJson(join(demoDirectory, "package.json"));
+	if (JSON.stringify(clonedManifest) !== JSON.stringify(fixtureManifest)) {
+		throw new Error("Cloned demo manifest differs from the embedded package fixture");
+	}
+	await readFile(join(demoDirectory, ".gitignore"), "utf8");
+	await assertMissing(
+		join(demoDirectory, "gitignore.template"),
+		"Cloned demo retained its internal gitignore template name",
+	);
+
+	assertTarballDependencies({
+		label: "Cloned demo dependency",
+		packageDependencies,
+		packageNames,
+		workingDirectory: demoDirectory,
+	});
+}
+
+async function assertNoDemoCloneOwnershipEntries(consumerDirectory) {
+	const leftovers = (await readdir(consumerDirectory)).filter((entry) =>
+		entry.startsWith(".localhost2137.demo-clone-"),
+	);
+	if (leftovers.length > 0) {
+		throw new Error(`Demo clone left temporary ownership entries: ${leftovers.join(", ")}`);
+	}
+}
+
+async function smokePackedDemoClone({ consumerDirectory, installedBinPath, packageDependencies }) {
+	const { fixtureManifest, packageNames } = await preparePackedDemoFixture({
+		consumerDirectory,
+		packageDependencies,
+	});
+	runPackedDemoClone({ consumerDirectory, installedBinPath });
+
+	const demoDirectory = join(consumerDirectory, "slack-ping-bot");
+	await verifyClonedDemo({ demoDirectory, fixtureManifest, packageDependencies, packageNames });
+	runPnpm(["typecheck"], demoDirectory);
+	runPnpm(["test"], demoDirectory);
+	await assertNoDemoCloneOwnershipEntries(consumerDirectory);
 }
 
 async function main() {
@@ -480,25 +662,12 @@ void packedPlugin({ config: { token: "fixture" } });
 		);
 
 		runPnpm(["install", "--store-dir", consumerStoreDirectory], consumerDirectory);
-		const installedResult = runPnpm(["list", "--depth", "0", "--json"], consumerDirectory, [
-			"ignore",
-			"pipe",
-			"inherit",
-		]);
-		const [installedConsumer] = JSON.parse(installedResult.stdout.toString());
-		for (const packageName of packageNames) {
-			const installed = installedConsumer?.dependencies?.[packageName];
-			const expectedTarball = resolveFileDependency(
-				packageDependencies[packageName],
-				consumerDirectory,
-			);
-			const installedTarball = resolveFileDependency(installed?.resolved, consumerDirectory);
-			if (!expectedTarball || installedTarball !== expectedTarball) {
-				throw new Error(
-					`Installed workspace package ${packageName} did not resolve from its generated tarball`,
-				);
-			}
-		}
+		assertTarballDependencies({
+			label: "Installed workspace package",
+			packageDependencies,
+			packageNames,
+			workingDirectory: consumerDirectory,
+		});
 		const installedHostManifest = await readJson(
 			join(consumerDirectory, "node_modules/localhost2137/package.json"),
 		);
@@ -529,6 +698,11 @@ void packedPlugin({ config: { token: "fixture" } });
 		if (!binaryHelp.stdout.toString().includes("Usage: localhost")) {
 			throw new Error("Installed localhost binary did not render CLI help");
 		}
+		await smokePackedDemoClone({
+			consumerDirectory,
+			installedBinPath,
+			packageDependencies,
+		});
 		runPnpm(["smoke"], consumerDirectory);
 		runPnpm(["typecheck"], consumerDirectory);
 
