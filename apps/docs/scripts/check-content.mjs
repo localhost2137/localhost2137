@@ -440,6 +440,21 @@ assert(callbacks?.includes("timeout and retry behavior"));
 assert(callbacks?.includes("Those details are part of the plugin's compatibility surface"));
 assert(callbacks?.includes("Separate instance storage never proves callback routing"));
 assert(callbacks?.includes("When an installed plugin does"));
+const instances = content.get("instances.mdx");
+const instanceIsolationTest = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/instance-isolation.test.ts"),
+	"utf8",
+);
+assert(
+	instances?.includes(
+		titledCodeBlock("ts", "test/instance-isolation.test.ts", instanceIsolationTest),
+	),
+	"Instances concept must match the checked two-world isolation proof.",
+);
+assert(instances?.includes("expect(firstUrl.origin).toBe(secondUrl.origin)"));
+assert(instances?.includes("expect(firstUrl.pathname).not.toBe(secondUrl.pathname)"));
+assert(instances?.includes('readUserNames(second.slack.connection)).resolves.toEqual([\n\t\t\t\t\t"localhost2137-bot"'));
+assert(instances?.indexOf("await second.destroy()") < instances?.indexOf("await first.destroy()"));
 const pluginAuthoring = content.get("plugins/authoring.mdx");
 assert(
 	pluginAuthoring?.includes("Importing the plugin, or a config that mounts it, must be inert"),

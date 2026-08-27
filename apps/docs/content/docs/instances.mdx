@@ -1,131 +1,161 @@
 ---
 title: Instances and isolation
-description: Understand which state belongs to a local world, what persists, and where instance boundaries stop.
+description: See two worlds share one runtime and config while keeping provider routes, service state, clocks, logs, and lifecycle ownership separate.
 ---
 
-An instance is the unit of mutable state in localhost2137. A runtime can host multiple instances;
-the project config supplies the same service template to each one it creates.
+An instance is one mutable service world. A runtime applies the same resolved config to every
+instance it creates.
 
-That distinction matters. Starting another instance gives you a clean service world without another
-runtime process. Starting another runtime is useful when the worlds need different configuration,
-ports, or callback receivers.
+## Prove two worlds are different
 
-```text
-one runtime at 127.0.0.1:2137
-├── instance dev
-│   ├── service primary  → /dev/primary/*
-│   └── service billing  → /dev/billing/*
-└── instance test-a
-    ├── service primary  → /test-a/primary/*
-    └── service billing  → /test-a/billing/*
+This checked test creates two instances on one runtime, verifies their service URLs share an origin
+but not a path, writes Grace only to the first, and reads both through provider-shaped HTTP:
+
+```ts title="test/instance-isolation.test.ts"
+import { createTestRuntime } from "localhost2137/testing";
+import { expect, it } from "vitest";
+import config from "../localhost.config.js";
+
+it("isolates service state and routes for two instances of one config", async () => {
+	const runtime = await createTestRuntime({
+		config,
+		port: 0,
+		storage: "temporary",
+	});
+
+	try {
+		const first = await runtime.createInstance();
+		try {
+			const second = await runtime.createInstance();
+			try {
+				const firstUrl = new URL(first.slack.connection.apiUrl);
+				const secondUrl = new URL(second.slack.connection.apiUrl);
+				expect(firstUrl.origin).toBe(secondUrl.origin);
+				expect(firstUrl.pathname).not.toBe(secondUrl.pathname);
+				expect(firstUrl.pathname.endsWith("/slack/api/")).toBe(true);
+				expect(secondUrl.pathname.endsWith("/slack/api/")).toBe(true);
+
+				await first.slack.createUser({ name: "Grace" });
+
+				await expect(readUserNames(first.slack.connection)).resolves.toEqual([
+					"localhost2137-bot",
+					"Grace",
+				]);
+				await expect(readUserNames(second.slack.connection)).resolves.toEqual([
+					"localhost2137-bot",
+				]);
+			} finally {
+				await second.destroy();
+			}
+		} finally {
+			await first.destroy();
+		}
+	} finally {
+		await runtime.close();
+	}
+});
+
+async function readUserNames(
+	connection: Readonly<{ apiUrl: string; botToken: string }>,
+): Promise<string[]> {
+	const response = await fetch(new URL("users.list", connection.apiUrl), {
+		headers: { authorization: `Bearer ${connection.botToken}` },
+	});
+	const payload = (await response.json()) as {
+		members: Array<{ name: string }>;
+		ok: true;
+	};
+	expect(response.status).toBe(200);
+	expect(payload.ok).toBe(true);
+	return payload.members.map(({ name }) => name);
+}
 ```
 
-`primary` and `billing` are configured service keys, not hard-coded service types. The installed
-plugins behind them decide what their APIs, state, operations, and connection values contain.
+```sh
+pnpm exec vitest run test/instance-isolation.test.ts
+```
+
+The negative assertion is the important one: the second provider route does not see Grace. A test
+that only verifies distinct IDs or successful creation has not yet proved state isolation.
 
 ## One template, many worlds
 
-The config is runtime-scoped. It selects plugin factories, assigns stable service keys, and provides
-plugin configuration such as local credentials or callback URLs. It is loaded once when the runtime
-starts; instances cannot override it.
-
-Each instance then owns the changing parts of that template:
-
-| Concern | Scope |
+| Concern | Owner |
 | --- | --- |
-| Runtime host, port, and control token | Runtime |
-| Configured plugins, service keys, and plugin config | Runtime template |
-| Plugin data and service storage | Instance and service |
-| Clock, seed status, logs, and tracked asynchronous work | Instance |
-| Public API URL and app-facing connection values | Derived for the selected instance |
-| Event or webhook destination | Plugin config, therefore shared by instances |
+| Host, port, server process, and control token | Runtime |
+| Plugin factories, service keys, credentials, callback destinations, and other plugin config | Runtime template |
+| Plugin records and service storage | Instance and service |
+| Clock, seed status, logs, and tracked plugin work | Instance |
+| Provider API URL and app-facing connection values | Derived for the selected instance |
 
-Two instances can contain records with the same provider-shaped IDs or entirely different data.
-Their plugin storage and clocks remain independent. They still run the same plugin code with the
-same resolved configuration.
+Two worlds may allocate the same provider-shaped record IDs because each plugin database is local to
+its instance. They still run the same plugin code and resolved configuration.
 
-This is state isolation, not a process or security sandbox. Instances share the runtime endpoint and
-control credential. Application code should receive only app-facing connection values, never the
-runtime control token.
+This is state isolation, not a process or security sandbox. Instances share a runtime endpoint and
+privileged control credential. Application processes receive only instance-scoped provider
+connection values.
 
 ## Addressing selects the world
 
-The public route begins with both identities:
+The public route contains both instance and service keys:
 
-```text
-http://127.0.0.1:2137/{instance}/{service}/*
+```text title="Route shape"
+http://127.0.0.1:2137/dev/slack/api/
+http://127.0.0.1:2137/review/slack/api/
 ```
 
-For example, these URLs reach the same configured service in different worlds:
+Those are two worlds for the same `slack` mount. Passing one connection object to an SDK or HTTP
+client selects its world. Every setup and inspection operation must target that same instance.
 
-```text
-http://127.0.0.1:2137/dev/primary/*
-http://127.0.0.1:2137/test-a/primary/*
-```
-
-Plugins derive their connection values from the bound runtime URL, instance ID, service key, and
-plugin config. Passing one instance's connection to the application therefore selects that world
-for provider SDK or HTTP traffic.
-
-Control operations must target the same instance. If a test arranges `test-a` but the application
-still points at `dev`, both sides work correctly while observing different state. That mismatch often
-looks like a failed operation or an emulator that forgot its data; check the connection URL first.
+If a test arranges `review` but the app still uses the `dev` URL, both paths can work while observing
+different state. Compare the app-facing URL before assuming an operation lost data.
 
 ## Create, reset, and destroy mean different things
 
-An instance keeps its identity until it is destroyed:
+This CLI sequence owns one named world and exercises each transition:
 
-```text
-create empty or seeded world
-          │
-          ▼
-        active ── reset ──> active under the same instance ID
-          │
-          └──── destroy ──> no addressable world
+```sh
+pnpm exec localhost instance create lifecycle-demo --seed
+pnpm exec localhost instance reset lifecycle-demo
+pnpm exec localhost instance reset lifecycle-demo --seed
+pnpm exec localhost instance destroy lifecycle-demo
 ```
 
-Creation and reset are empty by default. Plugins may still create identities required for their own
-operation. Passing `seed: true` applies configured plugin seeds followed by the top-level scenario
-seed.
+| Transition | Identity and route | Replacement state |
+| --- | --- | --- |
+| Create | Allocates a new instance ID and route. | Empty unless `--seed` or `{ seed: true }`. |
+| Reset | Keeps the same ID, route, and persistence policy. | Replaces service state and clock; empty unless seed is explicit. |
+| Destroy | Retires the ID and route. | Removes stored instance state; typed handles become unusable. |
 
-A reset replaces the instance's service state and returns its clock to the configured starting
-mode. The instance ID, public path, and persistence policy stay the same, so application wiring can
-remain in place. Reset is appropriate when the owner wants to reuse a named world deliberately; an
-independent test usually creates a new instance instead.
+Reset is useful when one owner deliberately reuses a named development world. Independent tests
+usually create independent instances instead. Cleanup belongs in `finally`, as the checked test
+shows; “ephemeral” does not mean fire-and-forget.
 
-Destroy retires the world and removes its stored instance state. A typed test handle becomes unusable
-after its instance is destroyed. Cleanup belongs in `finally` so a failed assertion does not leave a
-world or plugin resources behind.
+[Seed test worlds](/seeding) covers successful and failed seeded transitions.
 
-## Persistence answers one question
+## Persistence answers only restart behavior
 
-Persistence controls whether an instance is restored when its runtime starts again. It does not
-change plugin behavior or the isolation boundary.
+Persistence determines whether the runtime restores an instance after restart. It does not change
+provider behavior or widen the isolation boundary.
 
-- The developer daemon creates `dev` as a persistent instance. Stopping and restarting the daemon
-  preserves its world until an explicit reset or destroy.
-- Test runtimes create ephemeral instances inside temporary runtime storage. Closing the test runtime
-  stops its server and removes the owned storage directory.
-- A remote test worker can also request an ephemeral instance from a runtime owned by another
-  process. The worker should still destroy that instance; ephemeral does not mean fire-and-forget.
+- `localhost dev` creates persistent `dev`; restarting the daemon preserves it until reset/destroy.
+- `createTestRuntime` creates ephemeral worlds inside owned temporary storage; closing the runtime
+  removes that storage after its instances are destroyed.
+- A remote worker can create an ephemeral world on a shared runtime but still owns its destruction.
 
-The owner model follows those scopes: a daemon owns its runtime, a suite or setup process owns a test
-runtime, and a test or worker owns the instances it creates. An instance owner should not close a
-runtime shared with other workers, and a runtime owner should not make individual tests guess which
-worlds are safe to destroy.
+The daemon or suite owns the runtime. A test or worker owns the instances it creates. An instance
+owner must not close a runtime shared by other workers.
 
 ## Where the boundary stops
 
-Instance isolation is sufficient when scenarios share one config and interact only through
-instance-aware API and operation routes. It is not sufficient when an external receiver cannot tell
-which instance caused a callback.
+Instances isolate state when every interaction is instance-aware. They do not isolate runtime-scoped
+plugin config or external application state.
 
-Event and webhook destinations are plugin configuration values. Creating another instance does not
-rewrite them. Parallel callback tests need an application-level routing rule, or separately
-configured runtimes with separate receivers.
+A callback URL defined in plugin config is shared by every instance of that mount. Creating another
+world does not add an instance header or rewrite that URL. Parallel callback tests need genuine
+provider-shaped correlation, serialization, or separately configured runtimes and receivers.
 
-Use a new instance for independent mutable state. Use a separate runtime when configuration itself
-must differ. [Configuration](/configuration) defines the shared template,
-[Integration testing](/testing) shows the ownership patterns in code, and
-[Callbacks and webhooks](/callbacks#parallel-receivers-require-a-routing-rule) gives the parallel
-receiver choices.
+Use another instance when mutable plugin state must differ. Use another runtime when configuration,
+ports, or callback receivers must differ. [Configuration](/configuration) defines the shared
+template, [Integration testing](/testing) defines ownership, and [Callbacks and
+webhooks](/callbacks#parallel-receivers-require-a-routing-rule) defines receiver routing.
