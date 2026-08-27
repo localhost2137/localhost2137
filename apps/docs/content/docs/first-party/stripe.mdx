@@ -1,13 +1,17 @@
 ---
 title: Stripe plugin
-description: Supported Stripe SDK resources, recurring billing, virtual-time renewal, webhooks, and limits.
+description: Supported Stripe SDK resources, recurring billing, virtual-time renewal, signed webhooks, and deliberate differences.
 ---
 
-`@localhost2137/stripe` implements a deterministic local Stripe account for the recurring-billing
-slice. It uses plugin-owned SQLite state, supports the official Node SDK through a small fetch
-adapter, and reconciles invoices and webhooks from explicit virtual-time advancement.
+`@localhost2137/stripe` models one deterministic Stripe account for a fixed recurring-billing slice.
+It persists customers, products, prices, subscriptions, invoices, events, and webhook attempts in
+SQLite. The useful workflow is deliberately narrow: create or seed a catalog, subscribe a customer,
+cross exact billing boundaries, and exercise the application's invoice webhook behavior.
 
-## Configure
+Use this page as a compatibility boundary. The plugin does not emulate general payment processing,
+and an SDK method resolving at runtime does not make an unlisted resource supported.
+
+## Configure and seed the account
 
 ```ts
 import { stripe } from "@localhost2137/stripe";
@@ -20,21 +24,59 @@ export default defineConfig({
       config: {
         secretKey: "sk_test_local",
         webhookSecret: "whsec_local",
-        webhookUrl: null,
+        webhookUrl: "http://127.0.0.1:3000/stripe/webhooks",
+      },
+      seed: {
+        customers: [
+          { id: "cus_ada", name: "Ada", email: "ada@example.test" },
+        ],
+        products: [{ id: "prod_pro", name: "Pro" }],
+        prices: [
+          { id: "price_pro", product: "prod_pro", unitAmount: 2500 },
+        ],
       },
     }),
   },
 });
 ```
 
-Connection values are `apiUrl`, `secretKey`, and `webhookSecret`; the environment projection is
-`STRIPE_API_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`.
+| Config field | Contract |
+| --- | --- |
+| `secretKey` | Required key beginning with `sk_test_`; used for API bearer authentication. |
+| `webhookSecret` | Required key beginning with `whsec_`; used to sign webhook bodies. |
+| `webhookUrl` | Absolute callback URL or `null`; defaults to `null`. No webhook delivery row is created when it is `null`. |
 
-## Use the official SDK
+Seed customers accept `name`, optional `email`, and optional `id`. Seed products accept `name` and
+optional `id`. Seed prices accept a product ID, a non-negative integer `unitAmount`, optional ID, and
+a lowercase three-letter `currency` that defaults to `usd`. Products are created before prices, so a
+seeded price can refer to a seeded product. Subscriptions, invoices, events, and delivery attempts
+cannot be seeded.
 
-Stripe's client fixes requests to `api.stripe.com`, while a localhost2137 service URL includes
-instance and service path segments. `createStripeSdkFetch` rewrites only that origin and preserves
-the SDK's request path and query:
+The seed is used only when instance creation requests it and is applied as one plugin transaction.
+An invalid product reference or record rolls back the Stripe seed. See [Seeding](/seeding) for the
+instance-level seed lifecycle and recovery rules.
+
+## Connection values
+
+Each instance exposes these typed values under `instance[serviceKey].connection`:
+
+| Value | Environment projection | Use |
+| --- | --- | --- |
+| `apiUrl` | `STRIPE_API_URL` | Instance-scoped service URL without `/v1`; pass it to the SDK fetch adapter or append an HTTP path. |
+| `secretKey` | `STRIPE_SECRET_KEY` | Bearer key for the local API. |
+| `webhookSecret` | `STRIPE_WEBHOOK_SECRET` | Secret shared with the application's webhook receiver. |
+
+The webhook destination is not a connection value. `webhookUrl` belongs to mount configuration, so
+all instances of this mount deliver to the same receiver. Event IDs are stable inside one instance
+but repeatable across instances; they do not route a shared receiver by themselves. Serialize such
+scenarios, use application data that genuinely distinguishes them, or configure separate runtimes.
+The runtime does not add an instance header or rewrite the URL.
+
+## Use the official Node SDK
+
+Stripe's Node client fixes requests to `api.stripe.com`, while a localhost2137 service URL contains
+instance and service path segments. `createStripeSdkFetch` replaces the request origin with that
+service URL and preserves its path, query, method, headers, and body:
 
 ```ts
 import { createStripeSdkFetch } from "@localhost2137/stripe";
@@ -50,34 +92,76 @@ const client = new Stripe(connection.secretKey, {
 const customer = await client.customers.create({ name: "Ada" });
 ```
 
-The adapter does not emulate SDK retry behavior. `maxNetworkRetries: 0` keeps application tests
-explicit and prevents SDK retries from obscuring plugin delivery behavior.
+The adapter accepts an HTTP or HTTPS service URL without a query or fragment. It performs routing
+only: it does not add resources, reshape responses, emulate idempotency, or implement SDK retry
+behavior. `maxNetworkRetries: 0` keeps application tests explicit and prevents a client retry from
+being confused with plugin webhook delivery.
+
+The repository integration example currently exercises Stripe Node 22.5.0 across customer and
+subscription creation, a 30-day renewal, and filtered invoice listing. Plugin compatibility tests
+cover the other routes and webhook behavior without claiming that the SDK exercises them all. That
+evidence covers those calls and that resolved client version; other SDK versions and methods remain
+unverified until exercised.
 
 ## Supported HTTP surface
 
-| Resource | Methods |
-| --- | --- |
-| customers | create, retrieve, list |
-| products | retrieve, list |
-| prices | retrieve, list |
-| subscriptions | create, retrieve, cancel |
-| invoices | retrieve, list |
+All routes require the exact `Authorization: Bearer <secretKey>` header. POST bodies must use
+`application/x-www-form-urlencoded`. List routes accept `limit` from 1 through 100 (default 10) and
+an opaque `starting_after` ID from the same resource collection. Results follow durable creation
+order.
 
-Requests use bearer authentication. POST bodies use Stripe's form encoding and list endpoints use
-deterministic opaque pagination. Products and prices are created through control operations in the
-current compatibility slice. Unsupported endpoints return the normal not-found response; the plugin
-does not pretend to implement general payment processing.
+| Method and path | Supported behavior |
+| --- | --- |
+| `POST /v1/customers` | Create a customer from required `name` and optional `email`. |
+| `GET /v1/customers/:id` | Retrieve one customer. |
+| `GET /v1/customers` | List customers with cursor pagination. |
+| `GET /v1/products/:id` | Retrieve one control-created or seeded product. |
+| `GET /v1/products` | List products with cursor pagination. |
+| `GET /v1/prices/:id` | Retrieve one control-created or seeded recurring price. |
+| `GET /v1/prices` | List prices with cursor pagination. |
+| `POST /v1/subscriptions` | Create one subscription from `customer` and `items[0][price]`; immediately create and pay its first invoice. |
+| `GET /v1/subscriptions/:id` | Retrieve one subscription and its single item. |
+| `DELETE /v1/subscriptions/:id` | Cancel immediately; a repeated cancellation returns the already canceled subscription. |
+| `GET /v1/invoices/:id` | Retrieve one invoice with its single line item. |
+| `GET /v1/invoices` | List invoices; optional `customer` and `subscription` filters combine with pagination. |
+
+Products and prices are intentionally read-only through HTTP in the current slice. Create them with
+seed data or control operations, then let the application use normal Stripe reads. Supported
+responses include the fields needed by the workflow above; they are not complete Stripe resource
+objects.
+
+Authentication failures return HTTP 401. Missing resources return 404, and invalid form or
+parameters return 400. Errors use Stripe-shaped
+`{ error: { code, message, param?, type: "invalid_request_error" } }` envelopes. Unsupported routes
+return not found rather than a plausible success.
 
 ## Control operations
 
-`createCustomer`, `createProduct`, `createPrice`, `createSubscription`, `listInvoices`, `listEvents`,
-and `setNextPaymentOutcome` arrange and inspect billing state. Public routes and operations share the
-same domain services and repositories.
+| Operation | Input and effect |
+| --- | --- |
+| `createCustomer` | Required `name`, optional `email`; returns the local customer. |
+| `createProduct` | Required `name`; creates an active product. |
+| `createPrice` | `productId`, non-negative integer `unitAmount`, optional `currency` (default `usd`); creates one active fixed recurring price. |
+| `createSubscription` | `customerId` and `priceId`; creates an active subscription, paid initial invoice, and `invoice.paid` event. |
+| `listInvoices` | Optional `customerId` and `subscriptionId`; returns matching invoices in creation order. |
+| `listEvents` | Optional type filter for `invoice.paid` or `invoice.payment_failed`; returns stable event IDs and invoice IDs. |
+| `setNextPaymentOutcome` | `subscriptionId` and `succeeded` or `failed`; consumes that choice once at the next renewal invoice. |
+
+HTTP routes and operations use the same account state, but they prove different boundaries. Arrange
+the catalog through operations, make customer or subscription calls through the application's SDK
+when those are the behavior under test, and use list operations for assertions. Discover the exact
+installed input and output schemas through scoped `describe` and operation-specific help; see
+[Using plugins](/plugins/using#inspect-the-live-control-contract).
+
+Control failures use localhost2137 codes such as `STRIPE_PRODUCT_MISSING` and
+`STRIPE_SUBSCRIPTION_CANCELED`. Application-facing HTTP returns the Stripe-shaped status and error
+envelope described above.
 
 ## Renewal through virtual time
 
-Every subscription uses an exact 30-day billing period. A positive advance creates each crossed
-invoice in stable order:
+Every subscription has one fixed-price item with quantity one and an exact 30-day period. Creation
+issues the first invoice immediately. Each positive time advance reconciles every crossed boundary
+in stable order, so one 90-day jump creates the same three renewal periods as three 30-day jumps:
 
 ```ts
 const product = await instance.stripe.createProduct({ name: "Pro" });
@@ -91,6 +175,10 @@ const subscription = await instance.stripe.createSubscription({
   priceId: price.id,
 });
 
+await instance.stripe.setNextPaymentOutcome({
+  subscriptionId: subscription.id,
+  outcome: "failed",
+});
 await instance.clock.advance("30d");
 
 const invoices = await instance.stripe.listInvoices({
@@ -98,9 +186,67 @@ const invoices = await instance.stripe.listInvoices({
 });
 ```
 
-Replaying one durable advance ID and window is idempotent. Canceled subscriptions do not renew.
+The forced failure is consumed once: it creates an open invoice and
+`invoice.payment_failed`; later invoices return to paid unless another outcome is set. Canceling a
+subscription stops future renewal but does not remove earlier invoices or events.
 
-Invoice events and webhook outbox rows commit in one transaction. Delivery is at least once: if the
-receiver observes a request and the process stops before local completion, restart may send the same
-event ID and byte-identical body again. Applications should deduplicate webhook events as they would
-with the real provider.
+The runtime gives every durable advance an identity. Replaying the same identity and time window is
+idempotent; replaying that identity with a different window is rejected. Invoice, event, next-period,
+and configured webhook-outbox changes commit in one transaction before delivery begins.
+
+## Webhook delivery and recovery
+
+When `webhookUrl` is configured, each invoice event produces one JSON POST with a stable event ID,
+`invoice.paid` or `invoice.payment_failed` type, embedded invoice object, and `Stripe-Signature`
+header. The event advertises the local API version `2026-08-20.localhost2137`; it does not claim a
+provider API version.
+
+An attempt has a three-second timeout and any 2xx response counts as success. An ordinary non-2xx,
+transport error, or timeout is recorded as a terminal failure; this plugin does not schedule a retry
+for it. `await instance.idle()` establishes that currently tracked delivery work settled, not that
+the receiver accepted it. Read the `Stripe webhook delivery completed.` plugin log when the outcome
+matters.
+
+There is one crash-recovery exception to the no-retry rule. If the receiver may have observed a
+request but the local attempt never committed success or failure, restart treats the durable row as
+pending and may send the same event ID and byte-identical body again. Applications should deduplicate
+on event ID when the scenario includes that ambiguity.
+
+The package exports a small verifier for the exact local signature:
+
+```ts
+import { verifyStripeWebhookSignature } from "@localhost2137/stripe";
+
+const valid = verifyStripeWebhookSignature({
+  body: rawRequestBody,
+  secret: connection.webhookSecret,
+  signature: stripeSignatureHeader,
+});
+```
+
+Pass the raw body, before JSON parsing. The helper verifies the HMAC digest only; it does not impose a
+timestamp replay window. A production handler that enforces recency should keep that policy and use a
+clock arrangement appropriate to the test.
+
+## Persistence and ordering
+
+Account resources, time-advance records, events, and webhook outcomes survive a persistent runtime
+restart. IDs and list order follow durable creation order, including when a seed supplies explicit
+IDs. Pinned and real-offset clock modes use the same exact 30-day billing arithmetic.
+
+Changing credentials or `webhookUrl` requires a runtime restart. Events created while `webhookUrl`
+was `null` have no pending delivery to replay later. A failed terminal webhook is not turned back into
+pending by changing configuration or restarting.
+
+## Deliberate differences
+
+The plugin does not implement payment methods, PaymentIntents, charges, Checkout, refunds, disputes,
+taxes, discounts, coupons, trials, prorations, metered usage, multiple subscription items,
+quantities other than one, calendar-month billing, collection retries or dunning, cancel-at-period-end,
+idempotency keys, expansions, API-version negotiation, OAuth, rate limits, or hosted dashboard
+behavior.
+
+Cancellation is immediate. A failed invoice remains open without automatic collection. Webhook
+delivery has the terminal and crash-recovery behavior documented above, not Stripe's full retry
+schedule. Deterministic local IDs and timestamps are suitable for repeatable tests but are not
+provider-issued values. Keep provider-facing checks for every behavior outside the supported tables.

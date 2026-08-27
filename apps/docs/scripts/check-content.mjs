@@ -201,6 +201,18 @@ assert(pluginUsing?.includes("not a compatibility manifest or health check"));
 assert(pluginUsing?.includes("A `seed_failed` instance remains addressable"));
 assert(pluginUsing?.includes("`stateVersion` describes durable storage only"));
 assert(pluginUsing?.includes("Do not use reset as a rollback"));
+const firstPartySlack = content.get("first-party/slack.mdx");
+assert(
+	firstPartySlack?.includes("Public Web API channel arguments deliberately require stored IDs"),
+);
+assert(firstPartySlack?.includes("There are at most four attempts"));
+assert(firstPartySlack?.includes("The tested client is `@slack/bolt` 5.0.0"));
+assert(firstPartySlack?.includes("Messages and pending deliveries cannot be seeded"));
+const firstPartyStripe = content.get("first-party/stripe.mdx");
+assert(firstPartyStripe?.includes("Products and prices are intentionally read-only through HTTP"));
+assert(firstPartyStripe?.includes("Stripe Node 22.5.0"));
+assert(firstPartyStripe?.includes("this plugin does not schedule a retry"));
+assert(firstPartyStripe?.includes("The helper verifies the HMAC digest only"));
 for (const [file, source] of content) {
 	for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
 		assert(

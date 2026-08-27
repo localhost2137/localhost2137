@@ -1,13 +1,17 @@
 ---
 title: Slack plugin
-description: Supported Slack Web API, Bolt wiring, workspace operations, signed events, and deliberate differences.
+description: Supported Slack Web API, Bolt wiring, workspace operations, signed events, retry behavior, and deliberate differences.
 ---
 
-`@localhost2137/slack` implements a stateful local Slack workspace with SQLite persistence, a tested
-Web API subset, control operations, and signed Events API callbacks. It is a concrete plugin built on
-the same runtime contract available to third parties.
+`@localhost2137/slack` models one stateful Slack workspace. It persists users, public channels,
+membership, messages, threads, and Events API delivery in SQLite. The supported surface is a coherent
+bot workflow, not a general Slack replacement: arrange a workspace, receive a signed message event,
+reply through Slack Bolt or the Web API, and inspect the resulting history.
 
-## Configure
+Use this page as a compatibility boundary. A method or field not listed here should be treated as
+unsupported even if another Slack client happens to accept the local response.
+
+## Configure and seed the workspace
 
 ```ts
 import { slack } from "@localhost2137/slack";
@@ -22,48 +26,107 @@ export default defineConfig({
         signingSecret: "local-signing-secret",
         eventsUrl: "http://127.0.0.1:3000/slack/events",
       },
+      seed: {
+        users: [{ id: "U_ADA", name: "Ada", admin: true }],
+        channels: [
+          { id: "C_GENERAL", name: "general", members: ["U_ADA"] },
+        ],
+      },
     }),
   },
 });
 ```
 
-`eventsUrl` defaults to `null`. Connection values are `apiUrl`, `botToken`, and `signingSecret`; the
-environment projection is `SLACK_API_URL`, `SLACK_BOT_TOKEN`, and `SLACK_SIGNING_SECRET`. `apiUrl`
-ends in `/api/` and can be passed directly to Slack Bolt as `clientOptions.slackApiUrl`.
+| Config field | Contract |
+| --- | --- |
+| `workspaceName` | Required non-empty name. It appears as the team name in `auth.test`. |
+| `botToken` | Required token beginning with `xoxb-`. It is the only Web API credential the plugin creates. |
+| `signingSecret` | Required non-empty secret used for Events API signatures. |
+| `eventsUrl` | Absolute callback URL or `null`; defaults to `null`. No event delivery is created when it is `null`. |
+
+Seed users accept `name`, optional `id`, and `admin` (default `false`). Seed channels accept `name`,
+optional `id`, and `members` (default empty). Users are created before channels, so each member can
+refer to a seeded user by ID or exact name. The configured bot is created independently and joins
+every channel automatically. Messages and pending deliveries cannot be seeded.
+
+The seed is used only when instance creation requests it. It is applied as one plugin transaction;
+an invalid member, duplicate name, or invalid channel rolls back the Slack seed. See
+[Seeding](/seeding) for the instance-level seed lifecycle and recovery rules.
+
+## Connection values
+
+Each instance exposes these typed values under `instance[serviceKey].connection`:
+
+| Value | Environment projection | Use |
+| --- | --- | --- |
+| `apiUrl` | `SLACK_API_URL` | Instance-scoped URL ending in `/api/`; pass it to Bolt as `clientOptions.slackApiUrl`. |
+| `botToken` | `SLACK_BOT_TOKEN` | Bearer token for the local installed bot. |
+| `signingSecret` | `SLACK_SIGNING_SECRET` | Secret shared with the application's Events receiver. |
+
+The callback destination is not a connection value. `eventsUrl` belongs to mount configuration, so
+all instances of this mount deliver to the same URL. Event IDs and workspace IDs are stable inside
+one instance but repeatable across instances; they do not route a shared receiver by themselves.
+Serialize such scenarios, use application data that genuinely distinguishes them, or configure
+separate runtimes. localhost2137 does not add an instance header.
 
 ## Supported Web API
 
-| Method | Supported behavior |
-| --- | --- |
-| `auth.test` | local workspace and installed bot identity |
-| `users.list` | installed bot and local users with stable cursor pagination |
-| `conversations.list` | public channels, membership, counts, and pagination |
-| `conversations.members` | channel member IDs with pagination |
-| `conversations.history` | newest-first messages, bounds, cursors, and thread fields |
-| `chat.postMessage` | bot messages, optional `thread_ts`, and event emission |
+All supported methods accept GET or POST. POST bodies may be JSON or
+`application/x-www-form-urlencoded`; query parameters are merged with the body. JSON values must be
+scalar. Authenticate with `Authorization: Bearer <bot token>` or a `token` field in a form body.
 
-Requests may use JSON or form-encoded POST bodies; list methods also accept query parameters. The
-configured bearer token is supported for every method, and a form-body token is accepted for SDK
-compatibility. Recognized Slack failures use HTTP 200 with `{ ok: false, error }`.
+| Method | Supported inputs and behavior |
+| --- | --- |
+| `auth.test` | Returns the configured workspace and installed bot identity. |
+| `users.list` | Returns the bot and local users in creation order; accepts `limit` and `cursor`. |
+| `conversations.list` | Returns public channels, membership, and member counts; accepts `types=public_channel`, `exclude_archived`, `limit`, and `cursor`. All local channels are unarchived. |
+| `conversations.members` | Requires an exact channel ID; returns member IDs with `limit` and `cursor`. |
+| `conversations.history` | Requires an exact channel ID and bot membership; returns newest-first messages. Supports `oldest`, `latest`, `inclusive`, `limit`, and `cursor`. |
+| `chat.postMessage` | Requires an exact channel ID, bot membership, non-blank `text`, and optional valid `thread_ts`; persists a bot message and emits an event when `eventsUrl` is configured. |
+
+Limits are integers from 1 through 999 and default to 100. Cursors are opaque and bound to the
+method and filters that produced them; do not reuse one across a different list or history window.
+History bounds use Slack `seconds.microseconds` timestamps and are exclusive unless `inclusive` is
+true.
+
+Public Web API channel arguments deliberately require stored IDs. Control operations accept IDs or
+exact names because they are a privileged test interface; production-style HTTP does not get that
+shortcut. This difference catches application code that sends a channel name where Slack expects an
+ID.
+
+Recognized Slack failures use HTTP 200 with `{ ok: false, error }`. Supported codes include
+authentication, missing argument, invalid cursor or limit, missing channel, and membership errors.
+Unknown routes are not evidence of Slack compatibility; only the methods above have response and
+state-transition coverage.
 
 ## Control operations
 
-| Operation | Use |
-| --- | --- |
-| `createUser` | Create a user with an optional admin flag. |
-| `createChannel` | Create a public channel; the installed bot joins automatically. |
-| `addUserToChannel` | Add a user by ID or exact name, idempotently. |
-| `sendMessage` | Simulate a member message and enqueue an Events callback. |
-| `listMessages` | Inspect newest-first persisted messages. |
+Use operations to arrange an external actor, trigger inbound application behavior, and inspect the
+world. Use the Web API through the application for behavior the application itself owns.
 
-Example setup and trigger:
+| Operation | Input and effect |
+| --- | --- |
+| `createUser` | `name`, optional `admin`; returns the allocated user. Names are case-sensitive, trimmed, and limited to 80 characters. |
+| `createChannel` | `name`; normalizes it to lowercase, creates one public channel, and joins the bot. Valid names contain 1–80 letters, numbers, `_`, or `-`. |
+| `addUserToChannel` | `channel` and `user`, each an ID or exact name; returns `added: false` when membership already exists. |
+| `sendMessage` | `channel`, `from`, `text`, optional `threadTs`; requires membership and returns the persisted message plus `eventId`, which is `null` when delivery is disabled. |
+| `listMessages` | `channel`, optional `limit` from 1 through 999; returns newest-first persisted messages without delivery metadata. |
+
+The generated CLI uses kebab-case operation names. Discover the installed schemas before scripting
+them:
 
 ```sh
-localhost exec slack create-user --name Ada --json
-localhost exec slack create-channel --name general --json
-localhost exec slack add-user-to-channel --channel general --user Ada --json
-localhost exec slack send-message --channel general --from Ada --text ping --json
+localhost_service_key="slack"
+pnpm exec localhost exec "$localhost_service_key" --help
+pnpm exec localhost exec "$localhost_service_key" create-user --name Ada --json
+pnpm exec localhost exec "$localhost_service_key" create-channel --name general --json
+pnpm exec localhost exec "$localhost_service_key" add-user-to-channel --channel general --user Ada --json
+pnpm exec localhost exec "$localhost_service_key" send-message --channel general --from Ada --text ping --json
 ```
+
+Control failures use localhost2137 error codes such as `SLACK_CHANNEL_NOT_FOUND`,
+`SLACK_NOT_IN_CHANNEL`, and `SLACK_NAME_TAKEN`. The same domain rule reached through the Web API uses
+Slack's `{ ok: false, error }` response instead.
 
 ## Bolt wiring
 
@@ -78,26 +141,58 @@ const app = new App({
 });
 ```
 
-The repository's `examples/slack-ping-bot` test receives a correctly signed `message` event, replies
-through Bolt's normal `chat.postMessage` path, waits for tracked delivery, and observes the persisted
-`pong` through `listMessages`.
+`endpoints` configures the application's receiver path. The plugin's `eventsUrl` must point to that
+listening path before the test triggers a message. The tested client is `@slack/bolt` 5.0.0. The
+example receives a signed `message` event, replies through Bolt's normal `chat.postMessage` path,
+waits for plugin delivery work, and observes `pong` through `listMessages`. That evidence covers this
+workflow and client version, not every Bolt feature or Slack method.
 
 ## Events and retries
 
-Each message event has a stable ID and compact body. The plugin signs it with the configured secret
-and sends Slack timestamp/signature headers through tracked runtime fetch. Attempt outcome and the
-next deadline are persisted.
+`sendMessage` and `chat.postMessage` each enqueue one `event_callback` when `eventsUrl` is configured.
+The body contains a stable `event_id`, workspace and authorization metadata, and a compact `message`
+event with channel, user, text, and timestamp. Thread replies include `thread_ts`; bot-authored
+messages also include `bot_id` and `subtype: "bot_message"`.
 
-Retries are bounded: one immediate retry, then retries after one and five minutes. There is no
-wall-clock scheduler, so due retries run during a later positive virtual-time advance. A receiver can
-suppress remaining retries with `X-Slack-No-Retry: 1`.
+Every attempt includes `X-Slack-Request-Timestamp` and an `X-Slack-Signature` computed from the exact
+body. The default attempt timeout is three seconds, and any 2xx response counts as success. The
+plugin persists the attempt outcome and logs its event ID, attempt number, outcome, status, and next
+deadline where applicable.
 
-Use real clock mode with Bolt's default callback replay-window check. In pinned-time signature tests,
-verify the supplied virtual timestamp directly.
+There are at most four attempts: the initial attempt, one retry due immediately, then retries due
+after one minute and five minutes. There is no wall-clock scheduler. A due retry runs only during a
+later positive virtual-time advance; any positive advance can run the immediately due retry. Retry
+requests include `X-Slack-Retry-Num` and `X-Slack-Retry-Reason`. A non-2xx receiver response can stop
+the sequence with `X-Slack-No-Retry: 1`.
+
+Call `await instance.idle()` after the trigger to wait for the initial tracked delivery. A failed
+attempt is still a failed test signal even though its retry was recorded; inspect plugin logs, fix or
+advance according to the scenario, and do not replace that boundary with a sleep. Later retry
+deadlines are not part of the current idle set.
+
+Bolt checks callback timestamps against the real clock by default. Use real clock mode for an
+ordinary Bolt integration test. A pinned historical instant is useful for exact signature fixtures,
+but the receiver must then verify the supplied virtual timestamp under an explicit test policy.
+
+## Persistence and ordering
+
+Users, channels, membership, messages, and delivery attempts survive a persistent runtime restart.
+Local IDs are allocated in durable creation order. Message timestamps start from the instance clock
+and increase by at least one microsecond, so several messages created at one pinned instant remain
+unique and newest-first pagination remains stable.
+
+Changing `workspaceName` or `botToken` takes effect when the runtime restarts: the stored bot and
+workspace identities remain, while their configured name or credential is updated. Changing
+`eventsUrl` does not retroactively create deliveries for messages written while it was `null`.
 
 ## Deliberate differences
 
-The plugin does not implement HTTPS, OAuth, scopes, rate limits, enterprise/grid, DMs, private
-channels, files, reactions, rich blocks or attachments, presence, search, or message editing and
-deletion. Public channels are the only accepted conversation type. Local IDs and timestamps use
-deterministic database sequences, and only the configured bot receives a token.
+The plugin supports public channels and message events only. It does not implement HTTPS, OAuth,
+scopes, rate limits, enterprise/grid, direct messages, private or shared channels, files, reactions,
+blocks or attachments, presence, search, message editing or deletion, interactive components, slash
+commands, or socket mode.
+
+Only the configured bot has a token. Control operations can act as local members so a test can
+trigger an inbound event, but those users cannot authenticate to the Web API. IDs and timestamps are
+deterministic local values. Treat provider behavior outside the tables above as unsupported and keep
+a provider-facing check when it matters to the application.
