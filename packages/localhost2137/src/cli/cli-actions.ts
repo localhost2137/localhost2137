@@ -5,6 +5,12 @@ export interface CliDevOptions {
 	readonly port?: number;
 }
 
+export interface CliProjectInitialization {
+	readonly gitignore: "created" | "unchanged" | "updated";
+	readonly needsPackageManifest: boolean;
+	readonly needsRuntimeDependency: boolean;
+}
+
 export interface CliActions {
 	advanceClock(instanceId: string, duration: string): Promise<unknown>;
 	clockStatus(instanceId: string): Promise<unknown>;
@@ -23,6 +29,7 @@ export interface CliActions {
 			serviceKey: string;
 		}>,
 	): Promise<unknown>;
+	initProject(): Promise<CliProjectInitialization>;
 	listInstances(): Promise<unknown>;
 	logs(
 		input: Readonly<{ instanceId: string; serviceKey?: string; tail: number }>,

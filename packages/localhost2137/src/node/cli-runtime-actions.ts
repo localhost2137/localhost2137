@@ -19,6 +19,7 @@ import { runDevCommand } from "./dev-command.js";
 import { startDevDaemon } from "./dev-daemon.js";
 import { createDevProjectRuntime } from "./dev-runtime-dependencies.js";
 import { inspectProjectRuntime } from "./runtime-doctor.js";
+import { initializeProject } from "./project-initializer.js";
 
 export interface NodeCliActionsInput {
 	readonly configPath?: string;
@@ -101,6 +102,7 @@ export function createNodeCliActions(
 			forTarget(instanceId, ({ client }) =>
 				client.executeOperation(instanceId, serviceKey, operationKey, ownJsonValue(operationInput)),
 			),
+		initProject: () => initializeProject(input.cwd),
 		listInstances: async () => (await session()).client.listInstances(),
 		logs: ({ instanceId, serviceKey, tail }) =>
 			forTarget(instanceId, ({ client }) =>

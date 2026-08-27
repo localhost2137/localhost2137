@@ -73,6 +73,47 @@ describe("CLI command program", () => {
 		expect(fixture.actions.advanceClock).toHaveBeenCalledWith("review", "30d");
 	});
 
+	it("initializes a project without loading a runtime config", async () => {
+		const fixture = cliFixture();
+		fixture.actions.initProject.mockResolvedValue({
+			gitignore: "updated",
+			needsPackageManifest: true,
+			needsRuntimeDependency: true,
+		});
+		const createActions = vi.fn(() => fixture.actions);
+
+		const exitCode = await runCliCommand({
+			arguments: ["init"],
+			createActions,
+			defaultInstance: "dev",
+			io: fixture.io,
+		});
+
+		expect(exitCode).toBe(0);
+		expect(createActions).toHaveBeenCalledWith({});
+		expect(fixture.actions.initProject).toHaveBeenCalledOnce();
+		expect(fixture.stdout).toBe(
+			"Created localhost.config.ts\nUpdated .gitignore\n\nNext:\n  pnpm init\n  pnpm add -D localhost2137\n  Add an emulator plugin to localhost.config.ts, then run:\n  pnpm exec localhost dev\n",
+		);
+		expect(fixture.stderr).toBe("");
+	});
+
+	it("rejects a config selector for project initialization", async () => {
+		const fixture = cliFixture();
+
+		const exitCode = await runCliCommand({
+			arguments: ["--config", "elsewhere.ts", "init"],
+			createActions: () => fixture.actions,
+			defaultInstance: "dev",
+			io: fixture.io,
+		});
+
+		expect(exitCode).toBe(2);
+		expect(fixture.actions.initProject).not.toHaveBeenCalled();
+		expect(fixture.stdout).toBe("");
+		expect(fixture.stderr).toContain("--config does not apply to localhost init");
+	});
+
 	it("passes run argv directly and returns the child exit code", async () => {
 		const fixture = cliFixture();
 		fixture.actions.run.mockResolvedValue(17);
@@ -321,6 +362,11 @@ function cliFixture(): CliFixture {
 			format === "json" ? '{"FIXTURE_URL":"http://local"}\n' : 'FIXTURE_URL="http://local"\n',
 		),
 		execute: vi.fn(async () => ({ ok: true })),
+		initProject: vi.fn(async () => ({
+			gitignore: "unchanged",
+			needsPackageManifest: false,
+			needsRuntimeDependency: false,
+		})),
 		listInstances: vi.fn(async () => [{ id: "dev" }]),
 		logs: vi.fn(async () => ({ droppedEntries: 0, entries: [] })),
 		resetInstance: vi.fn(async () => ({ id: "review" })),

@@ -17,6 +17,7 @@ interface CliActionBootstrap {
 
 interface DispatchCliInput extends Omit<RunCliInput, "createActions"> {
 	readonly actions: CliActions;
+	readonly configPath?: string;
 }
 
 /** Parses one invocation with fresh Commander state and returns, but never exits, the process. */
@@ -31,6 +32,7 @@ export async function runCliCommand(input: RunCliInput): Promise<number> {
 		const dispatchInput: DispatchCliInput = {
 			actions,
 			arguments: bootstrap.arguments,
+			...(bootstrap.configPath === undefined ? {} : { configPath: bootstrap.configPath }),
 			defaultInstance: input.defaultInstance,
 			io: input.io,
 		};
@@ -86,6 +88,28 @@ async function runStatic(input: DispatchCliInput): Promise<number> {
 				...(options.host === undefined ? {} : { host: options.host }),
 				...(options.port === undefined ? {} : { port: options.port }),
 			});
+		});
+
+	program
+		.command("init")
+		.description("create a minimal localhost2137 project config")
+		.action(async () => {
+			if (input.configPath !== undefined) {
+				throw new CliUsageError("--config does not apply to localhost init.");
+			}
+			const result = await input.actions.initProject();
+			input.io.writeOutput("Created localhost.config.ts\n");
+			input.io.writeOutput(
+				result.gitignore === "unchanged"
+					? ".gitignore already ignores .localhost2137/\n"
+					: `${result.gitignore === "created" ? "Created" : "Updated"} .gitignore\n`,
+			);
+			input.io.writeOutput("\nNext:\n");
+			if (result.needsPackageManifest) input.io.writeOutput("  pnpm init\n");
+			if (result.needsRuntimeDependency) input.io.writeOutput("  pnpm add -D localhost2137\n");
+			input.io.writeOutput(
+				"  Add an emulator plugin to localhost.config.ts, then run:\n  pnpm exec localhost dev\n",
+			);
 		});
 
 	addBootstrapHelp(program.command("describe"))
