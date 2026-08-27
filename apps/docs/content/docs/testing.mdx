@@ -216,11 +216,15 @@ export async function runWorkerScenario(connection: WorkerRuntimeConnection) {
 }
 ```
 
-The helper does not treat a rejected or cancelled create request as proof that no instance exists.
-Because the worker chose the ID before sending the request, it always attempts reconciliation after
-the create request settles. It ignores only a `ControlApiError` with `INSTANCE_NOT_FOUND`. A genuine
-cleanup failure is reported; when setup or the scenario also failed, an `AggregateError` preserves
-that primary failure first and reports cleanup alongside it.
+A create `ControlApiError` is an authoritative server rejection. The helper rethrows it without
+running the scenario or destroying that ID; an `INSTANCE_CONFLICT` may refer to a pre-existing world
+the worker does not own. A transport or protocol failure leaves the outcome uncertain because the
+server may have committed creation before the response was lost. The helper then reconciles the ID
+the worker selected before the request.
+
+After a successful or uncertain create outcome, cleanup ignores only a `ControlApiError` with
+`INSTANCE_NOT_FOUND`. Any other cleanup failure is reported. When setup or the scenario also failed,
+an `AggregateError` preserves that primary failure first and reports cleanup alongside it.
 
 The remote client is intentionally untyped. The worker must use operation keys and JSON inputs from
 the installed plugin's actual inventory; it must not guess them from this counter example. Abortable

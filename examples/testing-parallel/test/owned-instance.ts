@@ -6,20 +6,33 @@ type Outcome<Value> =
 	| Readonly<{ ok: true; value: Value }>
 	| Readonly<{ cause: unknown; ok: false }>;
 
-/** Own one known worker instance ID across uncertain control responses. */
+/** Own one known worker instance ID without deleting an authoritative conflict. */
 export async function withOwnedInstance<Value>(
 	runtime: InstanceOwnerClient,
 	instanceId: string,
 	use: () => Promise<Value>,
 ): Promise<Value> {
-	let primary: Outcome<Value>;
 	try {
 		await runtime.createInstance({ id: instanceId, persistence: "ephemeral" });
+	} catch (cause) {
+		if (cause instanceof ControlApiError) throw cause;
+		return finishOwnership(runtime, instanceId, { cause, ok: false });
+	}
+
+	let primary: Outcome<Value>;
+	try {
 		primary = { ok: true, value: await use() };
 	} catch (cause) {
 		primary = { cause, ok: false };
 	}
+	return finishOwnership(runtime, instanceId, primary);
+}
 
+async function finishOwnership<Value>(
+	runtime: InstanceOwnerClient,
+	instanceId: string,
+	primary: Outcome<Value>,
+): Promise<Value> {
 	const cleanup = await destroyIfPresent(runtime, instanceId);
 	if (!primary.ok) {
 		if (!cleanup.ok) {

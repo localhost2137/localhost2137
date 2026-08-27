@@ -6,9 +6,11 @@ file creates and destroys its own ephemeral, path-isolated instance through `loc
 After mutation, workers rendezvous through a test-harness-owned filesystem barrier and then re-read
 their unique values. Global teardown closes the sole runtime and removes both temporary roots.
 
-Each worker chooses its instance ID before creation and attempts destruction even when the create
-response is lost. Cleanup ignores only a confirmed `INSTANCE_NOT_FOUND`; any other cleanup error is
-reported alongside the primary setup or scenario failure.
+Each worker chooses its instance ID before creation. A create API error is authoritative and is
+re-thrown without destroying that ID, which may already belong to another owner. A lost or malformed
+response is uncertain, so the worker attempts reconciliation. Cleanup ignores only a confirmed
+`INSTANCE_NOT_FOUND`; any other cleanup error is reported alongside the primary setup or scenario
+failure.
 
 Run it from the repository root:
 
