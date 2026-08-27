@@ -109,6 +109,13 @@ assert(!diagnosing?.includes("`task`, `lifecycle`"));
 const cli = content.get("cli.mdx");
 assert(cli?.includes("request, operation, delivery, and plugin logs"));
 assert(!cli?.includes("request, operation, lifecycle"));
+const virtualTime = content.get("virtual-time.mdx");
+assert(virtualTime?.includes("Task tracking is a separate concern"));
+assert(virtualTime?.includes("`01s`"));
+assert(virtualTime?.includes("safe integer of milliseconds"));
+assert(virtualTime?.includes("In real mode, they add 60 days"));
+assert(virtualTime?.includes("does not expose the underlying cause"));
+assert(!virtualTime?.includes("Fix the reported plugin"));
 for (const file of ["cli.mdx", "diagnosing.mdx", "plugins/first-plugin.mdx", "virtual-time.mdx"]) {
 	for (const fence of content.get(file)?.matchAll(/```sh\n([\s\S]*?)```/g) ?? []) {
 		assert(

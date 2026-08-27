@@ -3,9 +3,10 @@ title: Virtual time and asynchronous work
 description: Advance instance clocks deliberately, observe reconciled service behavior, and wait at the correct completion boundary without wall-clock sleeps.
 ---
 
-Every instance owns a durable clock. Plugins read emulator time through `ctx.clock.now()` and may
-reconcile documented time-derived behavior when that clock advances. The application, SDK, operating
-system, and untracked plugin code still use their own clocks unless they provide another seam.
+Every instance owns a durable clock. Plugin code sees instance time only when it reads
+`ctx.clock.now()`; code that reads `Date.now()`, an SDK clock, or another source still sees that
+source. Task tracking is a separate concern: it controls which work the runtime waits for and which
+failures it surfaces, not which clock the work reads.
 
 Virtual time is therefore useful only when the behavior under test belongs to a plugin and the
 installed plugin says that advancement drives it.
@@ -69,13 +70,17 @@ expect(advanced).toMatchObject({
 expect(advanced.advanceId.length).toBeGreaterThan(0);
 ```
 
-Durations are positive whole values followed by `ms`, `s`, `m`, `h`, `d`, or `w`. Values such as
-`1.5h`, `0s`, `-1d`, and `1month` are rejected. There is no month or year unit because their length
-depends on a calendar. A plugin may define a fixed business interval—such as the first-party Stripe
-plugin's exact 30-day recurring period—but that is plugin behavior, not duration syntax.
+Durations are positive whole values without leading zeroes followed by `ms`, `s`, `m`, `h`, `d`, or
+`w`. Values such as `01s`, `1.5h`, `0s`, `-1d`, and `1month` are rejected. A syntactically valid
+duration must also fit in a safe integer of milliseconds, and advancing it must keep the clock inside
+the JavaScript `Date` range. There is no month or year unit because their length depends on a
+calendar. A plugin may define a fixed business interval—such as the first-party Stripe plugin's
+exact 30-day recurring period—but that is plugin behavior, not duration syntax.
 
-An advance adds the requested duration. It does not set an absolute timestamp. Two successful
-`advance("30d")` calls move the clock by 60 days and receive different advance IDs.
+An advance adds the requested duration. It does not set an absolute timestamp. In pinned mode, two
+successful `advance("30d")` calls move the clock by exactly 60 days. In real mode, they add 60 days
+to its persisted offset while wall time continues to pass. Every successful call receives a
+different advance ID.
 
 ## What a successful advance includes
 
@@ -134,7 +139,7 @@ already moved. Its error details contain `advanceId`, `from`, `to`, `mode`, and
 
 | Error state | Meaning | Next action |
 | --- | --- | --- |
-| `reconciliationPending: true` | At least one service has not acknowledged the committed window. | Fix the reported plugin, delivery, cancellation, or configuration cause. A persistent instance resumes pending work during restart before becoming ready; calling advance again in the running daemon with the original duration resumes the same window. |
+| `reconciliationPending: true` | At least one service has not acknowledged the committed window. | Identify and fix the cause from available delivery or plugin evidence, project configuration, and current state. A persistent instance resumes pending work during restart before becoming ready; calling advance again in the running daemon with the original duration resumes the same window. |
 | `reconciliationPending: false` | Reconciliation completed, but a storage operation reported a durability warning after committing. | Inspect current clock and service state. Do not repeat the duration as a repair. |
 | A different error code | The committed-mutation contract does not apply. | Read the error and current clock status before deciding whether anything moved. |
 
@@ -143,9 +148,12 @@ creating a second window. If an unacknowledged service was removed from config, 
 service configuration and restart so the existing window can finish. Do not reset or delete the
 world merely to hide a pending transition.
 
-The CLI prints the committed error and its boundary-scoped correlation ID. Programmatic control
-clients expose the structured details on `ControlApiError`. Use those details and current clock
-status instead of inferring recovery from the duration you originally requested.
+The public error has a generic message and does not expose the underlying cause or create a
+lifecycle log entry. The CLI prints that message and its boundary-scoped correlation ID;
+programmatic control clients also expose the window details on `ControlApiError`. Use available
+delivery and plugin evidence, project configuration, and current state to investigate. Use the
+window details and current clock status instead of inferring recovery from the duration you
+originally requested.
 
 [Diagnose a failing scenario](/diagnosing#treat-asynchronous-failures-as-evidence) explains committed
 mutations alongside lifecycle conflicts and boundary-scoped logs.
