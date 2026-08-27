@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const placeholderPackageBins = Object.freeze(
+	new Map([
+		["create-localhost2137", "create-localhost2137"],
+		["create-localhost2137-plugin", "create-localhost2137-plugin"],
+	]),
+);
 
 function runPnpm(arguments_, workingDirectory = repositoryRoot, stdio = "inherit") {
 	const result = spawnSync(pnpmExecutable, arguments_, {
@@ -118,6 +124,21 @@ function assertTarballDependencies({ label, packageDependencies, packageNames, w
 		const installedTarball = resolveFileDependency(installed?.resolved, workingDirectory);
 		if (!expectedTarball || installedTarball !== expectedTarball) {
 			throw new Error(`${label} ${packageName} did not resolve from its generated tarball`);
+		}
+	}
+}
+
+async function assertPlaceholderPackages(consumerDirectory) {
+	for (const [packageName, binName] of placeholderPackageBins) {
+		const manifest = await readJson(
+			join(consumerDirectory, "node_modules", packageName, "package.json"),
+		);
+		if (manifest.bin?.[binName] !== "./bin.js") {
+			throw new Error(`Packed ${packageName} does not declare bin.${binName}`);
+		}
+		const result = runPnpm(["exec", binName], consumerDirectory, ["ignore", "pipe", "pipe"]);
+		if (result.stdout.toString() !== "To be implemented\n" || result.stderr.length !== 0) {
+			throw new Error(`Packed ${packageName} did not print its exact placeholder output`);
 		}
 	}
 }
@@ -263,6 +284,15 @@ async function main() {
 			throw new Error("pnpm did not discover any non-root workspace packages");
 		}
 		const packageNames = workspacePackages.map(({ manifest }) => manifest.name);
+		const importablePackageNames = workspacePackages
+			.filter(({ manifest }) => {
+				if (manifest.exports !== undefined) return true;
+				if (placeholderPackageBins.has(manifest.name)) return false;
+				throw new Error(
+					`Packaged workspace ${manifest.name} has neither public exports nor a recognized CLI-only contract`,
+				);
+			})
+			.map(({ manifest }) => manifest.name);
 		const workspacePackageNames = new Set(packageNames);
 		const packageDependencies = {};
 		const peerDependencies = {};
@@ -346,10 +376,10 @@ async function main() {
 			}
 		}
 
-		const imports = packageNames.map(
+		const imports = importablePackageNames.map(
 			(name, index) => `import * as package${index} from ${JSON.stringify(name)};`,
 		);
-		const bindings = packageNames.map((_, index) => `package${index}`).join(", ");
+		const bindings = importablePackageNames.map((_, index) => `package${index}`).join(", ");
 		if (!packageNames.includes("localhost2137")) {
 			throw new Error("Package smoke requires the localhost2137 host package");
 		}
@@ -668,6 +698,7 @@ void packedPlugin({ config: { token: "fixture" } });
 			packageNames,
 			workingDirectory: consumerDirectory,
 		});
+		await assertPlaceholderPackages(consumerDirectory);
 		const installedHostManifest = await readJson(
 			join(consumerDirectory, "node_modules/localhost2137/package.json"),
 		);

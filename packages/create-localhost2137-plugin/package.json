@@ -1,0 +1,18 @@
+{
+	"name": "create-localhost2137-plugin",
+	"version": "0.0.0",
+	"description": "Plugin creator for localhost2137.",
+	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
+	"bin": {
+		"create-localhost2137-plugin": "./bin.js"
+	},
+	"files": [
+		"bin.js"
+	],
+	"publishConfig": {
+		"access": "public"
+	}
+}
