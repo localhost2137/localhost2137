@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import GithubSlugger from "github-slugger";
 import { markdownRouteForPage, rewriteLLMIndexLinks } from "../lib/markdown-routes.ts";
 
 const docsRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,13 +59,28 @@ for (const file of files) {
 	assert(/^title:\s+\S.+$/m.test(frontmatter), `${file} must have a specific title.`);
 	assert(/^description:\s+\S.+$/m.test(frontmatter), `${file} must have a useful description.`);
 	assert(!/\b(lorem ipsum|revolutionary|game[- ]changing|best[- ]in[- ]class)\b/i.test(source));
+}
 
-	for (const match of source.matchAll(/\]\((\/[^\s)#?]+)(?:#[^)]+)?\)/g)) {
+const headingIdsByPage = new Map(
+	[...expectedPages].map(([file, pageUrl]) => [
+		pageUrl,
+		collectHeadingIds(content.get(file) ?? ""),
+	]),
+);
+for (const [file, source] of content) {
+	const prose = withoutFencedCode(source);
+	for (const match of prose.matchAll(/\]\((\/[^\s)#?]*)(?:#([^\s)]+))?\)/g)) {
 		const target = match[1];
 		assert(
 			pageUrls.has(target) || target === "/llms.txt" || target === "/llms-full.txt",
 			`${file} links to unknown internal page ${target}.`,
 		);
+		if (match[2]) assertInternalFragment(file, target, match[2], headingIdsByPage);
+	}
+	const ownPageUrl = expectedPages.get(file);
+	assert(ownPageUrl, `${file} has no expected page URL.`);
+	for (const match of prose.matchAll(/\]\(#([^\s)]+)\)/g)) {
+		assertInternalFragment(file, ownPageUrl, match[1], headingIdsByPage);
 	}
 }
 
@@ -131,6 +147,8 @@ assert(testing?.includes("It does not discover or attach to `localhost dev`"));
 assert(testing?.includes("private bearer token for crossing a process boundary"));
 assert(testing?.includes("`TestRuntimeCleanupError`"));
 assert(testing?.includes("Clock advancement is a stronger transition"));
+assert(testing?.includes("it always attempts reconciliation after"));
+assert(testing?.includes("ignores only a `ControlApiError` with `INSTANCE_NOT_FOUND`"));
 assert(testing?.includes("The remote client is intentionally untyped"));
 assert(!testing?.includes("one instance per test worker process, all on different ports"));
 const virtualTime = content.get("virtual-time.mdx");
@@ -290,7 +308,7 @@ for (const route of [
 }
 
 process.stdout.write(
-	`Validated ${files.length} docs pages, navigation links, docs-first commands, Glass wiring, skills references, and Markdown route mapping.\n`,
+	`Validated ${files.length} docs pages, navigation and fragment links, docs-first commands, Glass wiring, skills references, and Markdown route mapping.\n`,
 );
 
 async function listFiles(directory) {
@@ -302,6 +320,40 @@ async function listFiles(directory) {
 		}),
 	);
 	return nested.flat();
+}
+
+function collectHeadingIds(source) {
+	const slugger = new GithubSlugger();
+	return new Set(
+		[...withoutFencedCode(source).matchAll(/^#{1,6}\s+(.+?)\s*#*\s*$/gm)].map((match) =>
+			slugger.slug(visibleHeadingText(match[1])),
+		),
+	);
+}
+
+function withoutFencedCode(source) {
+	return source.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, "");
+}
+
+function visibleHeadingText(source) {
+	return source
+		.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+		.replace(/<[^>]+>/g, "");
+}
+
+function assertInternalFragment(sourceFile, target, encodedFragment, headingIdsByPage) {
+	let fragment;
+	try {
+		fragment = decodeURIComponent(encodedFragment);
+	} catch {
+		assert.fail(`${sourceFile} contains invalid encoded fragment #${encodedFragment}.`);
+	}
+	const headingIds = headingIdsByPage.get(target);
+	assert(
+		headingIds?.has(fragment),
+		`${sourceFile} links to missing internal heading ${target}#${fragment}.`,
+	);
 }
 
 function codeUnitOrder(left, right) {

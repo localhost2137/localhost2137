@@ -7,7 +7,9 @@
 		"node": ">=24"
 	},
 	"scripts": {
-		"test": "vitest run --config vitest.config.ts",
+		"test": "pnpm test:ownership && pnpm test:workers",
+		"test:ownership": "vitest run --config vitest.ownership.config.ts",
+		"test:workers": "vitest run --config vitest.config.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
 	},
 	"devDependencies": {

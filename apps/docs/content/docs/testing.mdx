@@ -198,6 +198,7 @@ unique ephemeral instance, and destroys only that instance:
 ```ts
 import { randomUUID } from "node:crypto";
 import { connectRuntime } from "localhost2137/client";
+import { withOwnedInstance } from "./owned-instance.js";
 
 interface WorkerRuntimeConnection {
   readonly token: string;
@@ -207,22 +208,19 @@ interface WorkerRuntimeConnection {
 export async function runWorkerScenario(connection: WorkerRuntimeConnection) {
   const runtime = connectRuntime(connection);
   const instanceId = `worker-${randomUUID()}`;
-  let created = false;
 
-  try {
-    await runtime.createInstance({
-      id: instanceId,
-      persistence: "ephemeral",
-    });
-    created = true;
-
+  await withOwnedInstance(runtime, instanceId, async () => {
     await runtime.executeOperation(instanceId, "counter", "increment", { by: 1 });
     await runtime.idle(instanceId);
-  } finally {
-    if (created) await runtime.destroyInstance(instanceId);
-  }
+  });
 }
 ```
+
+The helper does not treat a rejected or cancelled create request as proof that no instance exists.
+Because the worker chose the ID before sending the request, it always attempts reconciliation after
+the create request settles. It ignores only a `ControlApiError` with `INSTANCE_NOT_FOUND`. A genuine
+cleanup failure is reported; when setup or the scenario also failed, an `AggregateError` preserves
+that primary failure first and reports cleanup alongside it.
 
 The remote client is intentionally untyped. The worker must use operation keys and JSON inputs from
 the installed plugin's actual inventory; it must not guess them from this counter example. Abortable
