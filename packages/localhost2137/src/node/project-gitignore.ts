@@ -1,6 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { CliUsageError } from "../cli/cli-errors.js";
 import {
+	appendNoFollowFlags,
 	assertOwnedProjectFile,
 	createOwnedProjectFile,
 	type FileIdentity,
@@ -11,7 +12,7 @@ import {
 	type OwnedProjectFile,
 	type ProjectInitFileHandle,
 	type ProjectInitFileSystem,
-	readWriteNoFollowFlags,
+	readOnlyNoFollowFlags,
 	sameFileSnapshot,
 } from "./project-init-file.js";
 
@@ -21,7 +22,7 @@ const MAX_BYTES = 1024 * 1024;
 interface ExistingProjectGitignore {
 	append?: Uint8Array;
 	closed: boolean;
-	readonly handle: ProjectInitFileHandle;
+	handle: ProjectInitFileHandle;
 	readonly identity: FileIdentity;
 	readonly original: Uint8Array;
 	readonly snapshot: BigIntStats;
@@ -44,7 +45,7 @@ export async function inspectProjectGitignore(
 	assertRegularBounded(pathSnapshot);
 	let handle: ProjectInitFileHandle;
 	try {
-		handle = await fileSystem.open(path, readWriteNoFollowFlags());
+		handle = await fileSystem.open(path, readOnlyNoFollowFlags());
 	} catch (cause) {
 		throw new CliUsageError(".gitignore changed while localhost init was opening it.", { cause });
 	}
@@ -102,8 +103,21 @@ export async function commitProjectGitignore(
 	const append = planAppend(gitignore.original);
 	if (append.byteLength === 0) return "unchanged";
 	await assertUnchanged(gitignore, fileSystem);
+	const writeHandle = await openAppendHandle(gitignore, fileSystem);
+	try {
+		await gitignore.handle.close();
+		gitignore.handle = writeHandle;
+	} catch (cause) {
+		await writeHandle.close().catch((cleanup: unknown) => {
+			throw new AggregateError(
+				[cause, cleanup],
+				"Opening .gitignore for append and closing its read handle both failed.",
+			);
+		});
+		throw cause;
+	}
 	gitignore.append = append;
-	await writeAll(gitignore.handle, append, gitignore.original.byteLength);
+	await writeAll(gitignore.handle, append);
 	await gitignore.handle.sync();
 	await validateProjectGitignore(gitignore, fileSystem);
 	return "updated";
@@ -138,9 +152,16 @@ export async function validateProjectGitignore(
 
 export async function rollbackProjectGitignore(
 	gitignore: ExistingProjectGitignore,
+	fileSystem: ProjectInitFileSystem,
 ): Promise<unknown[]> {
 	if (!gitignore.append) return [];
 	try {
+		const pathMetadata = await lstatIfPresent(gitignore.path, fileSystem);
+		if (!pathMetadata || !hasIdentity(pathMetadata, gitignore.identity)) {
+			throw new Error(
+				".gitignore moved or was replaced after localhost init appended its entry; refusing to truncate it.",
+			);
+		}
 		if (
 			!(await handleBytesEqual(gitignore.handle, concatenate(gitignore.original, gitignore.append)))
 		) {
@@ -154,6 +175,40 @@ export async function rollbackProjectGitignore(
 		return [];
 	} catch (cause) {
 		return [cause];
+	}
+}
+
+async function openAppendHandle(
+	gitignore: ExistingProjectGitignore,
+	fileSystem: ProjectInitFileSystem,
+): Promise<ProjectInitFileHandle> {
+	let handle: ProjectInitFileHandle;
+	try {
+		handle = await fileSystem.open(gitignore.path, appendNoFollowFlags());
+	} catch (cause) {
+		throw new CliUsageError(".gitignore is not writable; localhost init left it unchanged.", {
+			cause,
+		});
+	}
+	try {
+		const handleMetadata = await handle.stat();
+		const pathMetadata = await lstatIfPresent(gitignore.path, fileSystem);
+		if (
+			!pathMetadata ||
+			!sameFileSnapshot(handleMetadata, gitignore.snapshot) ||
+			!hasIdentity(pathMetadata, gitignore.identity)
+		) {
+			throw changedGitignore();
+		}
+		return handle;
+	} catch (cause) {
+		await handle.close().catch((cleanup: unknown) => {
+			throw new AggregateError(
+				[cause, cleanup],
+				"Revalidating .gitignore and closing its append handle both failed.",
+			);
+		});
+		throw cause;
 	}
 }
 
@@ -207,19 +262,10 @@ async function readAtMost(handle: ProjectInitFileHandle, limit: number): Promise
 	return bytes.slice(0, offset);
 }
 
-async function writeAll(
-	handle: ProjectInitFileHandle,
-	bytes: Uint8Array,
-	position: number,
-): Promise<void> {
+async function writeAll(handle: ProjectInitFileHandle, bytes: Uint8Array): Promise<void> {
 	let offset = 0;
 	while (offset < bytes.byteLength) {
-		const { bytesWritten } = await handle.write(
-			bytes,
-			offset,
-			bytes.byteLength - offset,
-			position + offset,
-		);
+		const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset, null);
 		if (bytesWritten === 0) throw new Error("Writing .gitignore made no progress.");
 		offset += bytesWritten;
 	}

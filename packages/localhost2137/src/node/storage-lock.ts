@@ -4,6 +4,8 @@ import { type FileHandle, mkdir, open, readdir, rmdir, unlink } from "node:fs/pr
 import { resolve } from "node:path";
 import type { StoragePaths } from "./storage-paths.js";
 
+type StorageLockPaths = Pick<StoragePaths, "lock" | "root">;
+
 const LOCK_SCHEMA_VERSION = 1;
 const OWNER_TOKEN_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
 
@@ -98,7 +100,7 @@ export class StorageLock {
 }
 
 export async function acquireStorageLock(
-	paths: StoragePaths,
+	paths: StorageLockPaths,
 	options: StorageLockOptions = {},
 ): Promise<StorageLock> {
 	const fileSystem = options.fileSystem ?? nodeStorageLockFileSystem;

@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineOperation } from "../../src/authoring/operation.js";
 import type { CliActions, CliIo } from "../../src/cli/cli-actions.js";
+import { CliUsageError } from "../../src/cli/cli-errors.js";
 import { runCliCommand } from "../../src/cli/command-program.js";
 import { ownCliServiceDescription } from "../../src/cli/service-description.js";
 import { createOperationMetadata } from "../../src/config/schema-metadata.js";
 import { ControlApiError, ControlTransportError } from "../../src/control/control-client-errors.js";
-import { CliUsageError } from "../../src/cli/cli-errors.js";
 
 describe("CLI command program", () => {
 	it("emits valid stdout-only JSON for every --json command", async () => {

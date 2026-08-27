@@ -4,9 +4,17 @@ import type { CliProjectInitialization } from "../cli/cli-actions.js";
 import { CliUsageError } from "../cli/cli-errors.js";
 import { CONFIG_FILE_NAMES } from "../config/config-discovery.js";
 import {
+	closeProjectGitignore,
+	commitProjectGitignore,
+	inspectProjectGitignore,
+	type ProjectGitignore,
+	rollbackProjectGitignore,
+	validateProjectGitignore,
+} from "./project-gitignore.js";
+import {
+	assertOwnedProjectFile,
 	closeOwnedProjectFile,
 	createOwnedProjectFile,
-	assertOwnedProjectFile,
 	hasCode,
 	hasIdentity,
 	lstatIfPresent,
@@ -17,16 +25,7 @@ import {
 	removeOwnedProjectFile,
 	withCleanup,
 } from "./project-init-file.js";
-import {
-	closeProjectGitignore,
-	commitProjectGitignore,
-	inspectProjectGitignore,
-	type ProjectGitignore,
-	rollbackProjectGitignore,
-	validateProjectGitignore,
-} from "./project-gitignore.js";
 import { acquireStorageLock, type StorageLock } from "./storage-lock.js";
-import type { StoragePaths } from "./storage-paths.js";
 
 const CONFIG_FILE_NAME = "localhost.config.ts";
 const CONFIG_CONTENT = `import { defineConfig } from "localhost2137";\n\nexport default defineConfig({\n\tservices: {},\n});\n`;
@@ -107,20 +106,16 @@ async function createConfig(
 }
 
 async function acquireInitLock(root: string, ownerToken: string): Promise<StorageLock> {
-	const paths: StoragePaths = {
-		controlToken: join(root, ".localhost2137.init-control-token"),
-		instances: join(root, ".localhost2137.init-instances"),
+	const paths = {
 		lock: join(root, LOCK_FILE_NAME),
 		root,
-		runtime: join(root, ".localhost2137.init-runtime"),
-		trash: join(root, ".localhost2137.init-trash"),
 	};
 	try {
 		return await acquireStorageLock(paths, { ownerToken: () => ownerToken });
 	} catch (cause) {
 		if (isStorageLockFailure(cause)) {
 			throw new CliUsageError(
-				`Another localhost init may be running. If not, remove ${LOCK_FILE_NAME} and retry.`,
+				`Another localhost init may be running. If not, remove the ${LOCK_FILE_NAME} directory and retry.`,
 				{ cause },
 			);
 		}
@@ -176,7 +171,7 @@ async function rollbackScaffold(
 ): Promise<unknown[]> {
 	const failures: unknown[] = [];
 	if (gitignore && "handle" in gitignore) {
-		failures.push(...(await rollbackProjectGitignore(gitignore)));
+		failures.push(...(await rollbackProjectGitignore(gitignore, fileSystem)));
 	}
 	if (gitignore && !("handle" in gitignore) && gitignore.created) {
 		failures.push(...(await removeOwnedProjectFile(gitignore.created, fileSystem)));

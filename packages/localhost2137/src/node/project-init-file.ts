@@ -18,7 +18,7 @@ export interface ProjectInitFileHandle {
 		buffer: Uint8Array,
 		offset: number,
 		length: number,
-		position: number,
+		position: number | null,
 	): Promise<Readonly<{ bytesWritten: number }>>;
 	writeFile(content: string): Promise<void>;
 }
@@ -178,8 +178,12 @@ export function hasCode(value: unknown, expected: string): boolean {
 	);
 }
 
-export function readWriteNoFollowFlags(): number {
-	return constants.O_RDWR | noFollowFlag();
+export function appendNoFollowFlags(): number {
+	return constants.O_APPEND | constants.O_RDWR | noFollowFlag();
+}
+
+export function readOnlyNoFollowFlags(): number {
+	return constants.O_RDONLY | noFollowFlag();
 }
 
 async function unlinkOwnedPath(

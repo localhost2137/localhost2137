@@ -1,9 +1,11 @@
 import { constants } from "node:fs";
 import {
+	appendFile,
+	chmod,
 	type FileHandle,
 	lstat,
-	mkdtemp,
 	mkdir,
+	mkdtemp,
 	open,
 	readFile,
 	rename,
@@ -112,6 +114,34 @@ describe("project initializer", () => {
 		);
 	});
 
+	it("does not require write access when the exact ignore directive is already final", async () => {
+		const project = await temporaryProject();
+		const path = join(project, ".gitignore");
+		await writeFile(path, ".localhost2137/\n", "utf8");
+		await chmod(path, 0o444);
+
+		await expect(initializeProject(project)).resolves.toEqual({ gitignore: "unchanged" });
+		await expect(readFile(path, "utf8")).resolves.toBe(".localhost2137/\n");
+		await expect(readFile(join(project, "localhost.config.ts"), "utf8")).resolves.toContain(
+			"defineConfig",
+		);
+	});
+
+	it("rolls config back when a read-only gitignore needs an update", async () => {
+		const project = await temporaryProject();
+		const path = join(project, ".gitignore");
+		await writeFile(path, "node_modules/\n", "utf8");
+		await chmod(path, 0o444);
+
+		await expect(initializeProject(project)).rejects.toMatchObject({
+			message: expect.stringContaining("not writable"),
+		});
+		await expect(readFile(path, "utf8")).resolves.toBe("node_modules/\n");
+		await expect(readFile(join(project, "localhost.config.ts"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
+
 	it("rejects every canonical config alias, including directories and symlinks", async () => {
 		expect(CONFIG_FILE_NAMES).toEqual([
 			"localhost.config.ts",
@@ -202,6 +232,29 @@ describe("project initializer", () => {
 		});
 	});
 
+	it("uses append semantics when another writer grows the retained gitignore", async () => {
+		const project = await temporaryProject();
+		const path = join(project, ".gitignore");
+		await writeFile(path, "node_modules/\n", "utf8");
+		let appended = false;
+		const fileSystem = injectedFileSystem({
+			async beforeHandleWrite(openedPath) {
+				if (openedPath === path && !appended) {
+					appended = true;
+					await appendFile(path, "external-writer/\n", "utf8");
+				}
+			},
+		});
+
+		await expect(initializeProject(project, { fileSystem })).rejects.toBeInstanceOf(AggregateError);
+		await expect(readFile(path, "utf8")).resolves.toBe(
+			"node_modules/\nexternal-writer/\n.localhost2137/\n",
+		);
+		await expect(readFile(join(project, "localhost.config.ts"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
+
 	it("revalidates all aliases after exclusive config creation", async () => {
 		const project = await temporaryProject();
 		const configPath = join(project, "localhost.config.ts");
@@ -280,6 +333,41 @@ describe("project initializer", () => {
 		});
 	});
 
+	it("refuses to truncate a moved gitignore during rollback", async () => {
+		const project = await temporaryProject();
+		const path = join(project, ".gitignore");
+		const retired = join(project, "retired-ignore");
+		const replacement = join(project, "replacement-ignore");
+		await writeFile(path, "original/\n", "utf8");
+		await writeFile(replacement, "replacement/\n", "utf8");
+		let failedSync = false;
+		let pathStats = 0;
+		const fileSystem = injectedFileSystem({
+			async beforeHandleSync(openedPath) {
+				if (openedPath === path && !failedSync) {
+					failedSync = true;
+					throw new Error("primary sync failure");
+				}
+			},
+			async beforeLstat(observedPath) {
+				if (observedPath === path && ++pathStats === 5) {
+					await rename(path, retired);
+					await rename(replacement, path);
+				}
+			},
+		});
+
+		const failure = await initializeProject(project, { fileSystem }).catch(
+			(cause: unknown) => cause,
+		);
+		expect(flattenErrors(failure)).toEqual([
+			expect.objectContaining({ message: "primary sync failure" }),
+			expect.objectContaining({ message: expect.stringContaining("moved or was replaced") }),
+		]);
+		await expect(readFile(path, "utf8")).resolves.toBe("replacement/\n");
+		await expect(readFile(retired, "utf8")).resolves.toBe("original/\n.localhost2137/\n");
+	});
+
 	it("reports committed config when its directory sync cannot be confirmed", async () => {
 		const project = await temporaryProject();
 		let directorySyncs = 0;
@@ -327,6 +415,7 @@ interface FileSystemHooks {
 	readonly beforeDirectorySync?: (path: string) => Promise<void>;
 	readonly beforeHandleSync?: (path: string) => Promise<void>;
 	readonly beforeHandleTruncate?: (path: string) => Promise<void>;
+	readonly beforeHandleWrite?: (path: string) => Promise<void>;
 	readonly beforeLstat?: (path: string) => Promise<void>;
 	readonly beforeOpen?: (path: string, flags: number) => Promise<void>;
 }
@@ -368,7 +457,10 @@ function injectedHandle(
 			await hooks.beforeHandleTruncate?.(path);
 			await handle.truncate(length);
 		},
-		write: (buffer, offset, length, position) => handle.write(buffer, offset, length, position),
+		async write(buffer, offset, length, position) {
+			await hooks.beforeHandleWrite?.(path);
+			return handle.write(buffer, offset, length, position);
+		},
 		writeFile: (content) => handle.writeFile(content, "utf8"),
 	};
 }
