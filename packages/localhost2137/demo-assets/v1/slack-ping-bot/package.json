@@ -16,11 +16,11 @@
 		"undici": "7.29.0"
 	},
 	"devDependencies": {
-		"@localhost2137/slack": "0.0.0",
+		"@localhost2137/slack": "0.0.1",
 		"@types/express": "5.0.6",
 		"@types/node": "24.13.3",
 		"hono": "4.13.4",
-		"localhost2137": "0.0.0",
+		"localhost2137": "0.0.1",
 		"tsx": "4.23.12",
 		"typescript": "6.0.3",
 		"vitest": "4.1.11",

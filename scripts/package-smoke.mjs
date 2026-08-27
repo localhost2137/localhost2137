@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,9 +13,15 @@ const placeholderPackageBins = Object.freeze(
 	]),
 );
 
-function runPnpm(arguments_, workingDirectory = repositoryRoot, stdio = "inherit") {
+function runPnpm(
+	arguments_,
+	workingDirectory = repositoryRoot,
+	stdio = "inherit",
+	environment,
+) {
 	const result = spawnSync(pnpmExecutable, arguments_, {
 		cwd: workingDirectory,
+		...(environment === undefined ? {} : { env: environment }),
 		stdio,
 	});
 
@@ -29,6 +35,28 @@ function runPnpm(arguments_, workingDirectory = repositoryRoot, stdio = "inherit
 	}
 
 	return result;
+}
+
+function cleanRoomPnpmEnvironment() {
+	const environment = { ...process.env };
+	for (const name of Object.keys(environment)) {
+		const normalizedName = name.toLowerCase();
+		if (
+			name.startsWith("npm_package_") ||
+			name.startsWith("npm_lifecycle_") ||
+			name === "INIT_CWD" ||
+			normalizedName === "npm_command" ||
+			normalizedName === "npm_config_filter" ||
+			normalizedName === "npm_config_recursive" ||
+			normalizedName.startsWith("npm_config_workspace") ||
+			name === "PNPM_PACKAGE_NAME" ||
+			name === "PNPM_SCRIPT_SRC_DIR" ||
+			name === "PNPM_WORKSPACE_DIR"
+		) {
+			delete environment[name];
+		}
+	}
+	return environment;
 }
 
 async function readJson(path) {
@@ -106,12 +134,19 @@ function assertRegistrySafeDemoManifest(manifest) {
 	}
 }
 
-function assertTarballDependencies({ label, packageDependencies, packageNames, workingDirectory }) {
-	const installedResult = runPnpm(["list", "--depth", "0", "--json"], workingDirectory, [
-		"ignore",
-		"pipe",
-		"inherit",
-	]);
+function assertTarballDependencies({
+	environment,
+	label,
+	packageDependencies,
+	packageNames,
+	workingDirectory,
+}) {
+	const installedResult = runPnpm(
+		["list", "--depth", "0", "--json"],
+		workingDirectory,
+		["ignore", "pipe", "inherit"],
+		environment,
+	);
 	const [installedProject] = JSON.parse(installedResult.stdout.toString());
 	for (const packageName of packageNames) {
 		const installed =
@@ -128,8 +163,9 @@ function assertTarballDependencies({ label, packageDependencies, packageNames, w
 	}
 }
 
-async function assertPlaceholderPackages(consumerDirectory) {
+async function assertPlaceholderPackages(consumerDirectory, availablePackages) {
 	for (const [packageName, binName] of placeholderPackageBins) {
+		if (!availablePackages.has(packageName)) continue;
 		const manifest = await readJson(
 			join(consumerDirectory, "node_modules", packageName, "package.json"),
 		);
@@ -192,13 +228,14 @@ async function preparePackedDemoFixture({ consumerDirectory, packageDependencies
 	return { fixtureManifest, packageNames: packedPackages.map(({ name }) => name) };
 }
 
-function runPackedDemoClone({ consumerDirectory, installedBinPath }) {
+function runPackedDemoClone({ cloneParentDirectory, installedBinPath }) {
 	const cloneResult = spawnSync(
 		process.execPath,
 		[installedBinPath, "demo", "clone", "slack-ping-bot"],
 		{
-			cwd: consumerDirectory,
+			cwd: cloneParentDirectory,
 			encoding: "utf8",
+			env: cleanRoomPnpmEnvironment(),
 			stdio: ["ignore", "pipe", "pipe"],
 		},
 	);
@@ -223,6 +260,7 @@ function runPackedDemoClone({ consumerDirectory, installedBinPath }) {
 
 async function verifyClonedDemo({
 	demoDirectory,
+	environment,
 	fixtureManifest,
 	packageDependencies,
 	packageNames,
@@ -238,6 +276,7 @@ async function verifyClonedDemo({
 	);
 
 	assertTarballDependencies({
+		environment,
 		label: "Cloned demo dependency",
 		packageDependencies,
 		packageNames,
@@ -245,8 +284,8 @@ async function verifyClonedDemo({
 	});
 }
 
-async function assertNoDemoCloneOwnershipEntries(consumerDirectory) {
-	const leftovers = (await readdir(consumerDirectory)).filter((entry) =>
+async function assertNoDemoCloneOwnershipEntries(cloneParentDirectory) {
+	const leftovers = (await readdir(cloneParentDirectory)).filter((entry) =>
 		entry.startsWith(".localhost2137.demo-clone-"),
 	);
 	if (leftovers.length > 0) {
@@ -254,18 +293,39 @@ async function assertNoDemoCloneOwnershipEntries(consumerDirectory) {
 	}
 }
 
-async function smokePackedDemoClone({ consumerDirectory, installedBinPath, packageDependencies }) {
+async function smokePackedDemoClone({
+	cloneParentDirectory,
+	consumerDirectory,
+	installedBinPath,
+	packageDependencies,
+}) {
 	const { fixtureManifest, packageNames } = await preparePackedDemoFixture({
 		consumerDirectory,
 		packageDependencies,
 	});
-	runPackedDemoClone({ consumerDirectory, installedBinPath });
+	await assertMissing(
+		join(cloneParentDirectory, "pnpm-workspace.yaml"),
+		"Packed demo clean-room parent unexpectedly contained a pnpm workspace",
+	);
+	runPackedDemoClone({ cloneParentDirectory, installedBinPath });
 
-	const demoDirectory = join(consumerDirectory, "slack-ping-bot");
-	await verifyClonedDemo({ demoDirectory, fixtureManifest, packageDependencies, packageNames });
-	runPnpm(["typecheck"], demoDirectory);
-	runPnpm(["test"], demoDirectory);
-	await assertNoDemoCloneOwnershipEntries(consumerDirectory);
+	const demoDirectory = join(cloneParentDirectory, "slack-ping-bot");
+	const cleanRoomEnvironment = cleanRoomPnpmEnvironment();
+	await verifyClonedDemo({
+		demoDirectory,
+		environment: cleanRoomEnvironment,
+		fixtureManifest,
+		packageDependencies,
+		packageNames,
+	});
+	await readFile(join(demoDirectory, "pnpm-lock.yaml"));
+	const installedDirectory = await lstat(join(demoDirectory, "node_modules"));
+	if (!installedDirectory.isDirectory()) {
+		throw new Error("Packed demo install did not create a cwd-local node_modules directory");
+	}
+	runPnpm(["typecheck"], demoDirectory, "inherit", cleanRoomEnvironment);
+	runPnpm(["test"], demoDirectory, "inherit", cleanRoomEnvironment);
+	await assertNoDemoCloneOwnershipEntries(cloneParentDirectory);
 }
 
 async function main() {
@@ -274,9 +334,15 @@ async function main() {
 	try {
 		const tarballDirectory = join(temporaryRoot, "tarballs");
 		const consumerDirectory = join(temporaryRoot, "consumer");
+		const demoCloneDirectory = join(temporaryRoot, "demo-clone");
 		const consumerStoreDirectory = join(temporaryRoot, "pnpm-store");
 		await mkdir(tarballDirectory);
 		await mkdir(consumerDirectory);
+		await mkdir(demoCloneDirectory);
+		await assertMissing(
+			join(temporaryRoot, "pnpm-workspace.yaml"),
+			"Package-smoke temporary root unexpectedly contained a pnpm workspace",
+		);
 
 		const rootManifest = await readJson(join(repositoryRoot, "package.json"));
 		const workspacePackages = await discoverWorkspacePackages();
@@ -665,7 +731,7 @@ void packedPlugin({ config: { token: "fixture" } });
 		);
 		await writeFile(
 			join(consumerDirectory, "pnpm-workspace.yaml"),
-			"allowBuilds:\n  better-sqlite3: true\n  esbuild: true\n",
+			'packages:\n  - "."\n\nallowBuilds:\n  better-sqlite3: true\n  esbuild: true\n',
 		);
 		await writeFile(
 			join(consumerDirectory, "consumer.ts"),
@@ -698,7 +764,7 @@ void packedPlugin({ config: { token: "fixture" } });
 			packageNames,
 			workingDirectory: consumerDirectory,
 		});
-		await assertPlaceholderPackages(consumerDirectory);
+		await assertPlaceholderPackages(consumerDirectory, workspacePackageNames);
 		const installedHostManifest = await readJson(
 			join(consumerDirectory, "node_modules/localhost2137/package.json"),
 		);
@@ -730,6 +796,7 @@ void packedPlugin({ config: { token: "fixture" } });
 			throw new Error("Installed localhost binary did not render CLI help");
 		}
 		await smokePackedDemoClone({
+			cloneParentDirectory: demoCloneDirectory,
 			consumerDirectory,
 			installedBinPath,
 			packageDependencies,

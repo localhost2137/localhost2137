@@ -1,6 +1,6 @@
 {
 	"name": "@localhost2137/plugin-testkit",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"type": "module",
 	"engines": {
 		"node": ">=24"
@@ -23,7 +23,7 @@
 		"typecheck:fixtures": "tsc -p tsconfig.type-fixtures.json --pretty false"
 	},
 	"peerDependencies": {
-		"localhost2137": "0.0.0"
+		"localhost2137": "0.0.1"
 	},
 	"devDependencies": {
 		"hono": "4.13.4",
