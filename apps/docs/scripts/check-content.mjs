@@ -182,6 +182,67 @@ assert(runtimeInterfacesSkill.includes("primary failure first and as `cause`"));
 const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));
 
+const gettingStarted = content.get("getting-started.mdx");
+assert(gettingStarted, "Getting started content is missing.");
+const crashCourseConfig = await readFile(
+	join(repositoryRoot, "examples/getting-started/localhost.config.ts"),
+	"utf8",
+);
+const crashCourseApp = await readFile(
+	join(repositoryRoot, "examples/getting-started/src/read-workspace.ts"),
+	"utf8",
+);
+const crashCourseOwnedTest = await readFile(
+	join(repositoryRoot, "examples/getting-started/test/owned-runtime.test.ts"),
+	"utf8",
+);
+const configBlock = titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig);
+assert(
+	gettingStarted.includes(configBlock),
+	"Getting started config must match the executable example.",
+);
+assert.equal(
+	gettingStarted.match(/```[^\n]*\n/)?.[0],
+	'```ts title="localhost.config.ts"\n',
+	"The complete localhost.config.ts must be the first getting-started artifact.",
+);
+assert(
+	gettingStarted.includes(titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp)),
+	"Getting started application must match the executable example.",
+);
+assert(
+	gettingStarted.includes(
+		titledCodeBlock("ts", "test/owned-runtime.test.ts", crashCourseOwnedTest),
+	),
+	"Getting started owned test must match the executable example.",
+);
+let previousCrashCourseStep = -1;
+for (const step of [
+	configBlock,
+	"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3 vitest",
+	"pnpm exec localhost dev",
+	"pnpm exec localhost seed",
+	titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp),
+	"pnpm exec localhost env --format json",
+	"pnpm exec localhost run -- pnpm dev",
+	"pnpm exec localhost describe slack --json",
+	"pnpm exec localhost exec slack send-message",
+	"pnpm exec localhost instance create review --seed",
+	"pnpm exec localhost clock advance 1h --instance review --json",
+	titledCodeBlock("ts", "test/owned-runtime.test.ts", crashCourseOwnedTest),
+]) {
+	const position = gettingStarted.indexOf(step);
+	assert(
+		position > previousCrashCourseStep,
+		`Getting started step is missing or out of order: ${step}`,
+	);
+	previousCrashCourseStep = position;
+}
+assert(gettingStarted.includes("not a provider-issued API key"));
+assert(gettingStarted.includes("control token never enters the application process"));
+assert(gettingStarted.includes("The Slack setup above has no time-driven work"));
+assert(gettingStarted.includes("same plugin config and callback destination"));
+
 const diagnosing = content.get("diagnosing.mdx");
 assert(diagnosing?.includes("serialized diagnostic identifies the selected config path"));
 assert(!/\bLOCK(?:ED|_STALE|_CORRUPT)\b/.test(diagnosing ?? ""));
@@ -608,6 +669,10 @@ function assertInternalFragment(sourceFile, target, encodedFragment, headingIdsB
 
 function codeUnitOrder(left, right) {
 	return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function titledCodeBlock(language, title, source) {
+	return `\`\`\`${language} title="${title}"\n${source.trimEnd()}\n\`\`\``;
 }
 
 async function assertMissing(path) {

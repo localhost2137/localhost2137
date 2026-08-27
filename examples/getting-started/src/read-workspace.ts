@@ -1,9 +1,6 @@
 type UsersListResponse =
-	| Readonly<{
-			members: readonly Readonly<{ id: string; name: string }>[];
-			ok: true;
-	  }>
-	| Readonly<{ error: string; ok: false }>;
+	| { members: Array<{ id: string; name: string }>; ok: true }
+	| { error: string; ok: false };
 
 const apiUrl = requiredEnvironment("SLACK_API_URL");
 const botToken = requiredEnvironment("SLACK_BOT_TOKEN");
