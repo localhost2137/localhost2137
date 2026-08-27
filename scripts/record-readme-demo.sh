@@ -7,7 +7,6 @@ asset_directory="$repository_root/docs/assets"
 cast_path="$asset_directory/localhost2137-slack-demo.cast"
 gif_path="$asset_directory/localhost2137-slack-demo.gif"
 session_root="/tmp/localhost2137-readme-demo"
-owner_marker="$session_root/.localhost2137-readme-demo-owner"
 session_created=false
 
 for command_name in agg asciinema node pnpm; do
@@ -33,7 +32,7 @@ assert_port_available() {
 }
 
 cleanup() {
-	if [[ "$session_created" == true && -f "$owner_marker" ]]; then
+	if [[ "$session_created" == true ]]; then
 		rm -rf -- "$session_root"
 	fi
 }
@@ -42,13 +41,11 @@ trap cleanup EXIT HUP INT TERM
 assert_port_available 2137
 assert_port_available 3000
 
-if [[ -e "$session_root" ]]; then
+mkdir -p "$asset_directory"
+if ! mkdir "$session_root"; then
 	printf 'Refusing to replace existing recording directory: %s\n' "$session_root" >&2
 	exit 1
 fi
-
-mkdir -p "$asset_directory" "$session_root"
-printf 'owned by scripts/record-readme-demo.sh\n' >"$owner_marker"
 session_created=true
 
 cat <<'INSTRUCTIONS'
@@ -86,6 +83,9 @@ asciinema record \
 	--title "localhost2137: local Slack ping-pong" \
 	--window-size 92x28 \
 	"$cast_path"
+
+assert_port_available 2137
+assert_port_available 3000
 
 if LC_ALL=C grep -aEq '/Users/|/home/|sk_live_|ghp_' "$cast_path"; then
 	printf 'Recording contains a machine path or credential-shaped value; refusing to render.\n' >&2
