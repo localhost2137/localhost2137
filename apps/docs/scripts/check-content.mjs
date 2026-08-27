@@ -197,6 +197,7 @@ const crashCourseOwnedTest = await readFile(
 	"utf8",
 );
 const configBlock = titledCodeBlock("ts", "localhost.config.ts", crashCourseConfig);
+const storageIgnoreBlock = titledCodeBlock("text", ".gitignore", ".localhost2137/\n");
 assert(
 	gettingStarted.includes(configBlock),
 	"Getting started config must match the executable example.",
@@ -220,6 +221,7 @@ let previousCrashCourseStep = -1;
 for (const step of [
 	configBlock,
 	"pnpm add -D localhost2137 @localhost2137/slack hono@^4.13.4 zod@^4.4.3 vitest",
+	storageIgnoreBlock,
 	"pnpm exec localhost dev",
 	"pnpm exec localhost seed",
 	titledCodeBlock("ts", "src/read-workspace.ts", crashCourseApp),
