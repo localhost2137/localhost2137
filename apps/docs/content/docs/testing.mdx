@@ -186,7 +186,7 @@ fire-and-forget work has violated the authoring contract, and `idle()` cannot re
 Clock advancement is a stronger transition. `await instance.clock.advance(duration)` returns only
 after every configured service has reconciled the committed window and its tracked work. Do not add
 sleeps around virtual-time assertions. [Virtual time and asynchronous work](/virtual-time) explains
-committed-window failures and [Callbacks and outbound delivery](/callbacks) defines tracked delivery.
+committed-window failures and [Callbacks and webhooks](/callbacks) defines tracked delivery.
 
 ## Share one runtime across worker processes
 

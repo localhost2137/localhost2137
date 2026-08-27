@@ -40,7 +40,7 @@ Seeding is explicit. `createInstance()` and `reset()` default to an empty world.
 
 These runtime commands exist in the current public CLI:
 
-```sh
+```text
 localhost dev
 localhost describe [service] --json
 localhost exec <service> --help

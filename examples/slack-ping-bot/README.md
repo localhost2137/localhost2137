@@ -5,9 +5,6 @@ SDK. The bot receives a correctly signed Events API `message` callback, replies 
 normal Web API client, and is tested entirely against localhost2137. It needs no Slack account,
 workspace, OAuth flow, or real credentials.
 
-The example is an ESM package (`"type": "module"`). Empty apps created by `pnpm init` must add that
-field before using a TypeScript `localhost.config.ts`, or use `localhost.config.mjs` instead.
-
 ```sh
 pnpm --filter @localhost2137/example-slack-ping-bot test
 ```

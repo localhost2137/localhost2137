@@ -43,7 +43,7 @@ import. Stdout and stderr are independently required to stay empty, while the re
 IPC. From the first output byte, each stream retains only a byte count and a 256-byte diagnostic
 sample, terminates the child, and never includes the sample in assertion text. Child termination has
 its own deadline, and the temporary cwd is always cleaned up. This operational check cannot detect
-effects that are completely reversed before the second snapshot, short-lived detached work,
+effects that are completely reversed before the second observation, short-lived detached work,
 concealed external-system writes, or resources Node does not report.
 
 Durability uses the declared CLI config module and a testkit-owned process, free port, storage root,

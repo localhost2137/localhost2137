@@ -138,6 +138,29 @@ assert(agents?.includes("skills/use-localhost2137"));
 assert(agents?.includes("skills/build-localhost2137-plugin"));
 assert(agents?.includes("There is no automatic skill installer"));
 
+const skillDirectories = [
+	join(repositoryRoot, "skills/use-localhost2137"),
+	join(repositoryRoot, "skills/build-localhost2137-plugin"),
+];
+for (const directory of skillDirectories) {
+	for (const file of (await listFiles(directory)).filter((path) => path.endsWith(".md"))) {
+		const source = await readFile(file, "utf8");
+		for (const fence of source.matchAll(/```sh\n([\s\S]*?)```/g)) {
+			assert(
+				!/<[^>\n]+>/.test(fence[1]),
+				`${relative(repositoryRoot, file)} contains an angle-bracket shell placeholder.`,
+			);
+		}
+	}
+}
+for (const skillPath of [
+	"skills/use-localhost2137/SKILL.md",
+	"skills/build-localhost2137-plugin/SKILL.md",
+]) {
+	const source = await readFile(join(repositoryRoot, skillPath), "utf8");
+	assert(!/\b(Slack|Stripe)\b/.test(source), `${skillPath} must remain service-generic.`);
+}
+
 const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));
 

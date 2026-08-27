@@ -6,9 +6,6 @@ a Slack account, OAuth setup, or real credentials.
 
 ## Configure
 
-Use ESM application metadata (`"type": "module"`) when loading a TypeScript
-`localhost.config.ts`. A newly initialized CommonJS package can use `localhost.config.mjs` instead.
-
 ```ts
 import { slack } from "@localhost2137/slack";
 import { defineConfig } from "localhost2137";
@@ -106,21 +103,6 @@ redirect and TLS-specific failure classifications that the local transport does 
 
 Use real clock mode with Bolt's default replay-window verification. Pinned-clock signature tests
 should verify the supplied virtual timestamp directly instead of comparing it with wall time.
-
-## Implementation map
-
-The package keeps dependencies one-way:
-
-```text
-api + operations -> SlackService -> repositories -> better-sqlite3
-events adapter ---------------------> delivery repository
-lifecycle --------------------------> database resource owner
-```
-
-Raw parameterized SQL and seven explicit migrations own the schema. Repositories map rows to domain
-records. `SlackDatabase` is the only connection resource owner, closes idempotently, enables foreign
-keys/WAL, and provides the transaction boundary for multi-row message/event creation. The plugin
-never imports runtime internals and keeps no module-global instance state.
 
 Run the real plugin contract and the official Bolt example with:
 

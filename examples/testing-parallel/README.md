@@ -18,6 +18,6 @@ Run it from the repository root:
 pnpm --filter @localhost2137/example-testing-parallel test
 ```
 
-The token is a test-run secret: never log it, expose it to browser code, store it in snapshots, or
-write it to build artifacts. The owner passes it only through Vitest's in-memory serializable
-provided context, and the runtime listens only on an OS-assigned loopback port.
+The token is a test-run secret: never log it, expose it to browser code, store it in captured test
+output, or write it to build artifacts. The owner passes it only through Vitest's in-memory
+serializable provided context, and the runtime listens only on an OS-assigned loopback port.

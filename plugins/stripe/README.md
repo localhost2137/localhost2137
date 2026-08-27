@@ -1,6 +1,6 @@
 # `@localhost2137/stripe`
 
-A deterministic local Stripe account for recurring-billing development. It provides official-SDK
+A stateful local Stripe account for recurring-billing development. It provides official-SDK
 compatible HTTP routes, typed control operations, SQLite persistence, signed webhooks, and durable
 virtual-time renewals without a Stripe account or real credentials.
 
