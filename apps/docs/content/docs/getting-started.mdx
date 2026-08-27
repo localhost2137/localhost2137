@@ -119,8 +119,9 @@ pnpm exec localhost run -- pnpm dev
 ```
 
 The application uses ordinary provider-shaped HTTP. `SLACK_BOT_TOKEN` is a local credential from the
-config, not a provider-issued API key. `localhost run` injects plugin connection values only; the
-privileged runtime control token never enters the application process.
+config, not a provider-issued API key. `localhost run` overlays plugin connection values on the
+child process's inherited environment. localhost2137 does not add the runtime control token, and it
+does not remove values already present in the parent environment.
 
 For an existing SDK or application adapter, replace only its endpoint and credential inputs with the
 installed plugin's connection values. Do not move control operations into application code. See
@@ -220,17 +221,12 @@ crosses Slack-shaped HTTP before asserting. Typed operations are available as
 request the test claims to prove. [Integration testing](/testing) covers reuse, parallel workers,
 asynchronous work, and cleanup failures.
 
-## Run the full callback example next
+## Continue with callbacks
 
-The crash course keeps callbacks disabled. The Slack ping-pong demo adds a real Bolt application,
-signed Events API delivery, an SDK response, `instance.idle()`, and guaranteed cleanup:
+The crash course keeps callbacks disabled. The [checked Slack Bolt workflow](/first-party/slack#bolt-wiring)
+contains the complete application adapter and end-to-end test for signed Events API delivery, an SDK
+response, `instance.idle()`, and guaranteed cleanup.
 
-```sh
-pnpm dlx localhost2137 demo clone slack-ping-bot ./slack-ping-bot
-cd ./slack-ping-bot
-pnpm test
-```
-
-Use [Seed test worlds](/seeding) before making a shared baseline larger, [Callbacks and
-webhooks](/callbacks) before parallel callback tests, and [Configuration](/configuration) for the
-exact config and restart rules.
+Read [Callbacks and webhooks](/callbacks) before parallel callback tests, or continue to
+[Integration testing](/testing) to reuse runtimes safely. Use [Seed test worlds](/seeding) before
+making a shared baseline larger.

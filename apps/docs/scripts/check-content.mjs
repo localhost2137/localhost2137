@@ -414,9 +414,26 @@ for (const step of [
 	previousCrashCourseStep = position;
 }
 assert(gettingStarted.includes("not a provider-issued API key"));
-assert(gettingStarted.includes("control token never enters the application process"));
+assert(
+	gettingStarted.includes(
+		"`localhost run` overlays plugin connection values on the\nchild process's inherited environment",
+	),
+);
+assert(gettingStarted.includes("does not add the runtime control token"));
+assert(gettingStarted.includes("does not remove values already present in the parent environment"));
+assert(!gettingStarted.includes("injects plugin connection values only"));
+assert(!gettingStarted.includes("demo clone slack-ping-bot"));
+assert(gettingStarted.includes("[checked Slack Bolt workflow](/first-party/slack#bolt-wiring)"));
 assert(gettingStarted.includes("The Slack setup above has no time-driven work"));
 assert(gettingStarted.includes("same plugin config and callback destination"));
+
+const instanceConcept = content.get("instances.mdx");
+assert(
+	instanceConcept?.includes(
+		"The runtime supplies application processes only instance-scoped\nprovider connection values",
+	),
+);
+assert(instanceConcept?.includes("`localhost run` does not sanitize the process's inherited"));
 
 const existingApplication = content.get("existing-application.mdx");
 assert(

@@ -92,8 +92,8 @@ Two worlds may allocate the same provider-shaped record IDs because each plugin 
 its instance. They still run the same plugin code and resolved configuration.
 
 This is state isolation, not a process or security sandbox. Instances share a runtime endpoint and
-privileged control credential. Application processes receive only instance-scoped provider
-connection values.
+privileged control credential. The runtime supplies application processes only instance-scoped
+provider connection values. `localhost run` does not sanitize the process's inherited environment.
 
 ## Addressing selects the world
 
