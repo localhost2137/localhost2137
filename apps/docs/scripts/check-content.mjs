@@ -40,7 +40,7 @@ const expectedPages = new Map([
 	["security.mdx", "/security"],
 ]);
 
-const documentationFirstCommands = Object.freeze([
+const bootstrapCommands = Object.freeze([
 	"localhost init",
 	"localhost demo clone <name> [directory]",
 ]);
@@ -101,7 +101,7 @@ for (const term of ["snapshot", "fork", "MCP"]) {
 		`Reserved product vocabulary leaked into the docs: ${term}.`,
 	);
 }
-for (const command of documentationFirstCommands) {
+for (const command of bootstrapCommands) {
 	assert(combined.includes(command), `The docs must include ${command}.`);
 }
 for (const command of [
@@ -193,13 +193,12 @@ const commandProgram = await readFile(
 	join(repositoryRoot, "packages/localhost2137/src/cli/command-program.ts"),
 	"utf8",
 );
-assert(!commandProgram.includes('program.command("init")'));
-assert(!commandProgram.includes('program.command("demo")'));
-assert.equal(
-	documentationFirstCommands.length,
-	2,
-	"Only the reviewed init and demo-clone contracts may lead implementation.",
-);
+for (const commandDefinition of ['.command("init")', '.command("demo")', '.command("clone")']) {
+	assert(
+		commandProgram.includes(commandDefinition),
+		`The CLI is missing the documented command definition: ${commandDefinition}`,
+	);
+}
 
 const agents = content.get("agents.mdx");
 assert(agents?.includes("title: For LLMs"));
@@ -570,7 +569,7 @@ for (const step of [
 }
 assert(!cli?.includes("pnpm exec localhost seed --instance dev"));
 assert(!cli?.includes("replace-with-"));
-assert(cli?.includes("owner-approved documentation-first contracts awaiting implementation"));
+assert(cli?.includes("The inventory below is source-verified against the current CLI."));
 assert(cli?.includes("Only `/_/v1/health` is unauthenticated"));
 assert(cli?.includes("This Bash example"));
 const configuration = content.get("configuration.mdx");
@@ -1268,7 +1267,7 @@ for (const route of [
 }
 
 process.stdout.write(
-	`Validated ${files.length} docs pages, navigation and fragment links, docs-first commands, Glass wiring, skills references, and Markdown route mapping.\n`,
+	`Validated ${files.length} docs pages, navigation and fragment links, CLI commands, Glass wiring, skills references, and Markdown route mapping.\n`,
 );
 
 async function listFiles(directory) {
