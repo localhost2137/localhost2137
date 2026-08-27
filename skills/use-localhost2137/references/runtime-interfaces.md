@@ -69,22 +69,88 @@ Clock durations are positive whole values with one of `ms`, `s`, `m`, `h`, `d`, 
 Import `connectRuntime` from `localhost2137/client`:
 
 ```ts
-const runtime = connectRuntime({ url, token });
-await runtime.createInstance({
-  id: instanceId,
-  persistence: "ephemeral",
-  seed: false,
-});
+import { randomUUID } from "node:crypto";
+import {
+  ControlApiError,
+  connectRuntime,
+  type RuntimeClient,
+} from "localhost2137/client";
 
-try {
+type OwnerClient = Pick<RuntimeClient, "createInstance" | "destroyInstance">;
+
+async function withOwnedInstance<Value>(
+  runtime: OwnerClient,
+  instanceId: string,
+  use: () => Promise<Value>,
+): Promise<Value> {
+  let cleanupRequired = false;
+  let hasPrimary = false;
+  let primary: unknown;
+
+  try {
+    try {
+      await runtime.createInstance({ id: instanceId, persistence: "ephemeral" });
+      cleanupRequired = true;
+    } catch (cause) {
+      if (cause instanceof ControlApiError) throw cause;
+      hasPrimary = true;
+      primary = cause;
+      cleanupRequired = true;
+      throw cause;
+    }
+
+    try {
+      return await use();
+    } catch (cause) {
+      hasPrimary = true;
+      primary = cause;
+      throw cause;
+    }
+  } finally {
+    if (cleanupRequired) {
+      try {
+        await runtime.destroyInstance(instanceId);
+      } catch (cleanup) {
+        const absent =
+          cleanup instanceof ControlApiError && cleanup.code === "INSTANCE_NOT_FOUND";
+        if (!absent && hasPrimary) {
+          throw new AggregateError([primary, cleanup], "Instance use and cleanup failed.", {
+            cause: primary,
+          });
+        }
+        if (!absent) throw cleanup;
+      }
+    }
+  }
+}
+
+const runtime = connectRuntime({ url, token });
+const instanceId = `worker-${randomUUID()}`;
+
+await withOwnedInstance(runtime, instanceId, async () => {
   await runtime.executeOperation(instanceId, serviceKey, operationKey, input);
   await runtime.idle(instanceId);
-} finally {
-  await runtime.destroyInstance(instanceId);
-}
+});
 ```
 
-The remote client is intentionally untyped and introspection-driven. Use it when another process owns the runtime, particularly test-runner global setup. Keep the URL and token in the test harness, allocate collision-resistant instance IDs, and destroy only instances owned by that worker.
+Implement or reuse `withOwnedInstance` with these ownership rules:
+
+- Select the collision-resistant ID before create. It is the only handle available if the response
+  is lost.
+- A create `ControlApiError` is an authoritative rejection. Do not run the scenario or destroy that
+  ID; an `INSTANCE_CONFLICT` can identify another owner's world.
+- A transport or protocol create failure is uncertain. Reconcile the caller-selected ID by
+  attempting destroy: `INSTANCE_NOT_FOUND` means create did not commit, while successful destroy
+  removes the world that did commit. Preserve the original create failure either way.
+- After successful create, always attempt destroy. Ignore only `INSTANCE_NOT_FOUND`. If the scenario
+  or uncertain create already failed and cleanup also fails, throw an `AggregateError` with the
+  primary failure first and as `cause`, followed by cleanup.
+
+This is the same ownership contract as the maintained
+[parallel-worker helper](https://localhost2137.dev/testing#share-one-runtime-across-worker-processes).
+The remote client is intentionally untyped and introspection-driven. Use it when another process
+owns the runtime, particularly test-runner global setup. Keep the URL and token in the test harness;
+never close the shared runtime from a worker.
 
 Instances isolate emulator state and service storage. They do not create distinct plugin configurations or application callback URLs. Before running callbacks, events, or webhooks in parallel, confirm how the installed plugin routes them and how the application associates a callback with an instance. Never promise application callback isolation from instance isolation alone.
 

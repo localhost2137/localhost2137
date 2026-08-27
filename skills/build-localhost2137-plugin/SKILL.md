@@ -54,7 +54,8 @@ Bind `defineOperation` once per plugin ID/state/config combination. Use Zod obje
 
 ## Own state and lifecycle deliberately
 
-- Initialize new durable state in `create`.
+- Initialize absent durable state in `create`. A later attempt may follow partial failure, so
+  repeating initialization must be safe.
 - Migrate older durable state in `update({ from, to })`; advance `stateVersion` only for a real storage contract change.
 - Open process-owned resources and return instance state from `start`; release them idempotently in `stop`.
 - Pair `seedSchema` with `lifecycle.seed`, or omit both. Treat seed as an explicit baseline, not startup logic.

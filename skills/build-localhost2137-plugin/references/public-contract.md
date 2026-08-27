@@ -78,7 +78,7 @@ Do not make `create` or `start` depend on running-state capabilities they do not
 
 | Hook | Use |
 | --- | --- |
-| `create` | Initialize empty service storage once. |
+| `create` | Initialize absent durable state. It may run again after an interrupted attempt, so repeating it must be safe. |
 | `update` | Migrate stopped durable state from the recorded version to the declared version. |
 | `start` | Open process resources on each start and return instance-local state. |
 | `onStarted` | Reconcile persisted running work after all services start and before readiness. |

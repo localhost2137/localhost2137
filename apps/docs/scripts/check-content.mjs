@@ -160,6 +160,19 @@ for (const skillPath of [
 	const source = await readFile(join(repositoryRoot, skillPath), "utf8");
 	assert(!/\b(Slack|Stripe)\b/.test(source), `${skillPath} must remain service-generic.`);
 }
+const pluginContractSkill = await readFile(
+	join(repositoryRoot, "skills/build-localhost2137-plugin/references/public-contract.md"),
+	"utf8",
+);
+assert(pluginContractSkill.includes("It may run again after an interrupted attempt"));
+assert(!pluginContractSkill.includes("Initialize empty service storage once"));
+const runtimeInterfacesSkill = await readFile(
+	join(repositoryRoot, "skills/use-localhost2137/references/runtime-interfaces.md"),
+	"utf8",
+);
+assert(runtimeInterfacesSkill.includes("A create `ControlApiError` is an authoritative rejection"));
+assert(runtimeInterfacesSkill.includes("A transport or protocol create failure is uncertain"));
+assert(runtimeInterfacesSkill.includes("primary failure first and as `cause`"));
 
 const introduction = content.get("index.mdx");
 assert(introduction?.includes("title: What localhost2137 is"));

@@ -29,7 +29,7 @@ For a review or diagnosis request, inspect and report without changing files unl
 ## Choose an ownership model
 
 - For an in-process integration test, create one explicit test runtime, create an isolated instance for the test, and clean up both the application and instance on every failure path.
-- For parallel workers, let one owner process hold the test runtime. Give workers only its loopback URL and control token, then create one unique ephemeral instance per worker through `localhost2137/client`. Instances isolate emulator state, not shared plugin config or application callback URLs; inspect the plugin's callback-routing semantics before parallel event or webhook tests.
+- For parallel workers, let one owner process hold the test runtime. Give workers only its loopback URL and control token. Each worker must select a unique instance ID before create and use an ownership helper that never uses or destroys an ID rejected by the server as a conflict. Instances isolate emulator state, not shared plugin config or application callback URLs; inspect the plugin's callback-routing semantics before parallel event or webhook tests.
 - For a developer session, run the daemon and use generated discovery rather than memorized service commands. Use `localhost run --` only when the application should receive the instance's connection environment.
 
 Read [runtime-interfaces.md](references/runtime-interfaces.md) when choosing or implementing one of these modes.
