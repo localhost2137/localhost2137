@@ -22,7 +22,7 @@
 		"demo-assets:sync": "node scripts/sync-demo-assets.mjs --write",
 		"knip": "knip",
 		"lint": "biome lint . && eslint .",
-		"pack:check": "pnpm clean && pnpm --filter @localhost2137/slack build:ui && tsc -b && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
+		"pack:check": "pnpm clean && pnpm --filter @localhost2137/slack build:ui && tsc -b && pnpm --filter @localhost2137/slack pack:ui:check && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
 		"package:smoke": "node scripts/package-smoke.mjs",
 		"test": "pnpm --filter @localhost2137/slack build:ui && vitest run",
 		"test:examples": "pnpm --filter @localhost2137/example-getting-started --filter @localhost2137/example-testing-parallel --filter @localhost2137/example-slack-ping-bot --filter @localhost2137/example-stripe-sdk --filter @localhost2137/example-status-plugin test",

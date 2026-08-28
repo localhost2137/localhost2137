@@ -584,6 +584,83 @@ try {
 	if (packedUser.id !== "U000001") {
 		throw new Error("Packed Slack native persistence did not execute");
 	}
+	const packedSlackRoot = new URL("../", packedSlackInstance.slack.connection.apiUrl);
+	const packedSlackDocument = await fetch(packedSlackRoot.href.slice(0, -1));
+	if (
+		packedSlackDocument.status !== 200 ||
+		packedSlackDocument.headers.get("cache-control") !== "no-store" ||
+		packedSlackDocument.headers.get("x-content-type-options") !== "nosniff" ||
+		!packedSlackDocument.headers.get("content-security-policy")?.includes("default-src 'none'")
+	) {
+		throw new Error("Packed Slack dashboard document headers are incomplete");
+	}
+	const packedSlackHtml = await packedSlackDocument.text();
+	if (
+		!packedSlackHtml.includes(
+			'<base href="' + packedSlackRoot.pathname + '" data-localhost2137-base',
+		) ||
+		/https?:\\/\\/(?!127\\.0\\.0\\.1)/.test(packedSlackHtml)
+	) {
+		throw new Error("Packed Slack dashboard document is not mount-local");
+	}
+	const packedAssetReferences = [
+		...packedSlackHtml.matchAll(/(?:src|href)="([^"]+\\.(?:css|js))"/g),
+	].map((match) => match[1]);
+	if (
+		!packedAssetReferences.some((path) => path?.endsWith(".js")) ||
+		!packedAssetReferences.some((path) => path?.endsWith(".css"))
+	) {
+		throw new Error("Packed Slack dashboard index references no JS/CSS assets");
+	}
+	let packedFontCount = 0;
+	for (const reference of packedAssetReferences) {
+		if (!reference) throw new Error("Packed Slack dashboard contains an empty asset reference");
+		const assetUrl = new URL(reference, packedSlackRoot);
+		const asset = await fetch(assetUrl);
+		const contentType = asset.headers.get("content-type") ?? "";
+		if (
+			asset.status !== 200 ||
+			asset.headers.get("cache-control") !== "public, max-age=31536000, immutable" ||
+			asset.headers.get("x-content-type-options") !== "nosniff" ||
+			(reference.endsWith(".js") && !contentType.includes("javascript")) ||
+			(reference.endsWith(".css") && !contentType.startsWith("text/css"))
+		) {
+			throw new Error("Packed Slack dashboard asset failed: " + assetUrl.pathname);
+		}
+		const body = await asset.text();
+		if (!reference.endsWith(".css")) continue;
+		if (body.includes("data:font")) {
+			throw new Error("Packed Slack dashboard CSS contains a CSP-incompatible inline font");
+		}
+		const fontReferences = [...body.matchAll(/url\\(["']?([^"')]+\\.woff2?)["']?\\)/g)].map(
+			(match) => match[1],
+		);
+		for (const fontReference of fontReferences) {
+			if (!fontReference) throw new Error("Packed Slack dashboard contains an empty font reference");
+			const fontUrl = new URL(fontReference, assetUrl);
+			const font = await fetch(fontUrl);
+			const expectedType = fontReference.endsWith(".woff2") ? "font/woff2" : "font/woff";
+			if (
+				font.status !== 200 ||
+				font.headers.get("content-type") !== expectedType ||
+				font.headers.get("cache-control") !== "public, max-age=31536000, immutable" ||
+				font.headers.get("x-content-type-options") !== "nosniff"
+			) {
+				throw new Error("Packed Slack dashboard font failed: " + fontUrl.pathname);
+			}
+			await font.arrayBuffer();
+			packedFontCount += 1;
+		}
+	}
+	if (packedFontCount === 0) throw new Error("Packed Slack dashboard references no font assets");
+	const packedSlackEntry = fileURLToPath(import.meta.resolve("@localhost2137/slack"));
+	const packedSlackLicense = readFileSync(
+		join(dirname(packedSlackEntry), "../THIRD_PARTY_NOTICES.md"),
+		"utf8",
+	);
+	if (!packedSlackLicense.includes("SIL OPEN FONT LICENSE Version 1.1")) {
+		throw new Error("Packed Slack dashboard is missing the Lato OFL notice");
+	}
 } finally {
 	await packedSlackInstance.destroy();
 	await packedSlackRuntime.close();
