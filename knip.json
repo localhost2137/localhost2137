@@ -9,6 +9,7 @@
 		},
 		"packages/localhost2137": {
 			"entry": ["type-fixtures/*.ts", "test/fixtures/config-project/**/localhost.config.ts"],
+			"ignore": ["demo-assets/**"],
 			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
 		"packages/plugin-testkit": {
