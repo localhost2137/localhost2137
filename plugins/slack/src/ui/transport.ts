@@ -6,8 +6,18 @@ import type { SlackChannel, SlackMessage, SlackUser } from "../domain/models.js"
 import { SlackError } from "../domain/slack-error.js";
 import { postSlackMessage } from "../post-message.js";
 import type { SlackState } from "../state.js";
+import {
+	type SlackUiChannel,
+	type SlackUiCreateChannelResponse,
+	type SlackUiCreateMessageResponse,
+	type SlackUiErrorResponse,
+	type SlackUiMembershipResponse,
+	type SlackUiMessage,
+	type SlackUiSnapshot,
+	type SlackUiUser,
+	slackUiRoutes,
+} from "./contract.js";
 
-const UI_TRANSPORT_ROOT = "/_localhost2137/ui/v1";
 const PAGE_SIZE = 500;
 const MESSAGE_LIMIT = 200;
 
@@ -27,10 +37,10 @@ const membershipInput = z.object({
 const messageInput = membershipInput.extend({ text: z.string().min(1) });
 
 export function registerSlackDashboardTransport(app: SlackUiApp): void {
-	app.get(`${UI_TRANSPORT_ROOT}/snapshot`, uiRoute(snapshot));
-	app.post(`${UI_TRANSPORT_ROOT}/channels`, uiRoute(createChannel));
-	app.post(`${UI_TRANSPORT_ROOT}/memberships`, uiRoute(addMembership));
-	app.post(`${UI_TRANSPORT_ROOT}/messages`, uiRoute(createMessage));
+	app.get(slackUiRoutes.snapshot, uiRoute(snapshot));
+	app.post(slackUiRoutes.channels, uiRoute(createChannel));
+	app.post(slackUiRoutes.memberships, uiRoute(addMembership));
+	app.post(slackUiRoutes.messages, uiRoute(createMessage));
 }
 
 async function snapshot(context: SlackUiContext): Promise<Response> {
@@ -41,24 +51,24 @@ async function snapshot(context: SlackUiContext): Promise<Response> {
 	const selectedChannel = requestedChannel
 		? runtime.state.service.requireChannel(requestedChannel)
 		: undefined;
-	const messages = selectedChannel
-		? runtime.state.service.listMessages(selectedChannel.id, { limit: MESSAGE_LIMIT })
+	const messagePage = selectedChannel
+		? runtime.state.service.listMessages(selectedChannel.id, { limit: MESSAGE_LIMIT + 1 })
 		: [];
-
-	return jsonNoStore(context, {
-		channels: channels.map((channel) => ({
-			createdAt: channel.createdAt.toISOString(),
-			id: channel.id,
-			memberIds: listAllMembers(runtime.state.service, channel.id),
-			name: channel.name,
-			private: channel.private,
-		})),
-		messages: messages.map(uiMessage),
+	const workspace = runtime.state.service.workspace();
+	const response: SlackUiSnapshot = {
+		channels: channels.map((channel) => uiChannel(runtime.state.service, channel)),
+		hasMoreMessages: messagePage.length > MESSAGE_LIMIT,
+		messages: messagePage.slice(0, MESSAGE_LIMIT).map(uiMessage),
 		selectedChannelId: selectedChannel?.id ?? null,
 		users: users.map(uiUser),
 		version: 1,
-		workspace: runtime.state.service.workspace(),
-	});
+		workspace: {
+			id: workspace.id,
+			name: workspace.name,
+		},
+	};
+
+	return jsonNoStore(context, response);
 }
 
 async function createChannel(context: SlackUiContext): Promise<Response> {
@@ -69,31 +79,24 @@ async function createChannel(context: SlackUiContext): Promise<Response> {
 		name: input.name,
 		now: runtime.clock.now(),
 	});
-	return jsonNoStore(
-		context,
-		{
-			channel: {
-				createdAt: channel.createdAt.toISOString(),
-				id: channel.id,
-				memberIds: listAllMembers(runtime.state.service, channel.id),
-				name: channel.name,
-				private: channel.private,
-			},
-		},
-		201,
-	);
+	const response: SlackUiCreateChannelResponse = {
+		channel: uiChannel(runtime.state.service, channel),
+	};
+	return jsonNoStore(context, response, 201);
 }
 
 async function addMembership(context: SlackUiContext): Promise<Response> {
 	const input = await readJson(context, membershipInput);
 	const membership = context.get("lh").state.service.addUserToChannel(input.channel, input.user);
-	return jsonNoStore(context, { membership });
+	const response: SlackUiMembershipResponse = { membership };
+	return jsonNoStore(context, response);
 }
 
 async function createMessage(context: SlackUiContext): Promise<Response> {
 	const input = await readJson(context, messageInput);
 	const created = postSlackMessage(context.get("lh"), input);
-	return jsonNoStore(context, { message: uiMessage(created.message) }, 201);
+	const response: SlackUiCreateMessageResponse = { message: uiMessage(created.message) };
+	return jsonNoStore(context, response, 201);
 }
 
 function uiRoute(
@@ -104,18 +107,16 @@ function uiRoute(
 			return await handler(context);
 		} catch (cause) {
 			if (cause instanceof SlackError) {
-				return jsonNoStore(
-					context,
-					{ error: { code: cause.code, message: cause.message } },
-					slackErrorStatus(cause),
-				);
+				const response: SlackUiErrorResponse = {
+					error: { code: cause.code, message: cause.message },
+				};
+				return jsonNoStore(context, response, slackErrorStatus(cause));
 			}
 			if (cause instanceof InvalidUiRequestError) {
-				return jsonNoStore(
-					context,
-					{ error: { code: "invalid_request", message: cause.message } },
-					400,
-				);
+				const response: SlackUiErrorResponse = {
+					error: { code: "invalid_request", message: cause.message },
+				};
+				return jsonNoStore(context, response, 400);
 			}
 			throw cause;
 		}
@@ -126,7 +127,10 @@ async function readJson<Schema extends z.ZodType>(
 	context: SlackUiContext,
 	schema: Schema,
 ): Promise<z.output<Schema>> {
-	if (context.req.header("content-type")?.split(";", 1)[0]?.trim() !== "application/json") {
+	if (
+		context.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+		"application/json"
+	) {
 		throw new InvalidUiRequestError("Request content type must be application/json.");
 	}
 	const body = await context.req.json().catch(() => {
@@ -176,7 +180,17 @@ function collectPages<Item>(
 	}
 }
 
-function uiUser(user: SlackUser) {
+function uiChannel(service: SlackState["service"], channel: SlackChannel): SlackUiChannel {
+	return {
+		createdAt: channel.createdAt.toISOString(),
+		id: channel.id,
+		memberIds: listAllMembers(service, channel.id),
+		name: channel.name,
+		private: channel.private,
+	};
+}
+
+function uiUser(user: SlackUser): SlackUiUser {
 	return {
 		admin: user.admin,
 		bot: user.bot,
@@ -186,7 +200,7 @@ function uiUser(user: SlackUser) {
 	};
 }
 
-function uiMessage(message: SlackMessage) {
+function uiMessage(message: SlackMessage): SlackUiMessage {
 	return {
 		channelId: message.channelId,
 		createdAt: message.createdAt.toISOString(),
