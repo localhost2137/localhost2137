@@ -52,6 +52,9 @@ services:
 variables: SLACK_API_URL, SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
 ```
 
+Open the printed Slack service URL to use the instance's local workspace dashboard; it runs with the
+plugin and requires no sign-in.
+
 That command loads this complete `localhost.config.ts`:
 
 ```ts

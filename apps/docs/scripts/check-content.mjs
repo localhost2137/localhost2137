@@ -1189,7 +1189,7 @@ assert.equal(repositoryManifest.scripts["docs:check"], "pnpm --filter @localhost
 assert(repositoryManifest.scripts.check.includes("pnpm docs:check"));
 assert.equal(
 	repositoryManifest.scripts["pack:check"],
-	"pnpm clean && tsc -b && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
+	"pnpm clean && pnpm --filter @localhost2137/slack build:ui && tsc -b && pnpm --filter @localhost2137/slack pack:ui:check && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
 );
 
 const workspaceConfig = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");

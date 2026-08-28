@@ -52,6 +52,38 @@ The connection exposes `apiUrl`, `botToken`, and `signingSecret`, with environme
 `clientOptions.slackApiUrl`. Set `eventsUrl` to the application's listening Events API path when the
 scenario needs callbacks.
 
+## Open the workspace
+
+`localhost dev` prints a URL for every mounted service. Open the Slack URL in a browser:
+
+```text
+services:
+  slack: http://127.0.0.1:2137/dev/slack
+```
+
+The dashboard has no sign-in. Choose a local user, browse public channels and their latest messages,
+create or join a channel, and send a message. A dashboard message follows the same event-delivery
+path as `sendMessage`, so it can trigger your application's signed Events API callback when
+`eventsUrl` is configured.
+
+The dashboard, CLI, Web API, and test API are different views of the same instance state. For
+example, run these commands while the dashboard is open:
+
+```sh
+pnpm exec localhost exec slack create-channel --name incidents
+pnpm exec localhost exec slack add-user-to-channel --channel incidents --user Ada
+pnpm exec localhost exec slack send-message --channel incidents --from Ada --text "deploy failed"
+```
+
+The new channel and message normally appear within about one second without reloading the page.
+Polling pauses while the tab is hidden and refreshes when it becomes visible again.
+
+The dashboard shows public channels and the latest 200 messages in the selected channel. It does not
+add support for direct messages, private channels, reactions, editing, files, or the other Slack
+features outside the compatibility table below. The UI and its fonts ship in the plugin package; it
+does not contact Slack or a CDN. Because there is no dashboard authentication, keep the runtime in a
+trusted local environment.
+
 ## Supported surface
 
 | Web API | Control operations |

@@ -75,6 +75,52 @@ The seed is used only when instance creation requests it. It is applied as one p
 an invalid member, duplicate name, or invalid channel rolls back the Slack seed. See
 [Seeding](/seeding) for the instance-level seed lifecycle and recovery rules.
 
+## Open the dashboard
+
+Start the runtime and open the Slack service URL printed by `localhost dev`:
+
+```sh
+pnpm exec localhost dev
+```
+
+```text
+localhost2137 ready
+runtime: http://127.0.0.1:2137
+instance: dev
+services:
+  slack: http://127.0.0.1:2137/dev/slack
+```
+
+There is no separate dashboard process and no sign-in. The page opens the selected instance's local
+workspace. You can:
+
+- choose which local user to act as;
+- browse public channels, member counts, and the latest 200 messages in a channel;
+- create a public channel, joining its creator and the configured bot;
+- join the acting user to an existing channel; and
+- send messages as the acting user.
+
+Keep the page open and change the same instance from another terminal:
+
+```sh
+pnpm exec localhost exec slack create-channel --name incidents
+pnpm exec localhost exec slack add-user-to-channel --channel incidents --user Ada
+pnpm exec localhost exec slack send-message \
+  --channel incidents --from Ada --text "deploy failed"
+```
+
+The dashboard checks for changes about once per second while the tab is visible, so CLI, supported
+Web API, application, and test changes normally appear without a reload. It stops polling while the
+tab is hidden and refreshes when you return. Changes made in the dashboard go through the same Slack
+state and behavior as the other interfaces; sending a dashboard message creates the same signed
+Events API delivery when `eventsUrl` is configured.
+
+This is a UI for the plugin's supported compatibility slice, not extra Slack compatibility. It has
+no direct messages, private channels, reactions, editing, files, search, or other features omitted
+from the tables on this page. The dashboard and its fonts are packaged with the plugin and do not
+load Slack or CDN resources. It intentionally has no authentication, so keep the runtime in a
+trusted local environment.
+
 ## Connection values
 
 Each instance exposes these typed values under `instance[serviceKey].connection`:
