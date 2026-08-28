@@ -23,12 +23,23 @@ const CONTENT_SECURITY_POLICY = [
 type SlackUiContext = Context<PluginEnv<SlackState, SlackConfig>>;
 type SlackUiApp = Hono<PluginEnv<SlackState, SlackConfig>>;
 
+export interface SlackDashboardAssetDependencies {
+	readonly readIndex: () => Promise<string>;
+}
+
+const defaultAssetDependencies: SlackDashboardAssetDependencies = Object.freeze({
+	readIndex: () => readFile(INDEX_PATH, "utf8"),
+});
+
 let dashboardAssetMiddleware: Promise<
 	MiddlewareHandler<PluginEnv<SlackState, SlackConfig>>
 > | null = null;
 
-export function registerSlackDashboardAssets(app: SlackUiApp): void {
-	app.on(["GET", "HEAD"], "/", dashboardIndex);
+export function registerSlackDashboardAssets(
+	app: SlackUiApp,
+	dependencies: SlackDashboardAssetDependencies = defaultAssetDependencies,
+): void {
+	app.on(["GET", "HEAD"], "/", (context) => dashboardIndex(context, dependencies));
 	app.use("/assets/*", async (context, next) => {
 		const serveDashboardAsset = await loadDashboardAssetMiddleware();
 		const response = await serveDashboardAsset(context, next);
@@ -51,10 +62,14 @@ function loadDashboardAssetMiddleware(): Promise<
 	return dashboardAssetMiddleware;
 }
 
-async function dashboardIndex(context: SlackUiContext): Promise<Response> {
+async function dashboardIndex(
+	context: SlackUiContext,
+	dependencies: SlackDashboardAssetDependencies,
+): Promise<Response> {
+	setDocumentHeaders(context);
 	let template: string;
 	try {
-		template = await readFile(INDEX_PATH, "utf8");
+		template = await dependencies.readIndex();
 	} catch (cause) {
 		if (isMissingFile(cause)) {
 			return context.json(
@@ -73,7 +88,6 @@ async function dashboardIndex(context: SlackUiContext): Promise<Response> {
 	const runtime = context.get("lh");
 	const base = `/${encodeURIComponent(runtime.instanceId)}/${encodeURIComponent(runtime.serviceKey)}/`;
 	const html = template.replace(BASE_MARKER, `href="${base}" data-localhost2137-base`);
-	setDocumentHeaders(context);
 	return context.html(html);
 }
 

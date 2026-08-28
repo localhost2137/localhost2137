@@ -1,7 +1,11 @@
-import { defineConfig } from "localhost2137";
+import { Hono } from "hono";
+import { defineConfig, type PluginEnv } from "localhost2137";
 import { createTestRuntime, type TestRuntime } from "localhost2137/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SlackConfig } from "../src/config.js";
 import { slack } from "../src/index.js";
+import type { SlackState } from "../src/state.js";
+import { registerSlackDashboardAssets } from "../src/ui/static-assets.js";
 
 const dashboardConfig = defineConfig({
 	services: {
@@ -24,6 +28,25 @@ afterEach(async () => {
 });
 
 describe("Slack dashboard assets", () => {
+	it("hardens the missing-assets response", async () => {
+		const app = new Hono<PluginEnv<SlackState, SlackConfig>>();
+		registerSlackDashboardAssets(app, {
+			readIndex: () =>
+				Promise.reject(Object.assign(new Error("missing fixture"), { code: "ENOENT" })),
+		});
+		const response = await app.request("/");
+		expect(response.status).toBe(503);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(response.headers.get("content-type")).toMatch(/^application\/json\b/);
+		expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+		expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+		expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(await response.json()).toEqual({
+			error: "dashboard_assets_unavailable",
+			message: "Slack dashboard assets are not present in this package.",
+		});
+	});
+
 	it("serves a mount-aware document with local immutable assets", async () => {
 		const runtime = await createTestRuntime({
 			config: dashboardConfig,
@@ -76,6 +99,7 @@ describe("Slack dashboard assets", () => {
 			expect(style.status).toBe(200);
 			expect(style.headers.get("content-type")).toMatch(/^text\/css\b/);
 			const css = await style.text();
+			expect(css).not.toContain("data:font");
 			const fontReference = requiredMatch(css, /url\(([^)]+\.woff2)\)/);
 			const font = await fetch(new URL(fontReference, styleUrl));
 			expect(font.status).toBe(200);
