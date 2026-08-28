@@ -20,6 +20,15 @@
 			],
 			"project": ["src/**/*.ts", "test/**/*.ts", "type-fixtures/**/*.ts"]
 		},
+		"plugins/slack": {
+			"project": [
+				"scripts/**/*.mjs",
+				"src/**/*.ts",
+				"test/**/*.ts",
+				"ui/src/**/*.{css,ts,tsx}",
+				"ui/*.ts"
+			]
+		},
 		"plugins/*": {
 			"project": ["src/**/*.ts", "test/**/*.ts"]
 		}

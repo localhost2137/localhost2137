@@ -3,7 +3,7 @@ import type { SlackUiSnapshot } from "../../src/ui/contract.js";
 import { slackDashboardClient } from "./client.js";
 import { createSlackWorkspacePoller, type SlackWorkspacePoller } from "./poller.js";
 
-export type SlackWorkspacePhase = "error" | "loading" | "ready" | "stale";
+type SlackWorkspacePhase = "error" | "loading" | "ready" | "stale";
 
 export interface SlackWorkspaceResource {
 	readonly error: string | null;

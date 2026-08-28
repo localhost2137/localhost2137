@@ -1,5 +1,5 @@
 /** Browser-safe private transport shared by the Slack dashboard and its Hono adapter. */
-export const SLACK_UI_TRANSPORT_ROOT = "_localhost2137/ui/v1";
+const slackUiTransportRoot = "_localhost2137/ui/v1";
 
 export interface SlackUiRoutes {
 	readonly channels: string;
@@ -9,10 +9,10 @@ export interface SlackUiRoutes {
 }
 
 export const slackUiRoutes: Readonly<SlackUiRoutes> = Object.freeze({
-	channels: `${SLACK_UI_TRANSPORT_ROOT}/channels`,
-	memberships: `${SLACK_UI_TRANSPORT_ROOT}/memberships`,
-	messages: `${SLACK_UI_TRANSPORT_ROOT}/messages`,
-	snapshot: `${SLACK_UI_TRANSPORT_ROOT}/snapshot`,
+	channels: `${slackUiTransportRoot}/channels`,
+	memberships: `${slackUiTransportRoot}/memberships`,
+	messages: `${slackUiTransportRoot}/messages`,
+	snapshot: `${slackUiTransportRoot}/snapshot`,
 });
 
 export interface SlackUiUser {

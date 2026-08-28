@@ -50,30 +50,45 @@ export function createSlackDashboardClient(
 ): SlackDashboardClient {
 	const client: SlackDashboardClient = {
 		createChannel: (input, signal) =>
-			requestJson<SlackUiCreateChannelResponse>(options, slackUiRoutes.channels, {
-				body: JSON.stringify(input),
-				headers: jsonHeaders(),
-				method: "POST",
-				...(signal ? { signal } : {}),
-			}),
+			requestJson<SlackUiCreateChannelResponse>(
+				options,
+				slackUiRoutes.channels,
+				{
+					body: JSON.stringify(input),
+					headers: jsonHeaders(),
+					method: "POST",
+					...(signal ? { signal } : {}),
+				},
+				trustContract,
+			),
 		joinChannel: (input, signal) =>
-			requestJson<SlackUiMembershipResponse>(options, slackUiRoutes.memberships, {
-				body: JSON.stringify(input),
-				headers: jsonHeaders(),
-				method: "POST",
-				...(signal ? { signal } : {}),
-			}),
+			requestJson<SlackUiMembershipResponse>(
+				options,
+				slackUiRoutes.memberships,
+				{
+					body: JSON.stringify(input),
+					headers: jsonHeaders(),
+					method: "POST",
+					...(signal ? { signal } : {}),
+				},
+				trustContract,
+			),
 		sendMessage: (input, signal) =>
-			requestJson<SlackUiCreateMessageResponse>(options, slackUiRoutes.messages, {
-				body: JSON.stringify(input),
-				headers: jsonHeaders(),
-				method: "POST",
-				...(signal ? { signal } : {}),
-			}),
+			requestJson<SlackUiCreateMessageResponse>(
+				options,
+				slackUiRoutes.messages,
+				{
+					body: JSON.stringify(input),
+					headers: jsonHeaders(),
+					method: "POST",
+					...(signal ? { signal } : {}),
+				},
+				trustContract,
+			),
 		snapshot: (channel, signal) => {
 			const url = new URL(slackUiRoutes.snapshot, options.baseUrl());
 			if (channel) url.searchParams.set("channel", channel);
-			return requestJson<SlackUiSnapshot>(options, url, signal ? { signal } : {});
+			return requestJson(options, url, signal ? { signal } : {}, decodeSnapshot);
 		},
 	};
 	return Object.freeze(client);
@@ -83,6 +98,7 @@ async function requestJson<Value>(
 	options: SlackDashboardClientOptions,
 	path: string | URL,
 	init: RequestInit,
+	decode: (value: unknown, status: number) => Value,
 ): Promise<Value> {
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 	const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
@@ -100,8 +116,32 @@ async function requestJson<Value>(
 			"The local Slack dashboard received a non-JSON response.",
 		);
 	}
-	const value: unknown = await response.json();
+	const value: unknown = await response.json().catch(() => {
+		throw invalidResponse(response.status, "The local Slack dashboard received invalid JSON.");
+	});
 	if (!response.ok) throw responseError(response.status, value);
+	return decode(value, response.status);
+}
+
+function decodeSnapshot(value: unknown, status: number): SlackUiSnapshot {
+	if (
+		!isRecord(value) ||
+		value.version !== 1 ||
+		!Array.isArray(value.channels) ||
+		!Array.isArray(value.messages) ||
+		!Array.isArray(value.users) ||
+		typeof value.hasMoreMessages !== "boolean" ||
+		(value.selectedChannelId !== null && typeof value.selectedChannelId !== "string") ||
+		!isRecord(value.workspace) ||
+		typeof value.workspace.id !== "string" ||
+		typeof value.workspace.name !== "string"
+	) {
+		throw invalidResponse(status, "The local Slack dashboard snapshot is incompatible.");
+	}
+	return value as unknown as SlackUiSnapshot;
+}
+
+function trustContract<Value>(value: unknown): Value {
 	return value as Value;
 }
 
@@ -118,16 +158,22 @@ function responseError(status: number, value: unknown): SlackDashboardRequestErr
 
 function isErrorResponse(value: unknown): value is SlackUiErrorResponse {
 	return (
-		typeof value === "object" &&
-		value !== null &&
+		isRecord(value) &&
 		"error" in value &&
-		typeof value.error === "object" &&
-		value.error !== null &&
+		isRecord(value.error) &&
 		"code" in value.error &&
 		typeof value.error.code === "string" &&
 		"message" in value.error &&
 		typeof value.error.message === "string"
 	);
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function invalidResponse(status: number, message: string): SlackDashboardRequestError {
+	return new SlackDashboardRequestError(status, "invalid_response", message);
 }
 
 function jsonHeaders(): Readonly<Record<string, string>> {

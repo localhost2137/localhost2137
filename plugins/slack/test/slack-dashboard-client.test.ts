@@ -48,6 +48,32 @@ describe("Slack dashboard browser client", () => {
 		});
 	});
 
+	it("rejects malformed JSON and incompatible snapshot versions with stable errors", async () => {
+		const responses = [
+			new Response("{", { headers: { "content-type": "application/json" }, status: 200 }),
+			Response.json({ ...snapshotFixture(), version: 2 }),
+		];
+		const client = createSlackDashboardClient({
+			baseUrl: () => "http://127.0.0.1:2137/dev/slack/",
+			fetch: async () => {
+				const response = responses.shift();
+				if (!response) throw new TypeError("Unexpected dashboard request.");
+				return response;
+			},
+		});
+
+		for (const message of [
+			"The local Slack dashboard received invalid JSON.",
+			"The local Slack dashboard snapshot is incompatible.",
+		]) {
+			await expect(client.snapshot(null)).rejects.toMatchObject({
+				code: "invalid_response",
+				message,
+				status: 200,
+			});
+		}
+	});
+
 	it("never overlaps polls and immediately follows an in-flight mutation refresh", async () => {
 		const loads: Array<ReturnType<typeof deferred<string>>> = [];
 		const values: string[] = [];
@@ -119,6 +145,35 @@ describe("Slack dashboard browser client", () => {
 		expect(signals).toHaveLength(2);
 		poller.stop();
 		expect(signals[1]?.aborted).toBe(true);
+	});
+
+	it("never commits an old channel result after its poller stops", async () => {
+		const oldChannel = deferred<string>();
+		const newChannel = deferred<string>();
+		const values: string[] = [];
+		const oldPoller = createSlackWorkspacePoller({
+			isVisible: () => true,
+			load: () => oldChannel.promise,
+			onError: () => undefined,
+			onValue: (value) => values.push(value),
+		});
+		const newPoller = createSlackWorkspacePoller({
+			isVisible: () => true,
+			load: () => newChannel.promise,
+			onError: () => undefined,
+			onValue: (value) => values.push(value),
+		});
+
+		oldPoller.start();
+		oldPoller.stop();
+		newPoller.start();
+		newChannel.resolve("new-channel");
+		await settleMicrotasks();
+		oldChannel.resolve("old-channel");
+		await settleMicrotasks();
+
+		expect(values).toEqual(["new-channel"]);
+		newPoller.stop();
 	});
 });
 

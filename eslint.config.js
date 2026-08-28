@@ -45,6 +45,7 @@ export default defineConfig([
 			"apps/**/*.tsx",
 			"packages/**/*.ts",
 			"plugins/**/*.ts",
+			"plugins/**/*.tsx",
 			"examples/**/*.ts",
 		],
 		languageOptions: {
@@ -73,7 +74,7 @@ export default defineConfig([
 		},
 	},
 	{
-		files: ["plugins/**/*.ts"],
+		files: ["plugins/**/*.ts", "plugins/**/*.tsx"],
 		ignores: ["plugins/*/test/**/*.ts"],
 		rules: {
 			"no-restricted-imports": [

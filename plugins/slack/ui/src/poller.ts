@@ -59,6 +59,7 @@ export function createSlackWorkspacePoller<Value>(
 		const promise = options
 			.load(controller.signal)
 			.then((value) => {
+				if (controller.signal.aborted || !running) return;
 				retry = false;
 				options.onValue(value);
 			})
@@ -110,6 +111,6 @@ export function createSlackWorkspacePoller<Value>(
 }
 
 function browserSchedule(work: () => void, delayMs: number): () => void {
-	const timer = window.setTimeout(work, delayMs);
-	return () => window.clearTimeout(timer);
+	const timer = globalThis.setTimeout(work, delayMs);
+	return () => globalThis.clearTimeout(timer);
 }
