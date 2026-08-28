@@ -3,12 +3,14 @@
 	"files": {
 		"includes": [
 			"**",
+			"!!**/.localhost2137",
 			"!!**/.react-router",
 			"!!**/.wrangler",
 			"!!**/build",
 			"!!**/dist",
 			"!!**/coverage",
-			"!!**/node_modules"
+			"!!**/node_modules",
+			"!!plugins/slack/assets/ui"
 		]
 	},
 	"formatter": {
