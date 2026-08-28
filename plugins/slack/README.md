@@ -66,10 +66,11 @@ create or join a channel, and send a message. A dashboard message follows the sa
 path as `sendMessage`, so it can trigger your application's signed Events API callback when
 `eventsUrl` is configured.
 
-The dashboard, CLI, Web API, and test API are different views of the same instance state. For
-example, run these commands while the dashboard is open:
+The dashboard, CLI, Web API, and test API are different views of the same instance state. From a
+second terminal, apply the configured seed once and then make changes while the dashboard is open:
 
 ```sh
+pnpm exec localhost seed
 pnpm exec localhost exec slack create-channel --name incidents
 pnpm exec localhost exec slack add-user-to-channel --channel incidents --user Ada
 pnpm exec localhost exec slack send-message --channel incidents --from Ada --text "deploy failed"

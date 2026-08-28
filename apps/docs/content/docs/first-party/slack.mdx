@@ -100,9 +100,11 @@ workspace. You can:
 - join the acting user to an existing channel; and
 - send messages as the acting user.
 
-Keep the page open and change the same instance from another terminal:
+Keep the page open. In another terminal, apply the configured seed once and then change the same
+instance:
 
 ```sh
+pnpm exec localhost seed
 pnpm exec localhost exec slack create-channel --name incidents
 pnpm exec localhost exec slack add-user-to-channel --channel incidents --user Ada
 pnpm exec localhost exec slack send-message \
