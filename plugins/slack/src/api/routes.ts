@@ -3,6 +3,7 @@ import type { PluginEnv } from "localhost2137";
 import type { SlackConfig } from "../config.js";
 import { SlackError } from "../domain/slack-error.js";
 import { formatSlackTimestamp, parseSlackTimestamp } from "../domain/slack-timestamp.js";
+import { postSlackMessage } from "../post-message.js";
 import { LOCAL_BOT_ID } from "../slack-identities.js";
 import type { SlackState } from "../state.js";
 import { pageResult, readPagination } from "./pagination.js";
@@ -188,21 +189,12 @@ async function chatPostMessage(context: SlackContext): Promise<Response> {
 	const threadTs = optionalString(request, "thread_ts");
 	const runtime = context.get("lh");
 	const resolvedChannel = runtime.state.service.requireChannelById(channel);
-	const created = runtime.state.service.postMessage({
+	const created = postSlackMessage(runtime, {
 		channel: resolvedChannel.id,
-		emitEvent: runtime.config.eventsUrl !== null,
-		now: runtime.clock.now(),
 		text,
 		...(threadTs ? { threadTs } : {}),
 		user: actor.id,
 	});
-	if (created.deliveryEventId) {
-		runtime.state.events.schedule(runtime, {
-			actor,
-			eventId: created.deliveryEventId,
-			message: created.message,
-		});
-	}
 	return context.json({
 		channel: created.message.channelId,
 		message: slackMessage(created.message, actor),

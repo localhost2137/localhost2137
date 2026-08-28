@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { SlackConfig } from "./config.js";
 import { SlackError } from "./domain/slack-error.js";
 import type { SlackPluginDependencies } from "./plugin-dependencies.js";
+import { postSlackMessage } from "./post-message.js";
 import type { SlackState } from "./state.js";
 
 const bindOperation = defineOperation<"slack", SlackState, SlackConfig>();
@@ -162,22 +163,12 @@ export function createSlackOperations(
 		output: sentMessageOutput,
 		run: (context, input) =>
 			runSlackOperation(dependencies, "sendMessage", context, () => {
-				const actor = context.state.service.requireUser(input.from);
-				const created = context.state.service.postMessage({
+				const created = postSlackMessage(context, {
 					channel: input.channel,
-					emitEvent: context.config.eventsUrl !== null,
-					now: context.clock.now(),
 					text: input.text,
 					...(input.threadTs ? { threadTs: input.threadTs } : {}),
-					user: actor.id,
+					user: input.from,
 				});
-				if (created.deliveryEventId) {
-					context.state.events.schedule(context, {
-						actor,
-						eventId: created.deliveryEventId,
-						message: created.message,
-					});
-				}
 				return sentOperationMessage(created.message, created.deliveryEventId);
 			}),
 	});

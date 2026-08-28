@@ -48,11 +48,14 @@ export class SlackService {
 		return user;
 	}
 
-	createChannel(input: Readonly<{ id?: string; name: string; now: Date }>): SlackChannel {
+	createChannel(
+		input: Readonly<{ creator?: string; id?: string; name: string; now: Date }>,
+	): SlackChannel {
 		const name = normalizeChannelName(input.name);
 		if (this.#database.channels.find(name)) {
 			throw new SlackError("name_taken", `A Slack channel named ${name} already exists.`);
 		}
+		const creator = input.creator ? this.requireUser(input.creator) : undefined;
 		return this.#database.transaction(() => {
 			const channel = this.#database.channels.create({
 				...(input.id ? { id: input.id } : {}),
@@ -60,6 +63,7 @@ export class SlackService {
 				now: input.now,
 			});
 			this.#database.channels.addMember(channel.id, LOCAL_BOT_USER_ID);
+			if (creator) this.#database.channels.addMember(channel.id, creator.id);
 			return channel;
 		});
 	}
