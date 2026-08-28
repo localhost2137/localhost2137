@@ -5,6 +5,7 @@ import { createTestRuntime, type TestRuntime } from "localhost2137/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { verifySlackRequestSignature } from "../src/events/request-signature.js";
 import { slack } from "../src/index.js";
+import { slackUiRoutes } from "../src/ui/contract.js";
 
 type Runtime = TestRuntime<ReturnType<typeof config>["services"]>;
 type SlackInstance = Awaited<ReturnType<Runtime["createInstance"]>>;
@@ -27,12 +28,17 @@ afterEach(async () => {
 });
 
 describe("Slack dashboard transport", () => {
+	it("resolves browser routes beneath arbitrary instance and service mounts", () => {
+		const mounted = new URL(slackUiRoutes.snapshot, "http://127.0.0.1:2137/review-42/team-chat/");
+		expect(mounted.pathname).toBe("/review-42/team-chat/_localhost2137/ui/v1/snapshot");
+	});
+
 	it("observes and mutates the same workspace as operations and Slack Web API", async () => {
 		const runtime = await startRuntime();
 		const instance = await runtime.createInstance();
 		try {
 			const ada = await instance.slack.createUser({ name: "Ada" });
-			const created = await uiJson(instance, "channels", {
+			const created = await uiJson(instance, slackUiRoutes.channels, {
 				creator: ada.id,
 				name: "General",
 			});
@@ -88,7 +94,7 @@ describe("Slack dashboard transport", () => {
 				expect(exposed).not.toContain(privateValue);
 			}
 
-			const uiMessage = await uiJson(instance, "messages", {
+			const uiMessage = await uiJson(instance, slackUiRoutes.messages, {
 				channel: channelId,
 				text: "written in the dashboard",
 				user: ada.id,
@@ -132,7 +138,7 @@ describe("Slack dashboard transport", () => {
 		const first = await runtime.createInstance();
 		const second = await runtime.createInstance();
 		try {
-			const invalid = await uiJson(first, "channels", {
+			const invalid = await uiJson(first, slackUiRoutes.channels, {
 				creator: "U_MISSING",
 				name: "must-not-exist",
 			});
@@ -148,20 +154,23 @@ describe("Slack dashboard transport", () => {
 			expect(await (await uiSnapshot(first)).json()).toMatchObject({ channels: [] });
 
 			const ada = await first.slack.createUser({ name: "Ada" });
-			await uiJson(first, "channels", { creator: ada.id, name: "first-only" });
+			await uiJson(first, slackUiRoutes.channels, {
+				creator: ada.id,
+				name: "first-only",
+			});
 			expect(await (await uiSnapshot(first)).json()).toMatchObject({
 				channels: [{ name: "first-only" }],
 			});
 			expect(await (await uiSnapshot(second)).json()).toMatchObject({ channels: [] });
 
-			const uppercaseMediaType = await fetch(uiUrl(first, "channels"), {
+			const uppercaseMediaType = await fetch(uiUrl(first, slackUiRoutes.channels), {
 				body: JSON.stringify({ creator: ada.id, name: "case-insensitive-json" }),
 				headers: { "content-type": "Application/JSON; Charset=UTF-8" },
 				method: "POST",
 			});
 			expect(uppercaseMediaType.status).toBe(201);
 
-			const malformed = await fetch(uiUrl(first, "channels"), {
+			const malformed = await fetch(uiUrl(first, slackUiRoutes.channels), {
 				body: "{",
 				headers: { "content-type": "application/json" },
 				method: "POST",
@@ -214,7 +223,7 @@ describe("Slack dashboard transport", () => {
 			const channel = await instance.slack.createChannel({ name: "events" });
 			await instance.slack.addUserToChannel({ channel: channel.id, user: ada.id });
 
-			const posted = await uiJson(instance, "messages", {
+			const posted = await uiJson(instance, slackUiRoutes.messages, {
 				channel: channel.id,
 				text: "dashboard event",
 				user: ada.id,
@@ -283,7 +292,7 @@ async function startRuntime(eventsUrl: string | null = null): Promise<Runtime> {
 }
 
 function uiSnapshot(instance: SlackInstance, channel?: string): Promise<Response> {
-	const url = new URL("snapshot", uiUrl(instance));
+	const url = uiUrl(instance, slackUiRoutes.snapshot);
 	if (channel) url.searchParams.set("channel", channel);
 	return fetch(url);
 }
@@ -303,7 +312,7 @@ async function uiJson(
 
 function uiUrl(instance: SlackInstance, path = ""): URL {
 	const root = new URL("../", instance.slack.connection.apiUrl);
-	return new URL(`_localhost2137/ui/v1/${path}`, root);
+	return new URL(path, root);
 }
 
 function requireChannelId(value: unknown): string {

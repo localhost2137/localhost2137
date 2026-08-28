@@ -8,9 +8,12 @@ import { postSlackMessage } from "../post-message.js";
 import type { SlackState } from "../state.js";
 import {
 	type SlackUiChannel,
+	type SlackUiCreateChannelInput,
 	type SlackUiCreateChannelResponse,
+	type SlackUiCreateMessageInput,
 	type SlackUiCreateMessageResponse,
 	type SlackUiErrorResponse,
+	type SlackUiMembershipInput,
 	type SlackUiMembershipResponse,
 	type SlackUiMessage,
 	type SlackUiSnapshot,
@@ -24,23 +27,31 @@ const MESSAGE_LIMIT = 200;
 type SlackUiContext = Context<PluginEnv<SlackState, SlackConfig>>;
 type SlackUiApp = Hono<PluginEnv<SlackState, SlackConfig>>;
 
-const channelInput = z.object({
+const channelInput: z.ZodType<SlackUiCreateChannelInput> = z.object({
 	creator: z.string().min(1),
 	name: z.string().min(1),
 });
 
-const membershipInput = z.object({
+const membershipInput: z.ZodType<SlackUiMembershipInput> = z.object({
 	channel: z.string().min(1),
 	user: z.string().min(1),
 });
 
-const messageInput = membershipInput.extend({ text: z.string().min(1) });
+const messageInput: z.ZodType<SlackUiCreateMessageInput> = z.object({
+	channel: z.string().min(1),
+	text: z.string().min(1),
+	user: z.string().min(1),
+});
 
 export function registerSlackDashboardTransport(app: SlackUiApp): void {
-	app.get(slackUiRoutes.snapshot, uiRoute(snapshot));
-	app.post(slackUiRoutes.channels, uiRoute(createChannel));
-	app.post(slackUiRoutes.memberships, uiRoute(addMembership));
-	app.post(slackUiRoutes.messages, uiRoute(createMessage));
+	app.get(serverRoute(slackUiRoutes.snapshot), uiRoute(snapshot));
+	app.post(serverRoute(slackUiRoutes.channels), uiRoute(createChannel));
+	app.post(serverRoute(slackUiRoutes.memberships), uiRoute(addMembership));
+	app.post(serverRoute(slackUiRoutes.messages), uiRoute(createMessage));
+}
+
+function serverRoute(relativePath: string): `/${string}` {
+	return `/${relativePath}`;
 }
 
 async function snapshot(context: SlackUiContext): Promise<Response> {

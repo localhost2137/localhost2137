@@ -1,5 +1,5 @@
 /** Browser-safe private transport shared by the Slack dashboard and its Hono adapter. */
-export const SLACK_UI_TRANSPORT_ROOT = "/_localhost2137/ui/v1";
+export const SLACK_UI_TRANSPORT_ROOT = "_localhost2137/ui/v1";
 
 export const slackUiRoutes = Object.freeze({
 	channels: `${SLACK_UI_TRANSPORT_ROOT}/channels`,
