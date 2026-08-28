@@ -6,6 +6,7 @@ import { formatSlackTimestamp, parseSlackTimestamp } from "../domain/slack-times
 import { postSlackMessage } from "../post-message.js";
 import { LOCAL_BOT_ID } from "../slack-identities.js";
 import type { SlackState } from "../state.js";
+import { registerSlackDashboardAssets } from "../ui/static-assets.js";
 import { registerSlackDashboardTransport } from "../ui/transport.js";
 import { pageResult, readPagination } from "./pagination.js";
 import {
@@ -28,6 +29,7 @@ export function createSlackApi(): Hono<PluginEnv<SlackState, SlackConfig>> {
 	api.on(["GET", "POST"], "/api/conversations.members", slackMethod(conversationsMembers));
 	api.on(["GET", "POST"], "/api/conversations.history", slackMethod(conversationsHistory));
 	api.on(["GET", "POST"], "/api/chat.postMessage", slackMethod(chatPostMessage));
+	registerSlackDashboardAssets(api);
 	registerSlackDashboardTransport(api);
 	return api;
 }

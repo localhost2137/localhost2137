@@ -10,3 +10,4 @@ coverage/
 apps/docs/.react-router/
 apps/docs/build/
 packages/localhost2137/test/.tmp/
+plugins/slack/assets/ui/

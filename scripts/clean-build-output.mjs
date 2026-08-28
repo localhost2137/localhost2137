@@ -21,6 +21,7 @@ const outputDirectories = [
 	join(repositoryRoot, "apps/docs/tsconfig.tsbuildinfo"),
 	join(repositoryRoot, "packages/localhost2137/dist"),
 	join(repositoryRoot, "packages/plugin-testkit/dist"),
+	join(repositoryRoot, "plugins/slack/assets/ui"),
 	join(repositoryRoot, "plugins/slack/dist"),
 	join(repositoryRoot, "plugins/stripe/dist"),
 ];

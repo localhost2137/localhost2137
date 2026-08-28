@@ -9,7 +9,7 @@
 	},
 	"scripts": {
 		"boundaries": "depcruise packages plugins examples --config .dependency-cruiser.cjs",
-		"build": "tsc -b && pnpm docs:build",
+		"build": "pnpm --filter @localhost2137/slack build:ui && tsc -b && pnpm docs:build",
 		"build:clean": "pnpm clean && pnpm build",
 		"changeset": "changeset",
 		"clean": "node scripts/clean-build-output.mjs",
@@ -22,12 +22,12 @@
 		"demo-assets:sync": "node scripts/sync-demo-assets.mjs --write",
 		"knip": "knip",
 		"lint": "biome lint . && eslint .",
-		"pack:check": "pnpm clean && tsc -b && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
+		"pack:check": "pnpm clean && pnpm --filter @localhost2137/slack build:ui && tsc -b && pnpm --filter './packages/*' --filter './plugins/*' pack --dry-run",
 		"package:smoke": "node scripts/package-smoke.mjs",
-		"test": "vitest run",
+		"test": "pnpm --filter @localhost2137/slack build:ui && vitest run",
 		"test:examples": "pnpm --filter @localhost2137/example-getting-started --filter @localhost2137/example-testing-parallel --filter @localhost2137/example-slack-ping-bot --filter @localhost2137/example-stripe-sdk --filter @localhost2137/example-status-plugin test",
-		"test:coverage": "vitest run --coverage",
-		"typecheck": "tsc -b --pretty false && pnpm --filter localhost2137 typecheck:fixtures && pnpm --filter @localhost2137/plugin-testkit typecheck:fixtures && pnpm --filter @localhost2137/slack typecheck:test && pnpm --filter @localhost2137/stripe typecheck:test && pnpm --filter @localhost2137/example-getting-started typecheck && pnpm --filter @localhost2137/example-testing-parallel typecheck && pnpm --filter @localhost2137/example-slack-ping-bot typecheck && pnpm --filter @localhost2137/example-stripe-sdk typecheck && pnpm --filter @localhost2137/example-status-plugin typecheck && pnpm --filter @localhost2137/docs typecheck"
+		"test:coverage": "pnpm --filter @localhost2137/slack build:ui && vitest run --coverage",
+		"typecheck": "tsc -b --pretty false && pnpm --filter localhost2137 typecheck:fixtures && pnpm --filter @localhost2137/plugin-testkit typecheck:fixtures && pnpm --filter @localhost2137/slack typecheck:test && pnpm --filter @localhost2137/slack typecheck:ui && pnpm --filter @localhost2137/stripe typecheck:test && pnpm --filter @localhost2137/example-getting-started typecheck && pnpm --filter @localhost2137/example-testing-parallel typecheck && pnpm --filter @localhost2137/example-slack-ping-bot typecheck && pnpm --filter @localhost2137/example-stripe-sdk typecheck && pnpm --filter @localhost2137/example-status-plugin typecheck && pnpm --filter @localhost2137/docs typecheck"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.10",
