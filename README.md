@@ -122,11 +122,14 @@ localhost exec slack send-message \
 {"channel":"C_GENERAL","id":"M000001","text":"ping","threadTs":null,"ts":"1787875174.049000","userId":"U_ADA","eventId":"Ev000001"}
 ```
 
-Read the channel back:
+Callback delivery is asynchronous. Read the channel; if the first result contains only `ping`,
+repeat the same command until `pong` appears:
 
 ```sh
 localhost exec slack list-messages --channel general
 ```
+
+The fresh run used for this README returned this completed-delivery result:
 
 ```json
 [
