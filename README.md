@@ -5,34 +5,155 @@ agents working on it—can use ordinary SDKs and webhooks without provider accou
 
 ![A terminal session clones the Slack ping bot demo, starts localhost2137 and the bot, sends ping as Ada, then shows the bot's pong in channel history.](docs/assets/localhost2137-slack-demo.gif)
 
-The recording starts in an empty directory and uses the published packages. No Slack account,
-OAuth flow, or provider credential is involved.
+## Run the same demo
 
-<details>
-<summary>Text version of the demo</summary>
+Requires Node.js 24 or newer and pnpm. These outputs come from a clean run against the published
+packages. `…` marks omitted install progress or a machine-local path.
 
-1. `localhost demo clone` copies and installs the shipped Slack ping bot.
-2. Its `localhost.config.ts` configures a local Slack service and declares Ada and `#general` as
-   seed data.
-3. `localhost dev` starts the emulator. `localhost seed` applies that data, then
-   `localhost run -- pnpm start` gives the Bolt bot its local connection values.
-4. Ada sends `ping`. The newest-first channel history shows the bot's `pong` above Ada's earlier
-   message.
-
-</details>
-
-## Try the demo
-
-Requires Node.js 24 or newer and pnpm.
+Install the CLI globally:
 
 ```sh
-pnpm dlx localhost2137 demo clone slack-ping-bot
-cd slack-ping-bot
-pnpm exec localhost dev
+pnpm i -g localhost2137
 ```
 
-The cloned project includes the config, bot, integration test, and the remaining commands. Follow
-its README, or [read the localhost2137 documentation](https://localhost2137.dev/).
+```text
+Packages: +9
++++++++++
+…
++ localhost2137 0.0.1
+```
+
+Clone the published Slack demo. This also installs the demo's dependencies:
+
+```sh
+localhost demo clone slack-ping-bot
+```
+
+```text
+…
+Cloned slack-ping-bot to ./slack-ping-bot
+Installed dependencies with pnpm.
+```
+
+In Terminal 1, enter the demo and start the emulator. Keep this terminal open:
+
+```sh
+cd slack-ping-bot
+localhost dev
+```
+
+```text
+localhost2137 ready
+runtime: http://127.0.0.1:2137
+instance: dev
+services:
+  slack: http://127.0.0.1:2137/dev/slack
+…
+variables: SLACK_API_URL, SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
+```
+
+That command loads this complete `localhost.config.ts`:
+
+```ts
+import { slack } from "@localhost2137/slack";
+import { defineConfig } from "localhost2137";
+
+export default defineConfig({
+	services: {
+		slack: slack({
+			config: {
+				botToken: "xoxb-local-ping-pong",
+				eventsUrl: "http://127.0.0.1:3000/slack/events",
+				signingSecret: "local-ping-pong-signing-secret",
+				workspaceName: "Ping Pong Local",
+			},
+			seed: {
+				channels: [{ id: "C_GENERAL", members: ["U_ADA"], name: "general" }],
+				users: [{ id: "U_ADA", name: "Ada" }],
+			},
+		}),
+	},
+});
+```
+
+Those credential-shaped strings exist only inside the local world. The cloned Bolt bot uses the
+ordinary Slack SDK, with one handler:
+
+```ts
+app.message(/^ping$/, async ({ say }) => {
+	await say("pong");
+});
+```
+
+In Terminal 2, enter the same directory and apply the seed data explicitly:
+
+```sh
+cd slack-ping-bot
+localhost seed
+```
+
+```text
+seeded dev
+```
+
+Start the bot through localhost2137 so it receives the local connection values. Keep this terminal
+open too:
+
+```sh
+localhost run -- pnpm start
+```
+
+```text
+…
+> tsx src/main.ts
+
+bot: http://127.0.0.1:3000/slack/events
+```
+
+In Terminal 3, send `ping` as Ada:
+
+```sh
+cd slack-ping-bot
+localhost exec slack send-message \
+  --channel general --from Ada --text ping --json
+```
+
+```json
+{"channel":"C_GENERAL","id":"M000001","text":"ping","threadTs":null,"ts":"1787875174.049000","userId":"U_ADA","eventId":"Ev000001"}
+```
+
+Read the channel back:
+
+```sh
+localhost exec slack list-messages --channel general
+```
+
+```json
+[
+  {
+    "channel": "C_GENERAL",
+    "id": "M000002",
+    "text": "pong",
+    "threadTs": null,
+    "ts": "1787875174.066000",
+    "userId": "U000000"
+  },
+  {
+    "channel": "C_GENERAL",
+    "id": "M000001",
+    "text": "ping",
+    "threadTs": null,
+    "ts": "1787875174.049000",
+    "userId": "U_ADA"
+  }
+]
+```
+
+History is newest-first, so the bot's `pong` appears above Ada's earlier `ping`. Press Ctrl+C in
+the bot and runtime terminals when finished.
+
+[Read the localhost2137 documentation](https://localhost2137.dev/) for configuration, CLI, and
+integration-testing guides.
 
 ## Add it to a project
 
