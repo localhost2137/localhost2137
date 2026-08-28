@@ -1,4 +1,13 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type FormEvent,
+	type KeyboardEvent,
+	type Ref,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { SlackUiChannel, SlackUiSnapshot, SlackUiUser } from "../../src/ui/contract.js";
 import { ChevronDownIcon, CloseIcon, HashIcon, LockIcon, MenuIcon, PlusIcon } from "./icons.js";
 import { avatarTone, initials, messagesInReadingOrder } from "./workspace-model.js";
@@ -11,8 +20,10 @@ export interface WorkspaceMutation {
 interface SlackWorkspaceViewProps {
 	readonly actingUser: SlackUiUser | null;
 	readonly actingUserId: string | null;
+	readonly isNarrowViewport: boolean;
 	readonly mutation: WorkspaceMutation;
 	readonly onActingUserChange: (id: string) => void;
+	readonly onClearMutationError: () => void;
 	readonly onCreateChannel: (name: string) => Promise<boolean>;
 	readonly onJoinChannel: () => Promise<boolean>;
 	readonly onRetry: () => void;
@@ -21,26 +32,45 @@ interface SlackWorkspaceViewProps {
 	readonly phase: "error" | "loading" | "ready" | "stale";
 	readonly refreshError: string | null;
 	readonly selectedChannel: SlackUiChannel | null;
+	readonly selectionPending: boolean;
 	readonly snapshot: SlackUiSnapshot | null;
 }
 
 export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 	const [createChannelOpen, setCreateChannelOpen] = useState(false);
 	const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
-	const messageList = useRef<HTMLDivElement>(null);
+	const messageList = useRef<HTMLElement>(null);
+	const mobileMenuButton = useRef<HTMLButtonElement>(null);
+	const mobileNavigation = useRef<HTMLElement>(null);
+	const mobileNavigationClose = useRef<HTMLButtonElement>(null);
 	const shouldStickToLatest = useRef(true);
 	const snapshot = props.snapshot;
-	const messages = useMemo(
-		() => messagesInReadingOrder(snapshot?.messages ?? []),
-		[snapshot?.messages],
-	);
 	const selectedChannel = props.selectedChannel;
+	const messages = useMemo(
+		() =>
+			messagesInReadingOrder(
+				(snapshot?.messages ?? []).filter((message) => message.channelId === selectedChannel?.id),
+			),
+		[selectedChannel?.id, snapshot?.messages],
+	);
 	const actingUser = props.actingUser;
 	const isMember = Boolean(
 		selectedChannel && actingUser && selectedChannel.memberIds.includes(actingUser.id),
 	);
 	const lastMessageId = messages.at(-1)?.id;
 	const scrollTarget = `${selectedChannel?.id ?? ""}:${lastMessageId ?? ""}`;
+	const mutationBusy = props.mutation.kind !== null;
+	const mobileDrawerOpen = props.isNarrowViewport && mobileNavigationOpen;
+	const closeMobileNavigation = useCallback(() => {
+		setMobileNavigationOpen(false);
+		if (props.isNarrowViewport) {
+			globalThis.queueMicrotask(() => mobileMenuButton.current?.focus());
+		}
+	}, [props.isNarrowViewport]);
+	const openCreateChannel = () => {
+		props.onClearMutationError();
+		setCreateChannelOpen(true);
+	};
 
 	useEffect(() => {
 		if (scrollTarget === ":") return;
@@ -59,28 +89,37 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 		if (!createChannelOpen && !mobileNavigationOpen) return;
 		const closeOnEscape = (event: globalThis.KeyboardEvent) => {
 			if (event.key !== "Escape") return;
-			setCreateChannelOpen(false);
-			setMobileNavigationOpen(false);
+			if (createChannelOpen) setCreateChannelOpen(false);
+			else closeMobileNavigation();
 		};
 		document.addEventListener("keydown", closeOnEscape);
 		return () => document.removeEventListener("keydown", closeOnEscape);
-	}, [createChannelOpen, mobileNavigationOpen]);
+	}, [closeMobileNavigation, createChannelOpen, mobileNavigationOpen]);
+
+	useEffect(() => {
+		if (mobileDrawerOpen) mobileNavigationClose.current?.focus();
+	}, [mobileDrawerOpen]);
+
+	useEffect(() => {
+		if (!props.isNarrowViewport) setMobileNavigationOpen(false);
+	}, [props.isNarrowViewport]);
 
 	const chooseChannel = (id: string) => {
 		props.onSelectChannel(id);
 		shouldStickToLatest.current = true;
-		setMobileNavigationOpen(false);
+		closeMobileNavigation();
 	};
 
 	return (
 		<div className="slack-shell">
-			<header className="workspace-bar">
+			<header className="workspace-bar" inert={mobileDrawerOpen || undefined}>
 				<button
 					aria-controls="workspace-navigation"
-					aria-expanded={mobileNavigationOpen}
+					aria-expanded={mobileDrawerOpen}
 					aria-label="Open workspace navigation"
 					className="icon-button mobile-menu-button"
 					onClick={() => setMobileNavigationOpen(true)}
+					ref={mobileMenuButton}
 					type="button"
 				>
 					<MenuIcon />
@@ -92,48 +131,63 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 			<div className="workspace-body">
 				<button
 					aria-label="Close workspace navigation"
-					className={`navigation-scrim${mobileNavigationOpen ? " is-open" : ""}`}
-					onClick={() => setMobileNavigationOpen(false)}
+					className={`navigation-scrim${mobileDrawerOpen ? " is-open" : ""}`}
+					onClick={closeMobileNavigation}
 					type="button"
 				/>
 				<aside
-					className={`workspace-sidebar${mobileNavigationOpen ? " is-open" : ""}`}
+					aria-hidden={props.isNarrowViewport && !mobileDrawerOpen ? true : undefined}
+					className={`workspace-sidebar${mobileDrawerOpen ? " is-open" : ""}`}
 					id="workspace-navigation"
+					inert={props.isNarrowViewport && !mobileDrawerOpen ? true : undefined}
+					onKeyDown={(event) => {
+						if (mobileDrawerOpen) keepFocusWithin(event, mobileNavigation.current);
+					}}
+					ref={mobileNavigation}
 				>
 					<SidebarHeader
-						onClose={() => setMobileNavigationOpen(false)}
+						closeButtonRef={mobileNavigationClose}
+						onClose={closeMobileNavigation}
 						workspaceName={snapshot?.workspace.name ?? "Local Slack"}
 					/>
 					<ActingUserPicker
+						disabled={mutationBusy}
 						onChange={props.onActingUserChange}
 						selected={props.actingUserId}
 						users={snapshot?.users ?? []}
 					/>
 					<ChannelNavigation
 						channels={snapshot?.channels ?? []}
-						onCreate={() => setCreateChannelOpen(true)}
+						disabled={mutationBusy}
+						onCreate={openCreateChannel}
 						onSelect={chooseChannel}
 						selectedChannelId={selectedChannel?.id ?? null}
 					/>
 					<p className="local-runtime-note">Local emulator · no sign-in required</p>
 				</aside>
 
-				<main className="conversation" id="main-content">
+				<main className="conversation" id="main-content" inert={mobileDrawerOpen || undefined}>
 					{props.phase === "loading" && !snapshot ? (
 						<LoadingWorkspace />
 					) : props.phase === "error" && !snapshot ? (
 						<UnavailableWorkspace error={props.refreshError} onRetry={props.onRetry} />
 					) : snapshot ? (
 						<>
-							{props.refreshError ? (
-								<RefreshNotice error={props.refreshError} onRetry={props.onRetry} />
-							) : null}
-							{props.mutation.error ? (
-								<div className="mutation-error" role="alert">
-									{props.mutation.error}
+							{props.refreshError || (props.mutation.error && !createChannelOpen) ? (
+								<div className="notice-stack">
+									{props.refreshError ? (
+										<RefreshNotice error={props.refreshError} onRetry={props.onRetry} />
+									) : null}
+									{props.mutation.error && !createChannelOpen ? (
+										<div className="mutation-error" role="alert">
+											{props.mutation.error}
+										</div>
+									) : null}
 								</div>
 							) : null}
-							{selectedChannel ? (
+							{props.selectionPending ? (
+								<LoadingChannel />
+							) : selectedChannel ? (
 								<>
 									<ConversationHeader channel={selectedChannel} />
 									<section
@@ -148,7 +202,8 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 									>
 										<div className="message-history-inner">
 											<ChannelIntroduction channel={selectedChannel} />
-											{snapshot.hasMoreMessages ? (
+											{snapshot.selectedChannelId === selectedChannel.id &&
+											snapshot.hasMoreMessages ? (
 												<p className="history-limit-notice">
 													Showing the latest 200 messages from this local channel.
 												</p>
@@ -163,7 +218,7 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 									</section>
 									{isMember ? (
 										<MessageComposer
-											busy={props.mutation.kind === "send-message"}
+											busy={mutationBusy}
 											channelName={selectedChannel.name}
 											key={selectedChannel.id}
 											onSent={() => {
@@ -173,7 +228,7 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 										/>
 									) : (
 										<JoinChannel
-											busy={props.mutation.kind === "join-channel"}
+											busy={mutationBusy}
 											channel={selectedChannel}
 											disabled={!actingUser}
 											onJoin={props.onJoinChannel}
@@ -181,7 +236,7 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 									)}
 								</>
 							) : (
-								<NoChannels onCreate={() => setCreateChannelOpen(true)} />
+								<NoChannels disabled={mutationBusy} onCreate={openCreateChannel} />
 							)}
 						</>
 					) : null}
@@ -192,9 +247,13 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 				<CreateChannelDialog
 					busy={props.mutation.kind === "create-channel"}
 					disabled={!actingUser}
+					error={props.mutation.error}
 					onClose={() => setCreateChannelOpen(false)}
 					onCreate={async (name) => {
-						if (await props.onCreateChannel(name)) setCreateChannelOpen(false);
+						if (await props.onCreateChannel(name)) {
+							setCreateChannelOpen(false);
+							closeMobileNavigation();
+						}
 					}}
 				/>
 			) : null}
@@ -202,7 +261,15 @@ export function SlackWorkspaceView(props: SlackWorkspaceViewProps) {
 	);
 }
 
-function SidebarHeader({ onClose, workspaceName }: { onClose: () => void; workspaceName: string }) {
+function SidebarHeader({
+	closeButtonRef,
+	onClose,
+	workspaceName,
+}: {
+	readonly closeButtonRef: Ref<HTMLButtonElement>;
+	readonly onClose: () => void;
+	readonly workspaceName: string;
+}) {
 	return (
 		<div className="sidebar-header">
 			<div>
@@ -213,6 +280,7 @@ function SidebarHeader({ onClose, workspaceName }: { onClose: () => void; worksp
 				aria-label="Close workspace navigation"
 				className="icon-button sidebar-close"
 				onClick={onClose}
+				ref={closeButtonRef}
 				type="button"
 			>
 				<CloseIcon />
@@ -222,10 +290,12 @@ function SidebarHeader({ onClose, workspaceName }: { onClose: () => void; worksp
 }
 
 function ActingUserPicker({
+	disabled,
 	onChange,
 	selected,
 	users,
 }: {
+	readonly disabled: boolean;
 	readonly onChange: (id: string) => void;
 	readonly selected: string | null;
 	readonly users: readonly SlackUiUser[];
@@ -235,7 +305,7 @@ function ActingUserPicker({
 			<span>Act as</span>
 			<div className="select-wrap">
 				<select
-					disabled={users.length === 0}
+					disabled={disabled || users.length === 0}
 					onChange={(event) => onChange(event.currentTarget.value)}
 					value={selected ?? ""}
 				>
@@ -255,11 +325,13 @@ function ActingUserPicker({
 
 function ChannelNavigation({
 	channels,
+	disabled,
 	onCreate,
 	onSelect,
 	selectedChannelId,
 }: {
 	readonly channels: readonly SlackUiChannel[];
+	readonly disabled: boolean;
 	readonly onCreate: () => void;
 	readonly onSelect: (id: string) => void;
 	readonly selectedChannelId: string | null;
@@ -271,6 +343,7 @@ function ChannelNavigation({
 				<button
 					aria-label="Create a channel"
 					className="icon-button add-channel-button"
+					disabled={disabled}
 					onClick={onCreate}
 					type="button"
 				>
@@ -286,6 +359,7 @@ function ChannelNavigation({
 							<button
 								aria-current={channel.id === selectedChannelId ? "page" : undefined}
 								className="channel-link"
+								disabled={disabled}
 								onClick={() => onSelect(channel.id)}
 								type="button"
 							>
@@ -349,6 +423,7 @@ function MessageRow({
 				<div className="message-meta">
 					<strong>{authorName}</strong>
 					{author?.bot ? <span className="app-badge">APP</span> : null}
+					{message.threadTs ? <span className="thread-badge">Thread reply</span> : null}
 					<time dateTime={message.createdAt} title={formatFullDate(createdAt)}>
 						{formatTime(createdAt)}
 					</time>
@@ -404,6 +479,7 @@ function MessageComposer({
 				</label>
 				<textarea
 					autoComplete="off"
+					disabled={busy}
 					id="message-draft"
 					onChange={(event) => setDraft(event.currentTarget.value)}
 					onKeyDown={submitOnEnter}
@@ -446,7 +522,13 @@ function JoinChannel({
 	);
 }
 
-function NoChannels({ onCreate }: { readonly onCreate: () => void }) {
+function NoChannels({
+	disabled,
+	onCreate,
+}: {
+	readonly disabled: boolean;
+	readonly onCreate: () => void;
+}) {
 	return (
 		<section className="centered-state">
 			<div className="empty-channel-mark">
@@ -455,10 +537,20 @@ function NoChannels({ onCreate }: { readonly onCreate: () => void }) {
 			<p className="state-kicker">Local workspace ready</p>
 			<h2>Create the first channel</h2>
 			<p>It will be available immediately to your app, tests, and CLI.</p>
-			<button className="primary-button" onClick={onCreate} type="button">
+			<button className="primary-button" disabled={disabled} onClick={onCreate} type="button">
 				Create a channel
 			</button>
 		</section>
+	);
+}
+
+function LoadingChannel() {
+	return (
+		<div aria-live="polite" className="centered-state" role="status">
+			<span className="loading-indicator" />
+			<h2>Opening this channel</h2>
+			<p>Loading its current membership and message history.</p>
+		</div>
 	);
 }
 
@@ -526,19 +618,26 @@ function ConnectionStatus({ phase }: { readonly phase: SlackWorkspaceViewProps["
 function CreateChannelDialog({
 	busy,
 	disabled,
+	error,
 	onClose,
 	onCreate,
 }: {
 	readonly busy: boolean;
 	readonly disabled: boolean;
+	readonly error: string | null;
 	readonly onClose: () => void;
 	readonly onCreate: (name: string) => Promise<void>;
 }) {
 	const [name, setName] = useState("");
+	const dialog = useRef<HTMLFormElement>(null);
 	const nameInput = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
+		const previouslyFocused = document.activeElement;
 		nameInput.current?.focus();
+		return () => {
+			if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+		};
 	}, []);
 
 	return (
@@ -550,11 +649,13 @@ function CreateChannelDialog({
 		>
 			<form
 				className="channel-dialog"
+				onKeyDown={(event) => keepFocusWithin(event, dialog.current)}
 				onSubmit={(event) => {
 					event.preventDefault();
 					const normalized = name.trim();
 					if (normalized) void onCreate(normalized);
 				}}
+				ref={dialog}
 			>
 				<div className="dialog-heading">
 					<div>
@@ -575,17 +676,25 @@ function CreateChannelDialog({
 				<div className="channel-name-input">
 					<HashIcon />
 					<input
+						aria-describedby={`channel-name-help${error ? " channel-name-error" : ""}`}
 						id="channel-name"
 						maxLength={80}
-						onChange={(event) => setName(event.currentTarget.value)}
-						pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,79}"
+						onChange={(event) => setName(event.currentTarget.value.toLowerCase())}
+						pattern="[a-z0-9][a-z0-9_-]{0,79}"
 						placeholder="project-updates"
 						ref={nameInput}
 						required
 						value={name}
 					/>
 				</div>
-				<span className="field-help">Lowercase letters, numbers, hyphens, and underscores.</span>
+				<span className="field-help" id="channel-name-help">
+					Lowercase letters, numbers, hyphens, and underscores.
+				</span>
+				{error ? (
+					<p className="dialog-warning" id="channel-name-error" role="alert">
+						{error}
+					</p>
+				) : null}
 				{disabled ? (
 					<p className="dialog-warning">Create a local user before creating a channel.</p>
 				) : null}
@@ -604,6 +713,23 @@ function CreateChannelDialog({
 			</form>
 		</div>
 	);
+}
+
+function keepFocusWithin(event: KeyboardEvent<HTMLElement>, container: HTMLElement | null): void {
+	if (event.key !== "Tab") return;
+	const focusable = container?.querySelectorAll<HTMLElement>(
+		'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+	);
+	if (!focusable || focusable.length === 0) return;
+	const first = focusable[0];
+	const last = focusable[focusable.length - 1];
+	if (event.shiftKey && document.activeElement === first) {
+		event.preventDefault();
+		last?.focus();
+	} else if (!event.shiftKey && document.activeElement === last) {
+		event.preventDefault();
+		first?.focus();
+	}
 }
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });

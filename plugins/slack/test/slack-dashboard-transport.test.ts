@@ -184,6 +184,24 @@ describe("Slack dashboard transport", () => {
 		}
 	});
 
+	it("returns an unselected snapshot when a previously selected channel no longer exists", async () => {
+		const runtime = await startRuntime();
+		const instance = await runtime.createInstance();
+		try {
+			await instance.slack.createChannel({ name: "still-here" });
+			const response = await uiSnapshot(instance, "C_REMOVED");
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				channels: [{ name: "still-here" }],
+				hasMoreMessages: false,
+				messages: [],
+				selectedChannelId: null,
+			});
+		} finally {
+			await instance.destroy();
+		}
+	});
+
 	it("reports when a newest-first message snapshot omits older history", async () => {
 		const runtime = await startRuntime();
 		const instance = await runtime.createInstance();

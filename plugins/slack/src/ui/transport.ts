@@ -60,7 +60,7 @@ async function snapshot(context: SlackUiContext): Promise<Response> {
 	const channels = listAllChannels(runtime.state.service);
 	const requestedChannel = new URL(context.req.url).searchParams.get("channel");
 	const selectedChannel = requestedChannel
-		? runtime.state.service.requireChannel(requestedChannel)
+		? optionalChannel(runtime.state.service, requestedChannel)
 		: undefined;
 	const messagePage = selectedChannel
 		? runtime.state.service.listMessages(selectedChannel.id, { limit: MESSAGE_LIMIT + 1 })
@@ -80,6 +80,18 @@ async function snapshot(context: SlackUiContext): Promise<Response> {
 	};
 
 	return jsonNoStore(context, response);
+}
+
+function optionalChannel(
+	service: SlackState["service"],
+	reference: string,
+): SlackChannel | undefined {
+	try {
+		return service.requireChannel(reference);
+	} catch (cause) {
+		if (cause instanceof SlackError && cause.code === "channel_not_found") return undefined;
+		throw cause;
+	}
 }
 
 async function createChannel(context: SlackUiContext): Promise<Response> {
