@@ -1,5 +1,5 @@
 export function markdownRouteForPage(pageUrl: string): string {
-	return pageUrl === "/" ? "/index.md" : `${pageUrl}.md`;
+	return pageUrl === "/docs" ? "/index.md" : `${pageUrl}.md`;
 }
 
 export function rewriteLLMIndexLinks(index: string, pageUrls: ReadonlySet<string>): string {

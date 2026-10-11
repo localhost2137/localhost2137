@@ -14,6 +14,7 @@ export const docs = defineDocs({
 
 export const source = loader({
 	baseUrl: "/",
+	url: (slugs) => (slugs.length === 0 ? "/docs" : `/${slugs.join("/")}`),
 	source: docs.toFumadocsSource(),
 });
 

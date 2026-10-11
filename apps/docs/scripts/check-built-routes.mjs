@@ -24,6 +24,15 @@ const workerModule = await import(new URL("../build/server/index.js", import.met
 const worker = workerModule.default;
 assert.equal(typeof worker?.fetch, "function", "The built docs worker must export fetch().");
 
+const landing = await request("/");
+assert.equal(landing.status, 200, "The landing page must return HTML.");
+const landingHtml = await landing.text();
+assert(
+	landingHtml.includes('id="playground"'),
+	"The landing page must contain the interactive demo.",
+);
+assert(landingHtml.includes('href="/docs"'), "The landing page must link to the documentation.");
+
 const pageUrls = new Set(sidebarUrls);
 const markdownUrls = new Set(sidebarUrls.map(markdownRouteForPage));
 const markdownBodies = new Map();
@@ -73,7 +82,7 @@ assertNoHumanDocsLinks(llmsFullBody, pageUrls);
 const agentsMarkdown = markdownBodies.get("/agents") ?? "";
 assert(agentsMarkdown.includes("](/llms.txt)"), "Non-page internal links must remain unchanged.");
 assert(
-	(markdownBodies.get("/") ?? "").includes(
+	(markdownBodies.get("/docs") ?? "").includes(
 		"](/callbacks.md#parallel-receivers-require-a-routing-rule)",
 	),
 	"Markdown pages must preserve fragments while rewriting docs links.",
@@ -94,7 +103,7 @@ async function readPages(root) {
 			files.map(async (file) => {
 				const sourcePath = relative(root, file).replaceAll("\\", "/");
 				const stem = sourcePath.slice(0, -".mdx".length);
-				const url = stem === "index" ? "/" : `/${stem}`;
+				const url = stem === "index" ? "/docs" : `/${stem}`;
 				return [sourcePath, { source: await readFile(file, "utf8"), url }];
 			}),
 		),
@@ -164,7 +173,7 @@ function splitTarget(target) {
 }
 
 function markdownRouteForPage(pageUrl) {
-	return pageUrl === "/" ? "/index.md" : `${pageUrl}.md`;
+	return pageUrl === "/docs" ? "/index.md" : `${pageUrl}.md`;
 }
 
 function withoutFencedCode(source) {

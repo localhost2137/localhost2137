@@ -17,7 +17,8 @@ export default [
 	...markdownRoutePaths.map((path) =>
 		route(path, "routes/markdown.ts", { id: `markdown/${path}` }),
 	),
-	index("routes/docs.tsx", { id: "docs-index" }),
+	index("routes/home.tsx"),
+	route("docs", "routes/docs.tsx", { id: "docs-index" }),
 	route("*", "routes/docs.tsx", { id: "docs-splat" }),
 ] satisfies RouteConfig;
 

@@ -15,7 +15,7 @@ const repositoryRoot = resolve(docsRoot, "../..");
 const nativeBuildPermission = "allowBuilds:\n  better-sqlite3: true";
 
 const expectedPages = new Map([
-	["index.mdx", "/"],
+	["index.mdx", "/docs"],
 	["test-boundaries.mdx", "/test-boundaries"],
 	["compatibility.mdx", "/compatibility"],
 	["operations-and-apis.mdx", "/operations-and-apis"],
@@ -1105,8 +1105,12 @@ assert(stylesheet.includes("display: flex"));
 const routeModule = await import("../app/routes.ts");
 const routeConfig = routeModule.default;
 assert(
-	routeConfig.some((entry) => entry.file === "routes/docs.tsx" && entry.index === true),
-	"The root docs page must use a native index route.",
+	routeConfig.some((entry) => entry.file === "routes/home.tsx" && entry.index === true),
+	"The landing page must use the native index route.",
+);
+assert(
+	routeConfig.some((entry) => entry.file === "routes/docs.tsx" && entry.path === "docs"),
+	"The documentation introduction must be available at /docs.",
 );
 assert(
 	routeConfig.some((entry) => entry.file === "routes/docs.tsx" && entry.path === "*"),
@@ -1231,7 +1235,7 @@ assert.deepEqual(
 
 const markdownLinkFixture = [
 	"[callback](/callbacks#parallel-receivers-require-a-routing-rule)",
-	"[root](/)",
+	"[root](/docs)",
 	"[llms](/llms.txt)",
 	"[unknown](/not-a-doc#fragment)",
 	"[external](https://example.test/callbacks)",
