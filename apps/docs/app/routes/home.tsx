@@ -1,5 +1,6 @@
 import { useTheme } from "fumadocs-ui/provider/base";
 import { useEffect, useRef, useState } from "react";
+import { LandingFlight } from "@/components/landing-flight";
 import { Icon } from "@/components/landing-icons";
 import { LandingPlayground } from "@/components/landing-playground";
 import { setupPrompt } from "@/lib/landing-demo";
@@ -89,36 +90,52 @@ export default function LandingPage() {
 				</header>
 				<main id="main">
 					<section className="lp-hero" aria-labelledby="hero-title">
-						<h1 id="hero-title">
-							Test integrations.
-							<br />
-							<span>Skip the account setup.</span>
-						</h1>
-						<div className="lp-hero-detail">
-							<p>
-								localhost2137 emulates external services on your machine. Your app calls their APIs;
-								you or your agent control their data and events.
-							</p>
-							<div className="lp-hero-actions">
-								<a href="/getting-started" className="lp-button">
-									Read the docs <Icon name="arrow-right" />
-								</a>
-								<button
-									type="button"
-									className="lp-agent-button"
-									onClick={() => void copyPrompt()}
-									title="Copy instructions for your coding agent to run the Slack example locally"
-								>
-									<Icon name={copied ? "check" : "copy"} />
-									{copied ? "Copied" : "Copy setup prompt"}
-								</button>
-								<span className="lp-sr-only" role="status">
-									{copied ? "Setup prompt copied. Paste it into your coding agent." : ""}
-								</span>
+						<LandingFlight theme={resolvedTheme} />
+						<div className="lp-hero-content">
+							<p className="lp-hero-eyebrow">External services. Running locally.</p>
+							<h1 id="hero-title">
+								Test integrations.
+								<br />
+								<span>Skip the account setup.</span>
+							</h1>
+							<div className="lp-hero-detail">
+								<p>
+									localhost2137 emulates external services on your machine. Your app calls their
+									APIs; you or your agent control their data and events.
+								</p>
+								<div className="lp-hero-actions">
+									<a href="/getting-started" className="lp-button">
+										Read the docs <Icon name="arrow-right" />
+									</a>
+									<button
+										type="button"
+										className="lp-agent-button"
+										onClick={() => void copyPrompt()}
+										title="Copy instructions for your coding agent to run the Slack example locally"
+									>
+										<Icon name={copied ? "check" : "copy"} />
+										{copied ? "Copied" : "Copy setup prompt"}
+									</button>
+									<span className="lp-sr-only" role="status">
+										{copied ? "Setup prompt copied. Paste it into your coding agent." : ""}
+									</span>
+								</div>
 							</div>
 						</div>
+						<a className="lp-hero-scroll" href="#local-demo">
+							See it in action <Icon name="arrow-right" />
+						</a>
 					</section>
-					<LandingPlayground />
+					<section className="lp-demo-section" id="local-demo" aria-labelledby="demo-title">
+						<div className="lp-demo-heading">
+							<div>
+								<p className="lp-section-eyebrow">A real workflow, on localhost</p>
+								<h2 id="demo-title">See the whole loop.</h2>
+							</div>
+							<p>Send a ping. Follow it through the code.</p>
+						</div>
+						<LandingPlayground />
+					</section>
 				</main>
 				<footer className="lp-footer">
 					<a href={`${repository}/tree/master/examples/slack-ping-bot`}>
