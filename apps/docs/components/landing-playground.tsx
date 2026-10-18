@@ -1,24 +1,66 @@
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	type FormEvent,
+	type KeyboardEvent,
+	type ReactNode,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { botCode, configCode } from "@/lib/landing-demo";
 import { Icon } from "./landing-icons";
+import "./landing-playground.css";
 
-type Phase = "ready" | "event" | "handler";
+type Phase = "ready" | "message" | "event" | "handler" | "reply" | "complete" | "unmatched";
 type Message = Readonly<{ id: number; author: "Ada" | "Ping bot"; text: string }>;
+type CodeTab = "config" | "bot";
+
+const stages = ["Message", "Event", "Handler", "Reply"] as const;
+const phaseStep: Record<Phase, number> = {
+	ready: -1,
+	message: 0,
+	event: 1,
+	handler: 2,
+	reply: 3,
+	complete: 4,
+	unmatched: 2,
+};
+const phaseStatus: Record<Phase, string> = {
+	ready: "Send ping to follow the round trip.",
+	message: "Message sent from the browser.",
+	event: "Slack event delivered to the bot.",
+	handler: "The ping handler is running.",
+	reply: "Sending pong back to the channel.",
+	complete: "pong delivered. Round trip complete.",
+	unmatched: "Event delivered. This handler only matches “ping”, so no reply was sent.",
+};
 
 export function LandingPlayground() {
 	const [draft, setDraft] = useState("ping");
 	const [phase, setPhase] = useState<Phase>("ready");
+	const [codeTab, setCodeTab] = useState<CodeTab>("config");
+	const [compact, setCompact] = useState(false);
 	const [messages, setMessages] = useState<readonly Message[]>([
-		{ id: 0, author: "Ada", text: "All running locally! Try sending “ping” 😁" },
+		{ id: 0, author: "Ada", text: "Send “ping” to see the bot reply." },
 	]);
+	const instanceId = useId();
+	const configTab = useRef<HTMLButtonElement>(null);
+	const botTab = useRef<HTMLButtonElement>(null);
 	const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 	const nextId = useRef(1);
 	const busy = useRef(false);
 	const history = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLInputElement>(null);
-	const running = phase === "event" || phase === "handler";
+	const running = ["message", "event", "handler", "reply"].includes(phase);
 
 	useEffect(() => () => timers.current.forEach(clearTimeout), []);
+	useEffect(() => {
+		const media = window.matchMedia("(max-width: 760px)");
+		const update = () => setCompact(media.matches);
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
 	useEffect(() => {
 		if (history.current && messages.length > 0) {
 			history.current.scrollTop = history.current.scrollHeight;
@@ -27,6 +69,18 @@ export function LandingPlayground() {
 
 	function later(work: () => void, delay: number) {
 		timers.current.push(setTimeout(work, delay));
+	}
+
+	function navigateTabs(event: KeyboardEvent<HTMLButtonElement>) {
+		let next: CodeTab;
+		if (event.key === "Home") next = "config";
+		else if (event.key === "End") next = "bot";
+		else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+			next = codeTab === "config" ? "bot" : "config";
+		} else return;
+		event.preventDefault();
+		setCodeTab(next);
+		(next === "config" ? configTab : botTab).current?.focus();
 	}
 
 	function send(event: FormEvent<HTMLFormElement>) {
@@ -41,8 +95,12 @@ export function LandingPlayground() {
 			{ id: nextId.current++, author: "Ada", text },
 		]);
 		setDraft("");
-		setPhase("event");
-		if (text === "ping") later(() => setPhase("handler"), 550);
+		setPhase("message");
+		later(() => setPhase("event"), 200);
+		if (text === "ping") {
+			later(() => setPhase("handler"), 550);
+			later(() => setPhase("reply"), 1000);
+		}
 		later(() => {
 			if (text === "ping") {
 				setMessages((current) => [
@@ -50,9 +108,11 @@ export function LandingPlayground() {
 					{ id: nextId.current++, author: "Ping bot", text: "pong" },
 				]);
 			}
-			setPhase("ready");
+			setPhase(text === "ping" ? "complete" : "unmatched");
 			busy.current = false;
-			input.current?.focus({ preventScroll: true });
+			if (input.current?.form?.contains(document.activeElement)) {
+				input.current.focus({ preventScroll: true });
+			}
 		}, 1250);
 	}
 
@@ -63,7 +123,7 @@ export function LandingPlayground() {
 					<Icon name="local" />
 					Everything on localhost
 				</span>
-				<span className="lp-simulation-label">Simulated example</span>
+				<span className="lp-simulation-label">Browser simulation</span>
 			</div>
 			<div className="lp-windows">
 				<div className="lp-window lp-slack-window">
@@ -110,12 +170,12 @@ export function LandingPlayground() {
 								))}
 							</div>
 							<form className="lp-composer" onSubmit={send}>
-								<label className="lp-sr-only" htmlFor="slack-message">
+								<label className="lp-sr-only" htmlFor={`${instanceId}-slack-message`}>
 									Message #general
 								</label>
 								<input
 									ref={input}
-									id="slack-message"
+									id={`${instanceId}-slack-message`}
 									value={draft}
 									onChange={(event) => setDraft(event.target.value)}
 									maxLength={300}
@@ -129,12 +189,50 @@ export function LandingPlayground() {
 						</div>
 					</div>
 				</div>
+				<div className="lp-code-tabs" role="tablist" aria-label="Example source code">
+					<button
+						ref={configTab}
+						type="button"
+						role="tab"
+						id={`${instanceId}-tab-config`}
+						aria-controls={`${instanceId}-panel-config`}
+						aria-selected={codeTab === "config"}
+						tabIndex={codeTab === "config" ? 0 : -1}
+						onClick={() => setCodeTab("config")}
+						onKeyDown={navigateTabs}
+					>
+						<Icon name="code" />
+						Config
+					</button>
+					<button
+						ref={botTab}
+						type="button"
+						role="tab"
+						id={`${instanceId}-tab-bot`}
+						aria-controls={`${instanceId}-panel-bot`}
+						aria-selected={codeTab === "bot"}
+						tabIndex={codeTab === "bot" ? 0 : -1}
+						onClick={() => setCodeTab("bot")}
+						onKeyDown={navigateTabs}
+					>
+						<Icon name="code" />
+						Bot
+					</button>
+				</div>
 				<CodeWindow
+					id={`${instanceId}-panel-config`}
+					tabId={`${instanceId}-tab-config`}
+					compact={compact}
+					selected={codeTab === "config"}
 					name="localhost.config.ts"
 					code={configCode}
 					activeLines={phase === "event" ? [11, 12] : []}
 				/>
 				<CodeWindow
+					id={`${instanceId}-panel-bot`}
+					tabId={`${instanceId}-tab-bot`}
+					compact={compact}
+					selected={codeTab === "bot"}
 					name="index.ts"
 					code={botCode}
 					activeLines={phase === "handler" ? [13, 14, 15] : []}
@@ -144,28 +242,84 @@ export function LandingPlayground() {
 					</code>
 				</CodeWindow>
 			</div>
+			<div className={`lp-phase-rail is-${phase}`}>
+				<ol className="lp-phase-stages" aria-label="Message lifecycle">
+					{stages.map((stage, index) => {
+						const done = index < phaseStep[phase];
+						const active = running && index === phaseStep[phase];
+						const unmatched = phase === "unmatched" && index === 2;
+						const skipped = phase === "unmatched" && index === 3;
+						return (
+							<li
+								key={stage}
+								className={`${done ? "is-done" : ""} ${active ? "is-active" : ""} ${unmatched ? "is-unmatched" : ""}`}
+								aria-current={active ? "step" : undefined}
+							>
+								<span className="lp-phase-marker" aria-hidden="true">
+									{done ? "✓" : unmatched ? "−" : index + 1}
+								</span>
+								<span>{stage}</span>
+								<span className="lp-sr-only">
+									{done
+										? ", complete"
+										: active
+											? ", in progress"
+											: unmatched
+												? ", no match"
+												: skipped
+													? ", skipped"
+													: ", waiting"}
+								</span>
+							</li>
+						);
+					})}
+				</ol>
+				<p className="lp-phase-status" role="status" aria-live="polite" aria-atomic="true">
+					{phaseStatus[phase]}
+				</p>
+			</div>
 		</section>
 	);
 }
 
 function CodeWindow({
+	id,
+	tabId,
+	compact,
+	selected,
 	name,
 	code,
 	activeLines,
 	children,
 }: Readonly<{
+	id: string;
+	tabId: string;
+	compact: boolean;
+	selected: boolean;
 	name: string;
 	code: string;
 	activeLines: readonly number[];
 	children?: ReactNode;
 }>) {
 	return (
-		<div className="lp-window lp-code-window">
+		<section
+			id={id}
+			className={`lp-window lp-code-window ${selected ? "is-selected" : ""}`}
+			role={compact ? "tabpanel" : "region"}
+			aria-label={compact ? undefined : name}
+			aria-labelledby={compact ? tabId : undefined}
+			hidden={compact && !selected}
+			tabIndex={compact ? 0 : undefined}
+		>
 			<div className="lp-window-bar">
 				<Icon name="code" />
 				<span>{name}</span>
 			</div>
-			<pre className="lp-code">
+			<pre
+				className="lp-code"
+				// biome-ignore lint/a11y/noNoninteractiveTabindex: The source pane scrolls independently on small screens.
+				tabIndex={0}
+			>
 				<code>
 					{code.split("\n").map((line, index) => (
 						<span
@@ -183,7 +337,7 @@ function CodeWindow({
 				</code>
 			</pre>
 			{children}
-		</div>
+		</section>
 	);
 }
 

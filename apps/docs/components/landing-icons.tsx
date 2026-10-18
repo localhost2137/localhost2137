@@ -12,7 +12,9 @@ export function Icon({
 		| "browser"
 		| "github"
 		| "arrow-right"
+		| "arrow-down"
 		| "arrow-up-right"
+		| "package"
 		| "close"
 		| "sun"
 		| "moon";
@@ -34,7 +36,9 @@ export function Icon({
 		local: "M4 3h12v10H4zM2 17h16m-10-4-1 4m5-4 1 4",
 		browser: "M3 3h14v14H3zM3 7h14M6 5h.01M9 5h.01",
 		"arrow-right": "M3 10h14m-6-6 6 6-6 6",
+		"arrow-down": "M10 3v14m-6-6 6 6 6-6",
 		"arrow-up-right": "M5 15 15 5M5 5h10v10",
+		package: "m10 2 8 4v8l-8 4-8-4V6l8-4Zm-8 4 8 4 8-4M10 10v8M6 4l8 4v4",
 		close: "m5 5 10 10M5 15 15 5",
 		sun: "M14 10a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM10 1v2m0 14v2M1 10h2m14 0h2M3.6 3.6 5 5m10 10 1.4 1.4M3.6 16.4 5 15M15 5l1.4-1.4",
 		moon: "M17.5 11.2A7.6 7.6 0 0 1 8.8 2.5a7.6 7.6 0 1 0 8.7 8.7Z",
